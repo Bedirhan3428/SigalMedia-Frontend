@@ -164,6 +164,7 @@ export default function OnboardingPage() {
 
       batch.set(usernameRef, {
         uid: user.uid,
+        email: user.email,
         createdAt: serverTimestamp(),
       });
 

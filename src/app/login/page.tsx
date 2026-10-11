@@ -24,7 +24,8 @@ export default function LoginPage() {
   const [view, setView] = useState<AuthView>("welcome");
 
   // Form states
-  const [email, setEmail] = useState("");
+  const [identifier, setIdentifier] = useState("");
+  const [resolvedEmail, setResolvedEmail] = useState("");
   const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -32,13 +33,15 @@ export default function LoginPage() {
 
   useEffect(() => {
     setMounted(true);
-    setEmail("");
+    setIdentifier("");
+    setResolvedEmail("");
     setPassword("");
     setError(null);
     setView("welcome");
 
     const handleClearInputs = () => {
-      setEmail("");
+      setIdentifier("");
+      setResolvedEmail("");
       setPassword("");
       setError(null);
       setView("welcome");
@@ -78,6 +81,10 @@ export default function LoginPage() {
       setError(null);
       setLoading(true);
       await signInWithPopup(auth, googleProvider);
+      setIdentifier("");
+      setResolvedEmail("");
+      setPassword("");
+      setView("welcome");
     } catch (err: any) {
       if (err.code !== "auth/popup-closed-by-user") {
         setError("Google ile giriş yapılırken bir sorun oluştu.");
@@ -87,17 +94,71 @@ export default function LoginPage() {
     }
   };
 
-  const handleEmailContinue = (e: React.FormEvent) => {
+  const handleEmailContinue = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!isValidEmail(email)) {
-      setError("Lütfen geçerli bir e-posta adresi girin.");
+    setError(null);
+
+    const val = identifier.trim();
+
+    if (view === "register-email") {
+      if (!isValidEmail(val)) {
+        setError("Lütfen geçerli bir e-posta adresi girin.");
+        return;
+      }
+      setResolvedEmail(val.toLowerCase());
+      setView("register-password");
       return;
     }
-    setError(null);
-    if (view === "login-email") {
+
+    // view === "login-email": E-posta veya Kullanıcı Adı
+    if (isValidEmail(val)) {
+      setResolvedEmail(val.toLowerCase());
       setView("login-password");
-    } else if (view === "register-email") {
-      setView("register-password");
+      return;
+    }
+
+    // Kullanıcı adı ile giriş kontrolü
+    const cleanUsername = val.toLowerCase().replace(/^@/, "");
+    if (cleanUsername.length < 3) {
+      setError("Lütfen geçerli bir e-posta veya kullanıcı adı girin.");
+      return;
+    }
+
+    setLoading(true);
+    try {
+      const usernameDocRef = doc(db, "usernames", cleanUsername);
+      const usernameSnap = await getDoc(usernameDocRef);
+
+      if (!usernameSnap.exists()) {
+        setError("Bu kullanıcı adı ile kayıtlı bir hesap bulunamadı.");
+        return;
+      }
+
+      let targetEmail = usernameSnap.data()?.email;
+
+      if (!targetEmail) {
+        const uid = usernameSnap.data()?.uid;
+        if (!uid) {
+          setError("Kullanıcı bilgisi doğrulanamadı.");
+          return;
+        }
+        const userDocRef = doc(db, "users", uid);
+        const userSnap = await getDoc(userDocRef);
+        targetEmail = userSnap.data()?.email;
+      }
+
+      if (!targetEmail) {
+        setError("Kullanıcıya bağlı e-posta adresi bulunamadı.");
+        return;
+      }
+
+      setResolvedEmail(targetEmail.toLowerCase());
+      setView("login-password");
+    } catch (err: any) {
+      console.error("Kullanıcı adı doğrulama hatası:", err);
+      setError("Giriş bilgileri kontrol edilirken bir sorun oluştu.");
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -122,7 +183,7 @@ export default function LoginPage() {
 
     try {
       if (view === "login-password") {
-        const cred = await signInWithEmailAndPassword(auth, email.trim(), password);
+        const cred = await signInWithEmailAndPassword(auth, resolvedEmail, password);
 
         // Profil veya yerel doğrulama durumunu kontrol et
         const userDocRef = doc(db, "users", cred.user.uid);
@@ -131,7 +192,7 @@ export default function LoginPage() {
         const isLocallyVerified = localStorage.getItem(`email_verified_${cred.user.uid}`) === "true";
 
         if (!cred.user.emailVerified && !isProfileDone && !isLocallyVerified) {
-          const cleanEmail = email.trim().toLowerCase();
+          const cleanEmail = resolvedEmail;
           const now = Date.now();
           const expires = now + 3 * 60 * 1000; // 3 dakika
 
@@ -156,14 +217,16 @@ export default function LoginPage() {
             console.warn("Kod gönderim hatası:", resErr);
           }
 
-          setEmail("");
+          setIdentifier("");
+          setResolvedEmail("");
           setPassword("");
           setError(null);
           setView("welcome");
           router.replace("/auth/verify-email");
           return;
         } else {
-          setEmail("");
+          setIdentifier("");
+          setResolvedEmail("");
           setPassword("");
           setError(null);
           setView("welcome");
@@ -171,9 +234,9 @@ export default function LoginPage() {
           return;
         }
       } else if (view === "register-password") {
-        const cred = await createUserWithEmailAndPassword(auth, email.trim(), password);
+        const cleanEmail = resolvedEmail;
+        const cred = await createUserWithEmailAndPassword(auth, cleanEmail, password);
 
-        const cleanEmail = email.trim().toLowerCase();
         const now = Date.now();
         const expires = now + 3 * 60 * 1000; // 3 dakika
 
@@ -198,7 +261,8 @@ export default function LoginPage() {
           console.warn("Resend doğrulama kodu hatası:", resendErr);
         }
 
-        setEmail("");
+        setIdentifier("");
+        setResolvedEmail("");
         setPassword("");
         setError(null);
         setView("welcome");
@@ -208,18 +272,18 @@ export default function LoginPage() {
     } catch (err: any) {
       switch (err.code) {
         case "auth/invalid-email":
-          setError("Geçersiz e-posta adresi.");
+          setError("Geçersiz e-posta adresi veya kullanıcı adı.");
           break;
         case "auth/user-not-found":
         case "auth/wrong-password":
         case "auth/invalid-credential":
-          setError("E-posta veya şifre hatalı.");
+          setError("E-posta, kullanıcı adı veya şifre hatalı.");
           break;
         case "auth/email-already-in-use":
           setError("Bu e-posta adresi zaten kullanımda.");
           break;
         case "auth/weak-password":
-          setError("Şifre en az 6 karakter olmalıdır.");
+          setError("Şifre en az 8 karakter olmalıdır.");
           break;
         default:
           setError("İşlem gerçekleştirilemedi. Lütfen tekrar deneyin.");
@@ -247,7 +311,8 @@ export default function LoginPage() {
               type="button"
               onClick={() => {
                 setError(null);
-                setEmail("");
+                setIdentifier("");
+                setResolvedEmail("");
                 setPassword("");
                 setView("welcome");
               }}
@@ -291,7 +356,8 @@ export default function LoginPage() {
               <button
                 type="button"
                 onClick={() => {
-                  setEmail("");
+                  setIdentifier("");
+                  setResolvedEmail("");
                   setPassword("");
                   setError(null);
                   setView("register-email");
@@ -304,7 +370,8 @@ export default function LoginPage() {
               <button
                 type="button"
                 onClick={() => {
-                  setEmail("");
+                  setIdentifier("");
+                  setResolvedEmail("");
                   setPassword("");
                   setError(null);
                   setView("login-email");
@@ -353,7 +420,7 @@ export default function LoginPage() {
           </div>
         )}
 
-        {/* 2. ADIM: E-POSTA ADIMI (GİRİŞ VEYA KAYIT) */}
+        {/* 2. ADIM: E-POSTA / KULLANICI ADI ADIMI (GİRİŞ VEYA KAYIT) */}
         {(view === "login-email" || view === "register-email") && (
           <form
             key={view}
@@ -367,22 +434,26 @@ export default function LoginPage() {
               </h1>
               <p className="text-zinc-400 text-sm mb-6">
                 {view === "login-email"
-                  ? "SigalMedia hesabınıza bağlı e-posta adresinizi yazın."
+                  ? "SigalMedia hesabınıza bağlı e-posta veya kullanıcı adınızı girin."
                   : "Yeni hesap oluşturmak için e-posta adresinizi yazın."}
               </p>
 
               <div className="space-y-3">
                 <input
-                  type="email"
+                  type={view === "login-email" ? "text" : "email"}
                   autoFocus
                   required
                   autoComplete="off"
-                  value={email}
+                  value={identifier}
                   onChange={(e) => {
-                    setEmail(e.target.value);
+                    setIdentifier(e.target.value);
                     if (error) setError(null);
                   }}
-                  placeholder="E-postanızı girin"
+                  placeholder={
+                    view === "login-email"
+                      ? "E-posta veya kullanıcı adı"
+                      : "E-postanızı girin"
+                  }
                   className="w-full h-14 px-4 bg-zinc-900 border border-zinc-800 rounded-2xl text-base text-white placeholder-zinc-500 focus:outline-none focus:border-zinc-500 transition-colors"
                 />
 
@@ -395,10 +466,19 @@ export default function LoginPage() {
             <div className="space-y-3 pt-6">
               <button
                 type="submit"
-                disabled={!isValidEmail(email)}
-                className="w-full h-14 rounded-2xl bg-white hover:bg-zinc-200 text-black font-semibold text-base transition-colors disabled:opacity-40 disabled:cursor-not-allowed flex items-center justify-center btn-press"
+                disabled={
+                  loading ||
+                  (view === "login-email"
+                    ? identifier.trim().length < 3
+                    : !isValidEmail(identifier))
+                }
+                className="w-full h-14 rounded-2xl bg-white hover:bg-zinc-200 text-black font-semibold text-base transition-colors disabled:opacity-40 disabled:cursor-not-allowed flex items-center justify-center gap-2 btn-press"
               >
-                Devam Et
+                {loading ? (
+                  <Loader2 className="w-5 h-5 animate-spin text-black" />
+                ) : (
+                  "Devam Et"
+                )}
               </button>
 
               <div className="relative py-1">
@@ -453,7 +533,11 @@ export default function LoginPage() {
                 {view === "login-password" ? "Şifrenizi girin" : "Şifre belirleyin"}
               </h1>
               <p className="text-zinc-400 text-sm mb-6">
-                <span className="text-zinc-200 font-medium">{email}</span>{" "}
+                <span className="text-zinc-200 font-medium">
+                  {view === "login-password" && (identifier.startsWith("@") || !identifier.includes("@"))
+                    ? (identifier.startsWith("@") ? identifier : `@${identifier}`)
+                    : identifier}
+                </span>{" "}
                 {view === "login-password"
                   ? "hesabınızın şifresini yazın."
                   : "için en az 8 karakterli, büyük/küçük harf ve rakam içeren şifre belirleyin."}
