@@ -88,9 +88,7 @@ export default function LoginPage() {
         const isLocallyVerified = localStorage.getItem(`email_verified_${cred.user.uid}`) === "true";
 
         if (!cred.user.emailVerified && !isProfileDone && !isLocallyVerified) {
-          let token = "";
           let expires = Date.now() + 10 * 60 * 1000;
-          let fallbackCode = "";
           try {
             const res = await fetch("/api/auth/send-verification", {
               method: "POST",
@@ -98,10 +96,8 @@ export default function LoginPage() {
               body: JSON.stringify({ email: email.trim() }),
             });
             const data = await res.json().catch(() => ({}));
-            if (data.verificationToken) {
-              token = data.verificationToken;
-              expires = data.expiresAt || expires;
-              fallbackCode = data.fallbackCode || "";
+            if (data.expiresAt) {
+              expires = data.expiresAt;
             }
           } catch (resErr) {
             console.warn("Kod gönderim hatası:", resErr);
@@ -109,7 +105,7 @@ export default function LoginPage() {
 
           localStorage.setItem(
             "pending_verification",
-            JSON.stringify({ email: email.trim(), expiresAt: expires, token, fallbackCode })
+            JSON.stringify({ email: email.trim(), expiresAt: expires, sentAt: Date.now() })
           );
           router.push("/auth/verify-email");
           return;
@@ -118,9 +114,7 @@ export default function LoginPage() {
         const cred = await createUserWithEmailAndPassword(auth, email.trim(), password);
 
         // Resend ile 4 haneli doğrulama kodunu gönder
-        let token = "";
         let expires = Date.now() + 10 * 60 * 1000;
-        let fallbackCode = "";
         try {
           const res = await fetch("/api/auth/send-verification", {
             method: "POST",
@@ -128,10 +122,8 @@ export default function LoginPage() {
             body: JSON.stringify({ email: email.trim() }),
           });
           const data = await res.json().catch(() => ({}));
-          if (data.verificationToken) {
-            token = data.verificationToken;
-            expires = data.expiresAt || expires;
-            fallbackCode = data.fallbackCode || "";
+          if (data.expiresAt) {
+            expires = data.expiresAt;
           }
         } catch (resendErr) {
           console.warn("Resend doğrulama kodu hatası:", resendErr);
@@ -139,7 +131,7 @@ export default function LoginPage() {
 
         localStorage.setItem(
           "pending_verification",
-          JSON.stringify({ email: email.trim(), expiresAt: expires, token, fallbackCode })
+          JSON.stringify({ email: email.trim(), expiresAt: expires, sentAt: Date.now() })
         );
         router.push("/auth/verify-email");
         return;

@@ -1,6 +1,6 @@
 "use client";
 
-import { Suspense, useEffect, useState, useRef, useTransition } from "react";
+import { Suspense, useEffect, useState, useRef } from "react";
 import { useRouter } from "next/navigation";
 import { signOut as firebaseSignOut } from "firebase/auth";
 import { auth } from "@/lib/firebase";
@@ -10,8 +10,7 @@ import { CheckCircle2, AlertCircle, Loader2, RefreshCw, MailCheck } from "lucide
 interface PendingVerification {
   email: string;
   expiresAt: number;
-  token?: string;
-  fallbackCode?: string;
+  sentAt?: number;
 }
 
 function VerifyEmailContent() {
@@ -20,17 +19,17 @@ function VerifyEmailContent() {
 
   const [digits, setDigits] = useState<string[]>(["", "", "", ""]);
   const inputRefs = useRef<(HTMLInputElement | null)[]>([]);
+  const initialSendRef = useRef(false);
 
   const [status, setStatus] = useState<"idle" | "verifying" | "success" | "expired">("idle");
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [pendingEmail, setPendingEmail] = useState<string>("");
-  const [verificationToken, setVerificationToken] = useState<string>("");
   const [expiresAt, setExpiresAt] = useState<number>(0);
   const [timeLeft, setTimeLeft] = useState<number>(0);
   const [resending, setResending] = useState(false);
   const [resendSuccess, setResendSuccess] = useState(false);
 
-  // 1. Sayfa yüklendiğinde hafızadaki veriyi al veya yeni kod iste
+  // 1. Sayfa açıldığında veriyi yükle ve tek bir kez yönet
   useEffect(() => {
     const raw = localStorage.getItem("pending_verification");
     if (!raw && !user) {
@@ -51,13 +50,6 @@ function VerifyEmailContent() {
     setPendingEmail(email);
 
     const now = Date.now();
-    const token = parsed?.token || "";
-    setVerificationToken(token);
-
-    if (parsed?.fallbackCode) {
-      setDigits(parsed.fallbackCode.split(""));
-    }
-
     let targetExpiresAt = parsed?.expiresAt;
 
     if (!targetExpiresAt || targetExpiresAt <= now) {
@@ -73,8 +65,9 @@ function VerifyEmailContent() {
     setExpiresAt(targetExpiresAt);
     setTimeLeft(Math.max(0, Math.floor((targetExpiresAt - now) / 1000)));
 
-    // Eğer henüz sunucudan bir token alınmamışsa ilk kodu otomatik iste
-    if (!token && email) {
+    // Eğer daha önce hiç kod gönderilmemişse ve ilk kez giriliyorsa tek sefer gönder
+    if (!parsed?.sentAt && email && !initialSendRef.current) {
+      initialSendRef.current = true;
       fetch("/api/auth/send-verification", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -82,28 +75,16 @@ function VerifyEmailContent() {
       })
         .then((res) => res.json())
         .then((data) => {
-          if (data.verificationToken) {
-            setVerificationToken(data.verificationToken);
-            const newExp = data.expiresAt || targetExpiresAt;
-            setExpiresAt(newExp);
-            localStorage.setItem(
-              "pending_verification",
-              JSON.stringify({
-                email,
-                expiresAt: newExp,
-                token: data.verificationToken,
-                fallbackCode: data.fallbackCode,
-              })
-            );
-            if (data.fallbackCode) {
-              setDigits(data.fallbackCode.split(""));
-            }
-          }
+          const newExp = data.expiresAt || targetExpiresAt;
+          setExpiresAt(newExp);
+          localStorage.setItem(
+            "pending_verification",
+            JSON.stringify({ email, expiresAt: newExp, sentAt: Date.now() })
+          );
         })
         .catch((err) => console.error("İlk kod gönderim hatası:", err));
     }
 
-    // İlk input'a odaklan
     setTimeout(() => {
       inputRefs.current[0]?.focus();
     }, 150);
@@ -138,8 +119,8 @@ function VerifyEmailContent() {
     }
 
     const email = pendingEmail || user?.email || "";
-    if (!email || !verificationToken) {
-      setErrorMessage("Doğrulama anahtarı eksik. Lütfen tekrar kod isteyin.");
+    if (!email) {
+      setErrorMessage("E-posta adresi bulunamadı.");
       return;
     }
 
@@ -153,7 +134,6 @@ function VerifyEmailContent() {
         body: JSON.stringify({
           email,
           code: fullCode,
-          token: verificationToken,
           uid: user?.uid,
         }),
       });
@@ -162,10 +142,7 @@ function VerifyEmailContent() {
 
       if (!res.ok || !data.success) {
         setStatus("idle");
-        setErrorMessage(data.error || "Girdiğiniz kod hatalı.");
-        // Hata durumunda kod alanını temizle ve ilk haneye odaklan
-        setDigits(["", "", "", ""]);
-        inputRefs.current[0]?.focus();
+        setErrorMessage(data.error || "Girdiğiniz 4 haneli kod hatalı.");
         return;
       }
 
@@ -191,7 +168,7 @@ function VerifyEmailContent() {
     }
   };
 
-  // 4. Tekrar Kod Gönder (10 Dakikalık süreyi baştan başlatır)
+  // 4. Tekrar Kod Gönder (Süreyi 10 dakikaya baştan kurar)
   const handleResend = async () => {
     const email = pendingEmail || user?.email;
     if (!email) {
@@ -217,28 +194,20 @@ function VerifyEmailContent() {
         return;
       }
 
-      // Yeni süre ve tokeni ayarla (10 dakika)
       const newExpiresAt = data.expiresAt || Date.now() + 10 * 60 * 1000;
-      const newToken = data.verificationToken || "";
 
       localStorage.setItem(
         "pending_verification",
         JSON.stringify({
           email,
           expiresAt: newExpiresAt,
-          token: newToken,
-          fallbackCode: data.fallbackCode,
+          sentAt: Date.now(),
         })
       );
 
       setExpiresAt(newExpiresAt);
       setTimeLeft(600);
-      setVerificationToken(newToken);
-      if (data.fallbackCode) {
-        setDigits(data.fallbackCode.split(""));
-      } else {
-        setDigits(["", "", "", ""]);
-      }
+      setDigits(["", "", "", ""]);
       setStatus("idle");
       setResendSuccess(true);
 
@@ -253,7 +222,7 @@ function VerifyEmailContent() {
     }
   };
 
-  // 5. Ana Ekrana Dön (Tüm süre ve doğrulama durumunu temizler)
+  // 5. Ana Ekrana Dön (Hafızayı temizleyip çıkış yapar)
   const handleReturnHome = async () => {
     localStorage.removeItem("pending_verification");
     setExpiresAt(0);
@@ -270,19 +239,16 @@ function VerifyEmailContent() {
   const handleDigitChange = (index: number, val: string) => {
     const cleanVal = val.replace(/[^0-9]/g, "");
 
-    // Tek karakter girildiyse
     if (cleanVal.length <= 1) {
       const nextDigits = [...digits];
       nextDigits[index] = cleanVal;
       setDigits(nextDigits);
       if (errorMessage) setErrorMessage(null);
 
-      // Sonraki inputa geç
       if (cleanVal && index < 3) {
         inputRefs.current[index + 1]?.focus();
       }
 
-      // 4 hane de dolduysa otomatik doğrula
       if (cleanVal && index === 3) {
         const fullCode = nextDigits.join("");
         if (fullCode.length === 4) {
