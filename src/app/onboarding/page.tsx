@@ -10,17 +10,16 @@ import {
   Check,
   X,
   Camera,
-  ArrowRight,
   ArrowLeft,
   Loader2,
   User,
-  AlertCircle,
+  LogOut,
 } from "lucide-react";
 import DatePickerWheel from "@/components/DatePickerWheel";
 
 export default function OnboardingPage() {
   const [mounted, setMounted] = useState(false);
-  const { user, profile, loading, refreshProfile } = useAuth();
+  const { user, profile, loading, refreshProfile, signOut } = useAuth();
   const router = useRouter();
 
   useEffect(() => {
@@ -29,33 +28,35 @@ export default function OnboardingPage() {
 
   const [step, setStep] = useState<1 | 2 | 3>(1);
 
-  // Step 1: Doğum Tarihi & Yaş
+  // Adım 3 (Onboarding Step 1): Doğum Tarihi & Yaş
   const [birthDate, setBirthDate] = useState("2005-06-15");
   const [calculatedAge, setCalculatedAge] = useState<number | null>(null);
   const [ageError, setAgeError] = useState<string | null>(null);
 
-  // Step 2: Kullanıcı Adı
+  // Adım 4 (Onboarding Step 2): Kullanıcı Adı (@username)
   const [username, setUsername] = useState("");
   const [usernameStatus, setUsernameStatus] = useState<
     "idle" | "checking" | "available" | "taken" | "invalid"
   >("idle");
   const [usernameError, setUsernameError] = useState<string | null>(null);
 
-  // Step 3: Profil Fotoğrafı
+  // Adım 5 (Onboarding Step 3): Profil Belirleme (Fotoğraf & Ad Soyad)
+  const [displayName, setDisplayName] = useState("");
   const [avatarFile, setAvatarFile] = useState<File | null>(null);
   const [avatarPreview, setAvatarPreview] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   useEffect(() => {
-    if (user?.photoURL) {
+    if (user?.photoURL && !avatarPreview) {
       setAvatarPreview(user.photoURL);
+    }
+    if (user?.displayName && !displayName) {
+      setDisplayName(user.displayName);
     }
   }, [user]);
 
-
-
-  // Username validation & availability debounce
+  // Username validation & availability debounce (300ms)
   useEffect(() => {
     if (!username) {
       setUsernameStatus("idle");
@@ -89,7 +90,7 @@ export default function OnboardingPage() {
         console.error("Kullanıcı adı kontrol hatası:", err);
         setUsernameStatus("idle");
       }
-    }, 350);
+    }, 300);
 
     return () => clearTimeout(timer);
   }, [username]);
@@ -116,6 +117,9 @@ export default function OnboardingPage() {
         finalPhotoURL = await getDownloadURL(snapshot.ref);
       }
 
+      const finalDisplayName = displayName.trim() || user.displayName || username;
+
+      // Firestore Atomik writeBatch (İki tabloya tek işlemde kayıt)
       const batch = writeBatch(db);
       const userRef = doc(db, "users", user.uid);
       const usernameRef = doc(db, "usernames", username.toLowerCase());
@@ -125,7 +129,7 @@ export default function OnboardingPage() {
         email: user.email,
         username: username,
         username_lowercase: username.toLowerCase(),
-        displayName: user.displayName || username,
+        displayName: finalDisplayName,
         photoURL: finalPhotoURL,
         bio: "",
         birthDate: birthDate,
@@ -150,7 +154,7 @@ export default function OnboardingPage() {
 
       await batch.commit();
       await refreshProfile();
-      router.push("/");
+      router.replace("/");
     } catch (err) {
       console.error("Onboarding kaydetme hatası:", err);
       setSubmitting(false);
@@ -168,7 +172,7 @@ export default function OnboardingPage() {
   return (
     <main className="min-h-[100dvh] flex items-center justify-center p-4 sm:p-6 pt-[calc(1rem+env(safe-area-inset-top,0px))] pb-[calc(1rem+env(safe-area-inset-bottom,0px))] pl-[calc(1rem+env(safe-area-inset-left,0px))] pr-[calc(1rem+env(safe-area-inset-right,0px))] bg-black text-white">
       <div className="w-full max-w-[420px] flex flex-col justify-between min-h-[580px] p-6 sm:p-8 bg-zinc-950/80 border border-zinc-900 rounded-3xl shadow-2xl backdrop-blur-2xl">
-        {/* ÜST BAR (Geri Butonu ve Adım Göstergesi) */}
+        {/* ÜST BAR (Geri Butonu, Adım Çizgileri ve Çıkış Butonu) */}
         <div className="flex items-center justify-between h-10 mb-4">
           {step > 1 ? (
             <button
@@ -179,7 +183,7 @@ export default function OnboardingPage() {
               <ArrowLeft className="w-5 h-5" />
             </button>
           ) : (
-            <div />
+            <div className="w-10" />
           )}
 
           {/* Adım Çizgileri */}
@@ -200,9 +204,18 @@ export default function OnboardingPage() {
               }`}
             />
           </div>
+
+          <button
+            type="button"
+            onClick={signOut}
+            title="Çıkış Yap"
+            className="w-10 h-10 rounded-full bg-zinc-900/90 border border-zinc-800 flex items-center justify-center text-zinc-400 hover:text-white hover:bg-zinc-800 transition-colors"
+          >
+            <LogOut className="w-4 h-4" />
+          </button>
         </div>
 
-        {/* 1. ADIM: DOĞUM TARİHİ VE YAŞ */}
+        {/* ADIM 3: DOĞUM TARİHİ VE YAŞ */}
         {step === 1 && (
           <div className="flex-1 flex flex-col justify-between">
             <div>
@@ -252,7 +265,7 @@ export default function OnboardingPage() {
           </div>
         )}
 
-        {/* 2. ADIM: KULLANICI ADI */}
+        {/* ADIM 4: KULLANICI ADI SEÇİMİ */}
         {step === 2 && (
           <div className="flex-1 flex flex-col justify-between">
             <div>
@@ -271,6 +284,7 @@ export default function OnboardingPage() {
                   <input
                     type="text"
                     autoFocus
+                    autoComplete="off"
                     value={username}
                     onChange={(e) => setUsername(e.target.value.trim())}
                     placeholder="kullanici_adi"
@@ -314,21 +328,22 @@ export default function OnboardingPage() {
           </div>
         )}
 
-        {/* 3. ADIM: PROFİL FOTOĞRAFI */}
+        {/* ADIM 5: PROFİL BELİRLEME (FOTOĞRAF & İSİM) */}
         {step === 3 && (
           <div className="flex-1 flex flex-col justify-between">
             <div>
               <h1 className="text-3xl font-extrabold tracking-tight text-white mb-2">
-                Profil fotoğrafı
+                Profilinizi tamamlayın
               </h1>
               <p className="text-zinc-400 text-sm mb-6 leading-relaxed">
-                Profil fotoğrafınızı belirleyin veya daha sonra ekleyin.
+                Adınızı ve profil fotoğrafınızı belirleyin.
               </p>
 
-              <div className="flex flex-col items-center justify-center py-4">
+              {/* Fotoğraf Seçimi */}
+              <div className="flex flex-col items-center justify-center mb-6">
                 <div
                   onClick={() => fileInputRef.current?.click()}
-                  className="relative group cursor-pointer w-32 h-32 rounded-full border-2 border-dashed border-zinc-700 hover:border-zinc-500 flex items-center justify-center overflow-hidden transition-all bg-zinc-900"
+                  className="relative group cursor-pointer w-28 h-28 rounded-full border-2 border-dashed border-zinc-700 hover:border-zinc-500 flex items-center justify-center overflow-hidden transition-all bg-zinc-900"
                 >
                   {avatarPreview ? (
                     <img
@@ -337,11 +352,11 @@ export default function OnboardingPage() {
                       className="w-full h-full object-cover"
                     />
                   ) : (
-                    <User className="w-12 h-12 text-zinc-600 group-hover:text-zinc-400 transition-colors" />
+                    <User className="w-10 h-10 text-zinc-600 group-hover:text-zinc-400 transition-colors" />
                   )}
 
                   <div className="absolute inset-0 bg-black/60 opacity-0 group-hover:opacity-100 flex items-center justify-center transition-opacity">
-                    <Camera className="w-7 h-7 text-white" />
+                    <Camera className="w-6 h-6 text-white" />
                   </div>
                 </div>
 
@@ -356,10 +371,23 @@ export default function OnboardingPage() {
                 <button
                   type="button"
                   onClick={() => fileInputRef.current?.click()}
-                  className="mt-3 text-xs text-zinc-400 hover:text-white font-medium transition-colors"
+                  className="mt-2 text-xs text-zinc-400 hover:text-white font-medium transition-colors"
                 >
-                  Fotoğraf Değiştir
+                  {avatarPreview ? "Fotoğrafı Değiştir" : "Fotoğraf Seç"}
                 </button>
+              </div>
+
+              {/* Ad Soyad (Görünen İsim) Girişi */}
+              <div className="space-y-2">
+                <input
+                  type="text"
+                  autoFocus
+                  autoComplete="off"
+                  value={displayName}
+                  onChange={(e) => setDisplayName(e.target.value)}
+                  placeholder="Adınız Soyadınız"
+                  className="w-full h-14 px-4 bg-zinc-900 border border-zinc-800 rounded-2xl text-base text-white placeholder-zinc-500 focus:outline-none focus:border-zinc-500 transition-colors"
+                />
               </div>
             </div>
 
@@ -371,9 +399,12 @@ export default function OnboardingPage() {
                 className="w-full h-14 rounded-2xl bg-white hover:bg-zinc-200 text-black font-semibold text-base transition-colors disabled:opacity-40 disabled:cursor-not-allowed flex items-center justify-center gap-2"
               >
                 {submitting ? (
-                  <Loader2 className="w-5 h-5 animate-spin" />
+                  <>
+                    <Loader2 className="w-5 h-5 animate-spin text-black" />
+                    Kaydediliyor...
+                  </>
                 ) : (
-                  "Kaydet ve Bitir"
+                  "Kaydet ve Başla"
                 )}
               </button>
 

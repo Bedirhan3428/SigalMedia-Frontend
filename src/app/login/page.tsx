@@ -109,7 +109,7 @@ export default function LoginPage() {
             JSON.stringify({ email: email.trim(), expiresAt: expires, sentAt: now })
           );
 
-          router.push("/auth/verify-email");
+          router.replace("/auth/verify-email");
           return;
         }
       } else if (view === "register-password") {
@@ -137,7 +137,7 @@ export default function LoginPage() {
           JSON.stringify({ email: email.trim(), expiresAt: expires, sentAt: now })
         );
 
-        router.push("/auth/verify-email");
+        router.replace("/auth/verify-email");
         return;
       }
     } catch (err: any) {

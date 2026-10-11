@@ -63,7 +63,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     } finally {
       setUser(null);
       setProfile(null);
-      router.push("/login");
+      setLoading(false);
+      router.replace("/login");
     }
   };
 

@@ -145,7 +145,7 @@ function VerifyEmailContent() {
       await refreshProfile();
 
       setTimeout(() => {
-        router.push(profile?.onboardingCompleted ? "/" : "/onboarding");
+        router.replace(profile?.onboardingCompleted ? "/" : "/onboarding");
       }, 1500);
     } catch (err: any) {
       console.error("Doğrulama hatası:", err);
@@ -215,7 +215,7 @@ function VerifyEmailContent() {
     try {
       await firebaseSignOut(auth);
     } catch {}
-    router.push("/login");
+    router.replace("/login");
   };
 
   // OTP Klavye & Input Yönetimi
