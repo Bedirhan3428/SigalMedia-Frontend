@@ -32,6 +32,25 @@ export default function LoginPage() {
 
   useEffect(() => {
     setMounted(true);
+    setEmail("");
+    setPassword("");
+    setError(null);
+    setView("welcome");
+
+    const handleClearInputs = () => {
+      setEmail("");
+      setPassword("");
+      setError(null);
+      setView("welcome");
+    };
+
+    window.addEventListener("pageshow", handleClearInputs);
+    window.addEventListener("popstate", handleClearInputs);
+
+    return () => {
+      window.removeEventListener("pageshow", handleClearInputs);
+      window.removeEventListener("popstate", handleClearInputs);
+    };
   }, []);
 
   const isValidEmail = (val: string) => {
@@ -137,7 +156,18 @@ export default function LoginPage() {
             console.warn("Kod gönderim hatası:", resErr);
           }
 
+          setEmail("");
+          setPassword("");
+          setError(null);
+          setView("welcome");
           router.replace("/auth/verify-email");
+          return;
+        } else {
+          setEmail("");
+          setPassword("");
+          setError(null);
+          setView("welcome");
+          router.replace(isProfileDone ? "/" : "/onboarding");
           return;
         }
       } else if (view === "register-password") {
@@ -168,6 +198,10 @@ export default function LoginPage() {
           console.warn("Resend doğrulama kodu hatası:", resendErr);
         }
 
+        setEmail("");
+        setPassword("");
+        setError(null);
+        setView("welcome");
         router.replace("/auth/verify-email");
         return;
       }
@@ -213,17 +247,9 @@ export default function LoginPage() {
               type="button"
               onClick={() => {
                 setError(null);
-                if (view === "login-password") {
-                  setPassword("");
-                  setView("login-email");
-                } else if (view === "register-password") {
-                  setPassword("");
-                  setView("register-email");
-                } else {
-                  setEmail("");
-                  setPassword("");
-                  setView("welcome");
-                }
+                setEmail("");
+                setPassword("");
+                setView("welcome");
               }}
               className="w-10 h-10 rounded-full bg-zinc-900/90 border border-zinc-800 flex items-center justify-center text-zinc-300 hover:text-white hover:bg-zinc-800 transition-colors btn-press-subtle"
             >
