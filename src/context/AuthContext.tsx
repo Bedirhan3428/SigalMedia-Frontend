@@ -107,8 +107,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const isVerified = user.emailVerified || isGoogleUser || isLocalVerified || isProfileVerified;
 
     if (!isVerified) {
-      if (pathname !== "/auth/verify-email") {
-        router.push("/auth/verify-email");
+      // /login sayfasındayken login bileşeninin kendi form gönderme ve kod üretme akışını tamamlamasına izin ver
+      if (pathname !== "/login" && pathname !== "/auth/verify-email") {
+        router.replace("/auth/verify-email");
       }
       return;
     }

@@ -41,12 +41,23 @@ function VerifyEmailContent() {
     const lastSentStr = sessionStorage.getItem("last_code_sent");
 
     const now = Date.now();
-    const expiresAt = expiresAtStr ? parseInt(expiresAtStr, 10) : 0;
-    const lastSent = lastSentStr ? parseInt(lastSentStr, 10) : 0;
+    let expiresAt = expiresAtStr ? parseInt(expiresAtStr, 10) : 0;
+    let lastSent = lastSentStr ? parseInt(lastSentStr, 10) : 0;
 
-    // 1. Kural: E-posta varsa VE kodun 3 dakikalık süresi henüz dolmadıysa -> KESİNLİKLE AKTİF!
-    if (savedEmail && expiresAt > now) {
-      setPendingEmail(savedEmail);
+    // Eğer expiresAt henüz yazılmamışsa veya geçersizse: Kullanıcı yeni gelmiştir, 3 dakikalık aktif süre ver
+    if (!expiresAt || isNaN(expiresAt)) {
+      expiresAt = now + CODE_LIFETIME_SECONDS * 1000;
+      lastSent = now;
+      sessionStorage.setItem("code_expires_at", expiresAt.toString());
+      sessionStorage.setItem("last_code_sent", lastSent.toString());
+      if (savedEmail) {
+        sessionStorage.setItem("verify_email", savedEmail);
+      }
+    }
+
+    // 1. Kural: Kod aktifse -> KESİNLİKLE AKTİF OTP INPUTLARI GELİR!
+    if (expiresAt > now) {
+      if (savedEmail) setPendingEmail(savedEmail);
       setStatus("active");
 
       // Kalan cooldown süresini hesapla (ilk 60 saniye boyunca buton kilitli)
@@ -63,7 +74,7 @@ function VerifyEmailContent() {
       return;
     }
 
-    // 2. Kural: Kodun süresi gerçekten bitmişse veya hiç kod gönderilmemişse:
+    // 2. Kural: Kodun süresi gerçekten bitmişse:
     if (savedEmail) {
       setPendingEmail(savedEmail);
     }

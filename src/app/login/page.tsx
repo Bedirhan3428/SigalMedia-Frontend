@@ -88,20 +88,11 @@ export default function LoginPage() {
         const isLocallyVerified = localStorage.getItem(`email_verified_${cred.user.uid}`) === "true";
 
         if (!cred.user.emailVerified && !isProfileDone && !isLocallyVerified) {
+          const cleanEmail = email.trim().toLowerCase();
           const now = Date.now();
           const expires = now + 3 * 60 * 1000; // 3 dakika
-          try {
-            await fetch("/api/auth/send-verification", {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ email: email.trim() }),
-            });
-          } catch (resErr) {
-            console.warn("Kod gönderim hatası:", resErr);
-          }
 
-          // Tekil tetikleme & F5 koruması için sessionStorage kilidi
-          const cleanEmail = email.trim().toLowerCase();
+          // 1. Oturum kilitlerini ağ isteğinden önce anında yaz
           sessionStorage.setItem("verify_email", cleanEmail);
           sessionStorage.setItem("pending_email", cleanEmail);
           sessionStorage.setItem("last_code_sent", now.toString());
@@ -111,27 +102,28 @@ export default function LoginPage() {
             JSON.stringify({ email: cleanEmail, expiresAt: expires, sentAt: now })
           );
 
+          // 2. Doğrulama kodunu gönder
+          try {
+            await fetch("/api/auth/send-verification", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ email: cleanEmail }),
+            });
+          } catch (resErr) {
+            console.warn("Kod gönderim hatası:", resErr);
+          }
+
           router.replace("/auth/verify-email");
           return;
         }
       } else if (view === "register-password") {
         const cred = await createUserWithEmailAndPassword(auth, email.trim(), password);
 
-        // Kullanıcı Kayıt Ol butonuna bastığı an TEK BİR KEZ kod gönderilir
+        const cleanEmail = email.trim().toLowerCase();
         const now = Date.now();
         const expires = now + 3 * 60 * 1000; // 3 dakika
-        try {
-          await fetch("/api/auth/send-verification", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ email: email.trim() }),
-          });
-        } catch (resendErr) {
-          console.warn("Resend doğrulama kodu hatası:", resendErr);
-        }
 
-        // Tekil tetikleme & F5 koruması için sessionStorage kilidi
-        const cleanEmail = email.trim().toLowerCase();
+        // 1. Oturum kilitlerini ağ isteğinden önce anında yaz
         sessionStorage.setItem("verify_email", cleanEmail);
         sessionStorage.setItem("pending_email", cleanEmail);
         sessionStorage.setItem("last_code_sent", now.toString());
@@ -140,6 +132,17 @@ export default function LoginPage() {
           "pending_verification",
           JSON.stringify({ email: cleanEmail, expiresAt: expires, sentAt: now })
         );
+
+        // 2. Doğrulama kodunu gönder
+        try {
+          await fetch("/api/auth/send-verification", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ email: cleanEmail }),
+          });
+        } catch (resendErr) {
+          console.warn("Resend doğrulama kodu hatası:", resendErr);
+        }
 
         router.replace("/auth/verify-email");
         return;
