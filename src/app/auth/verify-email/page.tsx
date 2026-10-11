@@ -154,6 +154,7 @@ function VerifyEmailContent() {
           email,
           code: fullCode,
           token: verificationToken,
+          uid: user?.uid,
         }),
       });
 
