@@ -89,17 +89,13 @@ export default function LoginPage() {
 
         if (!cred.user.emailVerified && !isProfileDone && !isLocallyVerified) {
           const now = Date.now();
-          let expires = now + 10 * 60 * 1000;
+          const expires = now + 3 * 60 * 1000; // 3 dakika
           try {
-            const res = await fetch("/api/auth/send-verification", {
+            await fetch("/api/auth/send-verification", {
               method: "POST",
               headers: { "Content-Type": "application/json" },
               body: JSON.stringify({ email: email.trim() }),
             });
-            const data = await res.json().catch(() => ({}));
-            if (data.expiresAt) {
-              expires = data.expiresAt;
-            }
           } catch (resErr) {
             console.warn("Kod gönderim hatası:", resErr);
           }
@@ -121,17 +117,13 @@ export default function LoginPage() {
 
         // Kullanıcı Kayıt Ol butonuna bastığı an TEK BİR KEZ kod gönderilir
         const now = Date.now();
-        let expires = now + 10 * 60 * 1000;
+        const expires = now + 3 * 60 * 1000; // 3 dakika
         try {
-          const res = await fetch("/api/auth/send-verification", {
+          await fetch("/api/auth/send-verification", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ email: email.trim() }),
           });
-          const data = await res.json().catch(() => ({}));
-          if (data.expiresAt) {
-            expires = data.expiresAt;
-          }
         } catch (resendErr) {
           console.warn("Resend doğrulama kodu hatası:", resendErr);
         }
