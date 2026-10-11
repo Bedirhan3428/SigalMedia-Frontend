@@ -29,6 +29,7 @@ export default function EditProfilePage() {
 
   useEffect(() => {
     setMounted(true);
+    setIsSaving(false);
   }, []);
 
   useEffect(() => {
@@ -37,6 +38,7 @@ export default function EditProfilePage() {
       setBio(profile.bio || "");
       setAvatarPreview(profile.photoURL || null);
       setPhotoRemoved(false);
+      setIsSaving(false);
     }
   }, [profile]);
 
@@ -120,6 +122,7 @@ export default function EditProfilePage() {
 
       await refreshProfile();
       setToastMessage("Profil başarıyla güncellendi");
+      setIsSaving(false);
 
       setTimeout(() => {
         router.back();
@@ -127,6 +130,7 @@ export default function EditProfilePage() {
     } catch (err) {
       console.error("Profil güncelleme hatası:", err);
       setToastMessage("Fotoğraf veya profil güncellenemedi");
+    } finally {
       setIsSaving(false);
     }
   };
@@ -208,7 +212,9 @@ export default function EditProfilePage() {
                 <img
                   src={avatarPreview}
                   alt="Profil Fotoğrafı"
-                  className="w-full h-full object-cover group-hover:opacity-75 transition-opacity"
+                  draggable={false}
+                  onContextMenu={(e) => e.preventDefault()}
+                  className="w-full h-full object-cover group-hover:opacity-75 transition-opacity select-none no-select"
                 />
               ) : (
                 <UserIcon className="w-12 h-12 text-zinc-600" />
@@ -346,7 +352,9 @@ export default function EditProfilePage() {
             <img
               src={avatarPreview}
               alt="Profil Fotoğrafı"
-              className="w-full h-full object-cover"
+              draggable={false}
+              onContextMenu={(e) => e.preventDefault()}
+              className="w-full h-full object-cover select-none no-select"
             />
           </div>
         </div>

@@ -217,7 +217,9 @@ export default function ProfilePage() {
               <img
                 src={profile.photoURL}
                 alt={profile.displayName || "Profil"}
-                className="w-full h-full object-cover group-hover:scale-105 transition-transform"
+                draggable={false}
+                onContextMenu={(e) => e.preventDefault()}
+                className="w-full h-full object-cover group-hover:scale-105 transition-transform select-none no-select"
               />
             ) : (
               <UserIcon className="w-9 h-9 text-zinc-600 group-hover:text-zinc-400 transition-colors" />
@@ -503,7 +505,9 @@ export default function ProfilePage() {
             <img
               src={profile.photoURL}
               alt={profile.displayName || "Profil"}
-              className="w-full h-full object-cover"
+              draggable={false}
+              onContextMenu={(e) => e.preventDefault()}
+              className="w-full h-full object-cover select-none no-select"
             />
           </div>
 

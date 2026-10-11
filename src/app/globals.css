@@ -201,3 +201,45 @@ html, body {
 .btn-press-subtle:active:not(:disabled) {
   transform: scale(0.94);
 }
+
+/* Tıklanabilir butonlar, canvas ve sürükleme alanları için dokunma / seçim engelleme */
+.no-select {
+  -webkit-touch-callout: none; /* iOS Safari & mobil tarayıcı önizleme menüsünü kapatır */
+  -webkit-user-select: none;    /* Safari */
+  -moz-user-select: none;       /* Firefox */
+  -ms-user-select: none;        /* IE/Edge */
+  user-select: none;            /* Standart metin seçim engeli */
+  -webkit-user-drag: none;      /* Görsellerin/linklerin hayalet gibi sürüklenmesini önler */
+}
+
+/* Butonlar ve gezinme sekmeleri için uzun basma baloncuğu ve menü engeli */
+button,
+.btn-press,
+.btn-press-subtle,
+nav,
+nav a {
+  -webkit-touch-callout: none;
+  -webkit-user-select: none;
+  -moz-user-select: none;
+  -ms-user-select: none;
+  user-select: none;
+}
+
+/* Görsellerin hayalet gibi sürüklenmesini ve uzun basma menüsünü engelleme */
+img {
+  -webkit-touch-callout: none;
+  -webkit-user-drag: none;
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+/* Form girdilerinde kullanıcı metin seçimini ve imleç kontrolünü eksiksiz koru */
+input,
+textarea,
+[contenteditable="true"] {
+  -webkit-touch-callout: default;
+  -webkit-user-select: text;
+  -moz-user-select: text;
+  -ms-user-select: text;
+  user-select: text;
+}
