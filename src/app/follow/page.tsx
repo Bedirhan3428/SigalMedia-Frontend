@@ -1,0 +1,239 @@
+"use client";
+
+import { useState, useEffect, Suspense } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
+import { ChevronLeft, Search, User as UserIcon } from "lucide-react";
+import { useAuth } from "@/context/AuthContext";
+import BottomNav from "@/components/BottomNav";
+
+interface FollowUser {
+  id: string;
+  name: string;
+  username: string;
+  avatar?: string | null;
+  isFollowing: boolean;
+}
+
+function FollowPageContent() {
+  const router = useRouter();
+  const searchParams = useSearchParams();
+  const initialTab = searchParams.get("tab") === "following" ? "following" : "followers";
+
+  const [activeTab, setActiveTab] = useState<"followers" | "following">(initialTab);
+  const [searchQuery, setSearchQuery] = useState("");
+  const { profile, loading } = useAuth();
+
+  // Örnek Takipçi & Takip Edilen Listesi
+  const [usersList, setUsersList] = useState<Record<"followers" | "following", FollowUser[]>>({
+    followers: [
+      {
+        id: "1",
+        name: "Alperen Demir",
+        username: "alperend",
+        isFollowing: true,
+      },
+      {
+        id: "2",
+        name: "Selin Kaya",
+        username: "selink",
+        isFollowing: false,
+      },
+      {
+        id: "3",
+        name: "Emir Yılmaz",
+        username: "emiry",
+        isFollowing: true,
+      },
+    ],
+    following: [
+      {
+        id: "1",
+        name: "Alperen Demir",
+        username: "alperend",
+        isFollowing: true,
+      },
+      {
+        id: "3",
+        name: "Emir Yılmaz",
+        username: "emiry",
+        isFollowing: true,
+      },
+      {
+        id: "4",
+        name: "Defne Aksoy",
+        username: "defnea",
+        isFollowing: true,
+      },
+      {
+        id: "5",
+        name: "Kaan Arslan",
+        username: "kaana",
+        isFollowing: true,
+      },
+    ],
+  });
+
+  const toggleFollow = (userId: string) => {
+    setUsersList((prev) => {
+      const updateList = (list: FollowUser[]) =>
+        list.map((u) => (u.id === userId ? { ...u, isFollowing: !u.isFollowing } : u));
+      return {
+        followers: updateList(prev.followers),
+        following: updateList(prev.following),
+      };
+    });
+  };
+
+  const currentUsers = usersList[activeTab].filter(
+    (u) =>
+      u.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      u.username.toLowerCase().includes(searchQuery.toLowerCase())
+  );
+
+  return (
+    <div className="min-h-[100dvh] bg-zinc-950 text-zinc-100 flex flex-col pb-20">
+      {/* Üst Bar */}
+      <header className="border-b border-zinc-900 bg-zinc-950/80 backdrop-blur-md sticky top-0 z-40 pt-safe">
+        <div className="max-w-md mx-auto px-4 h-14 flex items-center justify-between">
+          <button
+            type="button"
+            onClick={() => router.back()}
+            title="Geri"
+            aria-label="Geri"
+            className="p-2 -ml-2 text-zinc-400 hover:text-white hover:bg-zinc-900 rounded-xl transition-colors btn-press-subtle"
+          >
+            <ChevronLeft className="w-6 h-6" />
+          </button>
+
+          <span className="text-base font-bold tracking-tight text-white truncate max-w-[200px]">
+            @{profile?.username || "kullanici"}
+          </span>
+
+          <div className="w-8" />
+        </div>
+
+        {/* 2'li Sekme Çubuğu */}
+        <div className="max-w-md mx-auto flex border-t border-zinc-900 select-none">
+          <button
+            type="button"
+            onClick={() => setActiveTab("followers")}
+            className={`flex-1 py-3 text-center text-sm font-semibold transition-colors relative btn-press-subtle ${
+              activeTab === "followers" ? "text-white" : "text-zinc-500 hover:text-zinc-300"
+            }`}
+          >
+            Takipçiler
+            <span className="text-xs ml-1.5 opacity-60">
+              ({profile?.stats?.followersCount ?? usersList.followers.length})
+            </span>
+            {activeTab === "followers" && (
+              <div className="absolute bottom-0 left-0 right-0 h-0.5 bg-white" />
+            )}
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setActiveTab("following")}
+            className={`flex-1 py-3 text-center text-sm font-semibold transition-colors relative btn-press-subtle ${
+              activeTab === "following" ? "text-white" : "text-zinc-500 hover:text-zinc-300"
+            }`}
+          >
+            Takip Edilen
+            <span className="text-xs ml-1.5 opacity-60">
+              ({profile?.stats?.followingCount ?? usersList.following.length})
+            </span>
+            {activeTab === "following" && (
+              <div className="absolute bottom-0 left-0 right-0 h-0.5 bg-white" />
+            )}
+          </button>
+        </div>
+      </header>
+
+      {/* Arama Alanı */}
+      <div className="max-w-md w-full mx-auto px-4 pt-3 pb-2">
+        <div className="relative">
+          <Search className="w-4 h-4 absolute left-3.5 top-1/2 -translate-y-1/2 text-zinc-500 pointer-events-none" />
+          <input
+            type="text"
+            placeholder="Kullanıcı ara..."
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            className="w-full bg-zinc-900 border border-zinc-800 rounded-xl pl-10 pr-4 py-2 text-sm text-zinc-100 placeholder:text-zinc-500 focus:outline-none focus:border-zinc-700 transition-colors"
+          />
+        </div>
+      </div>
+
+      {/* Kullanıcı Listesi */}
+      <main className="max-w-md w-full mx-auto flex-1 px-4 pt-2">
+        {currentUsers.length === 0 ? (
+          <div className="py-16 text-center text-zinc-500 text-sm">
+            {activeTab === "followers"
+              ? "Henüz takipçi bulunmuyor."
+              : "Henüz takip edilen kullanıcı bulunmuyor."}
+          </div>
+        ) : (
+          <div className="space-y-2">
+            {currentUsers.map((user) => (
+              <div
+                key={user.id}
+                className="flex items-center justify-between p-2.5 rounded-2xl bg-zinc-900/40 hover:bg-zinc-900/80 transition-colors"
+              >
+                {/* Avatar & Kullanıcı Bilgisi */}
+                <div className="flex items-center gap-3 min-w-0">
+                  <div className="w-11 h-11 rounded-full bg-zinc-800 border border-zinc-700/80 flex items-center justify-center shrink-0 overflow-hidden">
+                    {user.avatar ? (
+                      <img
+                        src={user.avatar}
+                        alt={user.name}
+                        className="w-full h-full object-cover"
+                      />
+                    ) : (
+                      <UserIcon className="w-5 h-5 text-zinc-500" />
+                    )}
+                  </div>
+                  <div className="min-w-0">
+                    <p className="text-sm font-semibold text-white truncate">
+                      {user.name}
+                    </p>
+                    <p className="text-xs text-zinc-400 truncate">
+                      @{user.username}
+                    </p>
+                  </div>
+                </div>
+
+                {/* Takip Et / Takiptesin Butonu */}
+                <button
+                  type="button"
+                  onClick={() => toggleFollow(user.id)}
+                  className={`px-3.5 py-1.5 rounded-xl text-xs font-semibold transition-all btn-press-subtle shrink-0 ${
+                    user.isFollowing
+                      ? "bg-zinc-800 hover:bg-zinc-700 text-zinc-200 border border-zinc-700"
+                      : "bg-white hover:bg-zinc-200 text-zinc-950 font-bold"
+                  }`}
+                >
+                  {user.isFollowing ? "Takip Ediliyor" : "Takip Et"}
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+      </main>
+
+      {/* Alt Navigasyon Barı */}
+      <BottomNav />
+    </div>
+  );
+}
+
+export default function FollowPage() {
+  return (
+    <Suspense
+      fallback={
+        <div className="min-h-[100dvh] flex items-center justify-center bg-zinc-950 text-white pt-safe pb-safe">
+          <div className="w-8 h-8 border-2 border-emerald-500 border-t-transparent rounded-full animate-spin" />
+        </div>
+      }
+    >
+      <FollowPageContent />
+    </Suspense>
+  );
+}
