@@ -26,6 +26,7 @@ function VerifyEmailContent() {
   const [status, setStatus] = useState<"idle" | "verifying" | "success" | "error" | "expired">("idle");
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [pendingEmail, setPendingEmail] = useState<string>("");
+  const [expiresAt, setExpiresAt] = useState<number>(0);
   const [timeLeft, setTimeLeft] = useState<number>(0);
   const [resending, setResending] = useState(false);
   const [resendSuccess, setResendSuccess] = useState(false);
@@ -68,7 +69,7 @@ function VerifyEmailContent() {
     };
   }, [oobCode, profile, refreshProfile, router]);
 
-  // 2. oobCode yoksa, localStorage ve 10dk geri sayım kontrolü
+  // 2. oobCode yoksa, localStorage kontrolü ve süre belirleme
   useEffect(() => {
     if (oobCode) return;
 
@@ -90,7 +91,30 @@ function VerifyEmailContent() {
     const email = parsed?.email || user?.email || "";
     setPendingEmail(email);
 
-    const expiresAt = parsed?.expiresAt || Date.now() + 10 * 60 * 1000;
+    const now = Date.now();
+    let targetExpiresAt = parsed?.expiresAt;
+
+    if (!targetExpiresAt) {
+      targetExpiresAt = now + 10 * 60 * 1000;
+      localStorage.setItem(
+        "pending_verification",
+        JSON.stringify({ email, expiresAt: targetExpiresAt })
+      );
+    }
+
+    if (targetExpiresAt <= now) {
+      setStatus("expired");
+      setTimeLeft(0);
+      setExpiresAt(targetExpiresAt);
+    } else {
+      setExpiresAt(targetExpiresAt);
+      setTimeLeft(Math.floor((targetExpiresAt - now) / 1000));
+    }
+  }, [oobCode, user, router]);
+
+  // 3. Geri sayım sayacı
+  useEffect(() => {
+    if (!expiresAt || oobCode || status === "expired") return;
 
     const updateRemaining = () => {
       const now = Date.now();
@@ -98,7 +122,6 @@ function VerifyEmailContent() {
       setTimeLeft(diff);
 
       if (diff <= 0) {
-        localStorage.removeItem("pending_verification");
         setStatus("expired");
       }
     };
@@ -107,17 +130,32 @@ function VerifyEmailContent() {
     const interval = setInterval(updateRemaining, 1000);
 
     return () => clearInterval(interval);
-  }, [oobCode, user, router]);
+  }, [expiresAt, oobCode, status]);
 
+  // Ana ekrana dönüldüğünde süreyi ve hafızadaki doğrulama durumunu tamamen sıfırla
+  const handleReturnHome = async () => {
+    localStorage.removeItem("pending_verification");
+    setExpiresAt(0);
+    setTimeLeft(0);
+    setStatus("idle");
+    try {
+      await firebaseSignOut(auth);
+    } catch {}
+    router.push("/login");
+  };
+
+  // Her e-posta gönderildiğinde veya süre bittiğinde yeni link istendiğinde 10 dakikayı yeniden başlat
   const handleResend = async () => {
-    if (!auth.currentUser) {
-      router.push("/login");
+    const targetEmail = pendingEmail || auth.currentUser?.email;
+    if (!targetEmail) {
+      handleReturnHome();
       return;
     }
 
     try {
       setResending(true);
       setResendSuccess(false);
+      setErrorMessage(null);
 
       // 1. Önce Resend ile doğrudan SigalMedia e-postası göndermeyi dene
       let sentViaResend = false;
@@ -125,7 +163,7 @@ function VerifyEmailContent() {
         const res = await fetch("/api/auth/send-verification", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ email: pendingEmail }),
+          body: JSON.stringify({ email: targetEmail }),
         });
         const data = await res.json().catch(() => ({}));
         if (res.ok && data.success) {
@@ -144,11 +182,13 @@ function VerifyEmailContent() {
         await sendEmailVerification(auth.currentUser, actionCodeSettings);
       }
 
+      // 10 dakikalık süreyi baştan 600 saniyeye sıfırla
       const newExpiresAt = Date.now() + 10 * 60 * 1000;
       localStorage.setItem(
         "pending_verification",
-        JSON.stringify({ email: pendingEmail, expiresAt: newExpiresAt })
+        JSON.stringify({ email: targetEmail, expiresAt: newExpiresAt })
       );
+      setExpiresAt(newExpiresAt);
       setTimeLeft(600);
       setStatus("idle");
       setResendSuccess(true);
@@ -200,10 +240,10 @@ function VerifyEmailContent() {
               {errorMessage || "Bağlantının süresi dolmuş veya geçersiz."}
             </p>
             <button
-              onClick={() => router.push("/login")}
-              className="w-full py-2.5 px-4 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-white font-medium text-sm transition-colors"
+              onClick={handleReturnHome}
+              className="w-full py-3 px-4 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-white font-medium text-sm transition-colors"
             >
-              Giriş Ekranına Dön
+              Ana Ekrana Dön
             </button>
           </div>
         )}
@@ -213,14 +253,38 @@ function VerifyEmailContent() {
             <AlertCircle className="w-12 h-12 text-amber-400 mx-auto mb-4" />
             <h1 className="text-xl font-bold text-white mb-2">Süre Doldu</h1>
             <p className="text-sm text-zinc-400 mb-6">
-              10 dakikalık doğrulama süresi doldu. Lütfen tekrar kayıt olun veya giriş yapın.
+              10 dakikalık doğrulama süresi doldu. Yeni bir bağlantı alabilir veya ana ekrana dönebilirsiniz.
             </p>
-            <button
-              onClick={() => router.push("/login")}
-              className="w-full py-2.5 px-4 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-white font-medium text-sm transition-colors"
-            >
-              Giriş Ekranına Dön
-            </button>
+
+            {errorMessage && (
+              <p className="text-xs text-rose-400 bg-rose-500/10 border border-rose-500/20 rounded-lg p-2.5 mb-4">
+                {errorMessage}
+              </p>
+            )}
+
+            <div className="space-y-3">
+              <button
+                type="button"
+                onClick={handleResend}
+                disabled={resending}
+                className="w-full h-14 rounded-2xl bg-white hover:bg-zinc-200 text-black font-semibold text-base transition-colors disabled:opacity-40 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+              >
+                {resending ? (
+                  <Loader2 className="w-4 h-4 animate-spin text-black" />
+                ) : (
+                  <RefreshCw className="w-4 h-4" />
+                )}
+                Yeni Bağlantı Gönder
+              </button>
+
+              <button
+                type="button"
+                onClick={handleReturnHome}
+                className="w-full h-12 rounded-2xl bg-zinc-900 hover:bg-zinc-800 text-zinc-400 hover:text-white text-sm font-medium transition-colors"
+              >
+                Ana Ekrana Dön
+              </button>
+            </div>
           </div>
         )}
 
@@ -258,7 +322,7 @@ function VerifyEmailContent() {
               <button
                 type="button"
                 onClick={handleResend}
-                disabled={resending || timeLeft === 0}
+                disabled={resending}
                 className="w-full h-14 rounded-2xl bg-white hover:bg-zinc-200 text-black font-semibold text-base transition-colors disabled:opacity-40 disabled:cursor-not-allowed flex items-center justify-center gap-2"
               >
                 {resending ? (
@@ -271,13 +335,10 @@ function VerifyEmailContent() {
 
               <button
                 type="button"
-                onClick={async () => {
-                  await firebaseSignOut(auth);
-                  router.push("/login");
-                }}
+                onClick={handleReturnHome}
                 className="w-full h-12 rounded-2xl bg-zinc-900 hover:bg-zinc-800 text-zinc-400 hover:text-white text-sm font-medium transition-colors"
               >
-                Giriş Ekranına Dön
+                Ana Ekrana Dön
               </button>
             </div>
           </div>
