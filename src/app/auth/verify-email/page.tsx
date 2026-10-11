@@ -7,108 +7,89 @@ import { auth } from "@/lib/firebase";
 import { useAuth } from "@/context/AuthContext";
 import { CheckCircle2, AlertCircle, Loader2, RefreshCw, MailCheck } from "lucide-react";
 
-interface PendingVerification {
-  email: string;
-  expiresAt: number;
-  sentAt?: number;
-}
-
 function VerifyEmailContent() {
   const router = useRouter();
   const { user, profile, refreshProfile } = useAuth();
 
   const [digits, setDigits] = useState<string[]>(["", "", "", ""]);
   const inputRefs = useRef<(HTMLInputElement | null)[]>([]);
-  const initialSendRef = useRef(false);
 
   const [status, setStatus] = useState<"idle" | "verifying" | "success" | "expired">("idle");
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [pendingEmail, setPendingEmail] = useState<string>("");
-  const [expiresAt, setExpiresAt] = useState<number>(0);
+  const [cooldown, setCooldown] = useState<number>(0);
   const [timeLeft, setTimeLeft] = useState<number>(0);
   const [resending, setResending] = useState(false);
   const [resendSuccess, setResendSuccess] = useState(false);
 
-  // 1. Sayfa açıldığında veriyi yükle ve tek bir kez yönet
+  // 1. Sayfa açıldığında: ASLA KOD GÖNDERMEZ (Aptal Sayfa Prensibi)
+  // Yalnızca sessionStorage ve localStorage'daki oturum süresini ve sayacını okur
   useEffect(() => {
-    const raw = localStorage.getItem("pending_verification");
-    if (!raw && !user) {
+    const sessionEmail = typeof window !== "undefined" ? sessionStorage.getItem("pending_email") : null;
+    const lastSentStr = typeof window !== "undefined" ? sessionStorage.getItem("last_code_sent") : null;
+    const expiresStr = typeof window !== "undefined" ? sessionStorage.getItem("code_expires_at") : null;
+
+    const localRaw = typeof window !== "undefined" ? localStorage.getItem("pending_verification") : null;
+    let localParsed: any = null;
+    if (localRaw) {
+      try {
+        localParsed = JSON.parse(localRaw);
+      } catch {}
+    }
+
+    const email = sessionEmail || localParsed?.email || user?.email || "";
+    if (!email && !user) {
       router.push("/login");
       return;
     }
-
-    let parsed: PendingVerification | null = null;
-    if (raw) {
-      try {
-        parsed = JSON.parse(raw);
-      } catch {
-        parsed = null;
-      }
-    }
-
-    const email = parsed?.email || user?.email || "";
     setPendingEmail(email);
 
     const now = Date.now();
-    let targetExpiresAt = parsed?.expiresAt;
+    const lastSent = Number(lastSentStr || localParsed?.sentAt || 0);
+    const expiresAt = Number(expiresStr || localParsed?.expiresAt || (now + 10 * 60 * 1000));
 
-    if (!targetExpiresAt || targetExpiresAt <= now) {
-      if (targetExpiresAt && targetExpiresAt <= now) {
-        setStatus("expired");
-        setTimeLeft(0);
-        setExpiresAt(targetExpiresAt);
-        return;
-      }
-      targetExpiresAt = now + 10 * 60 * 1000;
+    // 60 saniyelik tekrar gönderme kilidi
+    const initialCooldown = lastSent > 0 ? Math.max(0, 60 - Math.floor((now - lastSent) / 1000)) : 0;
+    setCooldown(initialCooldown);
+
+    // 10 dakikalık genel kod geçerlilik süresi
+    const initialRemaining = Math.max(0, Math.floor((expiresAt - now) / 1000));
+    setTimeLeft(initialRemaining);
+
+    if (initialRemaining <= 0) {
+      setStatus("expired");
     }
 
-    setExpiresAt(targetExpiresAt);
-    setTimeLeft(Math.max(0, Math.floor((targetExpiresAt - now) / 1000)));
-
-    // Eğer daha önce hiç kod gönderilmemişse ve ilk kez giriliyorsa tek sefer gönder
-    if (!parsed?.sentAt && email && !initialSendRef.current) {
-      initialSendRef.current = true;
-      fetch("/api/auth/send-verification", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email }),
-      })
-        .then((res) => res.json())
-        .then((data) => {
-          const newExp = data.expiresAt || targetExpiresAt;
-          setExpiresAt(newExp);
-          localStorage.setItem(
-            "pending_verification",
-            JSON.stringify({ email, expiresAt: newExp, sentAt: Date.now() })
-          );
-        })
-        .catch((err) => console.error("İlk kod gönderim hatası:", err));
-    }
-
+    // İlk input alanına odaklan
     setTimeout(() => {
       inputRefs.current[0]?.focus();
     }, 150);
   }, [user, router]);
 
-  // 2. Geri sayım sayacı
+  // 2. Canlı sayaç: Sayfa yenilense (F5) dahi sessionStorage'daki zaman damgasından devam eder
   useEffect(() => {
-    if (!expiresAt || status === "expired") return;
-
-    const updateRemaining = () => {
+    const timer = setInterval(() => {
       const now = Date.now();
-      const diff = Math.max(0, Math.floor((expiresAt - now) / 1000));
-      setTimeLeft(diff);
+      const lastSentStr = sessionStorage.getItem("last_code_sent");
+      const expiresStr = sessionStorage.getItem("code_expires_at");
 
-      if (diff <= 0) {
-        setStatus("expired");
+      if (lastSentStr) {
+        const lastSent = Number(lastSentStr);
+        setCooldown(Math.max(0, 60 - Math.floor((now - lastSent) / 1000)));
       }
-    };
 
-    updateRemaining();
-    const interval = setInterval(updateRemaining, 1000);
+      if (expiresStr) {
+        const expiresAt = Number(expiresStr);
+        const rem = Math.max(0, Math.floor((expiresAt - now) / 1000));
+        setTimeLeft(rem);
+        if (rem <= 0) {
+          setStatus("expired");
+        }
+      }
+    }, 1000);
 
-    return () => clearInterval(interval);
-  }, [expiresAt, status]);
+    return () => clearInterval(timer);
+  }, []);
 
   // 3. 4 Haneli Kodu Doğrulama
   const handleVerify = async (codeToVerify?: string) => {
@@ -146,14 +127,18 @@ function VerifyEmailContent() {
         return;
       }
 
-      // Başarılı doğrulama
+      // Başarılı doğrulama: Tüm oturum kilitlerini temizle
+      sessionStorage.removeItem("last_code_sent");
+      sessionStorage.removeItem("code_expires_at");
+      sessionStorage.removeItem("pending_email");
+      localStorage.removeItem("pending_verification");
+
       if (user?.uid) {
         localStorage.setItem(`email_verified_${user.uid}`, "true");
       }
       if (email) {
         localStorage.setItem(`email_verified_${email}`, "true");
       }
-      localStorage.removeItem("pending_verification");
 
       setStatus("success");
       await refreshProfile();
@@ -168,8 +153,10 @@ function VerifyEmailContent() {
     }
   };
 
-  // 4. Tekrar Kod Gönder (Süreyi 10 dakikaya baştan kurar)
+  // 4. Tekrar Kod Gönder (Yalnızca kullanıcı butona bizzat bastığında çalışır)
   const handleResend = async () => {
+    if (cooldown > 0 || resending) return;
+
     const email = pendingEmail || user?.email;
     if (!email) {
       handleReturnHome();
@@ -194,18 +181,20 @@ function VerifyEmailContent() {
         return;
       }
 
-      const newExpiresAt = data.expiresAt || Date.now() + 10 * 60 * 1000;
+      const now = Date.now();
+      const newExpiresAt = data.expiresAt || now + 10 * 60 * 1000;
+
+      // Cooldown ve süre damgalarını sessionStorage'a işle
+      sessionStorage.setItem("last_code_sent", now.toString());
+      sessionStorage.setItem("code_expires_at", newExpiresAt.toString());
+      sessionStorage.setItem("pending_email", email);
 
       localStorage.setItem(
         "pending_verification",
-        JSON.stringify({
-          email,
-          expiresAt: newExpiresAt,
-          sentAt: Date.now(),
-        })
+        JSON.stringify({ email, expiresAt: newExpiresAt, sentAt: now })
       );
 
-      setExpiresAt(newExpiresAt);
+      setCooldown(60);
       setTimeLeft(600);
       setDigits(["", "", "", ""]);
       setStatus("idle");
@@ -222,11 +211,12 @@ function VerifyEmailContent() {
     }
   };
 
-  // 5. Ana Ekrana Dön (Hafızayı temizleyip çıkış yapar)
+  // 5. Ana Ekrana Dön (Tüm sayaç ve oturum state'lerini temizler)
   const handleReturnHome = async () => {
+    sessionStorage.removeItem("last_code_sent");
+    sessionStorage.removeItem("code_expires_at");
+    sessionStorage.removeItem("pending_email");
     localStorage.removeItem("pending_verification");
-    setExpiresAt(0);
-    setTimeLeft(0);
     setDigits(["", "", "", ""]);
     setStatus("idle");
     try {
@@ -330,7 +320,7 @@ function VerifyEmailContent() {
               <button
                 type="button"
                 onClick={handleResend}
-                disabled={resending}
+                disabled={resending || cooldown > 0}
                 className="w-full h-14 rounded-2xl bg-white hover:bg-zinc-200 text-black font-semibold text-base transition-colors disabled:opacity-40 disabled:cursor-not-allowed flex items-center justify-center gap-2"
               >
                 {resending ? (
@@ -338,7 +328,7 @@ function VerifyEmailContent() {
                 ) : (
                   <RefreshCw className="w-4 h-4" />
                 )}
-                Yeni Kod Gönder
+                {cooldown > 0 ? `Tekrar Kod Gönder (${cooldown}s)` : "Yeni Kod Gönder"}
               </button>
 
               <button
@@ -379,6 +369,7 @@ function VerifyEmailContent() {
                     onKeyDown={(e) => handleKeyDown(idx, e)}
                     onPaste={handlePaste}
                     disabled={status === "verifying"}
+                    autoComplete="off"
                     className="w-14 h-16 sm:w-16 sm:h-18 text-2xl sm:text-3xl font-mono font-bold text-center bg-zinc-900/90 border border-zinc-800 rounded-2xl text-white focus:outline-none focus:border-white focus:ring-1 focus:ring-white transition-all disabled:opacity-50"
                   />
                 ))}
@@ -426,15 +417,15 @@ function VerifyEmailContent() {
               <button
                 type="button"
                 onClick={handleResend}
-                disabled={resending}
-                className="w-full h-12 rounded-2xl bg-zinc-900 hover:bg-zinc-800 text-zinc-300 hover:text-white text-sm font-medium transition-colors flex items-center justify-center gap-2 disabled:opacity-40"
+                disabled={resending || cooldown > 0}
+                className="w-full h-12 rounded-2xl bg-zinc-900 hover:bg-zinc-800 text-zinc-300 hover:text-white text-sm font-medium transition-colors flex items-center justify-center gap-2 disabled:opacity-40 disabled:cursor-not-allowed"
               >
                 {resending ? (
                   <Loader2 className="w-4 h-4 animate-spin" />
                 ) : (
                   <RefreshCw className="w-4 h-4" />
                 )}
-                Tekrar Kod Gönder
+                {cooldown > 0 ? `Tekrar Kod Gönder (${cooldown}s)` : "Tekrar Kod Gönder"}
               </button>
 
               <button

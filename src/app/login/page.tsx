@@ -88,7 +88,8 @@ export default function LoginPage() {
         const isLocallyVerified = localStorage.getItem(`email_verified_${cred.user.uid}`) === "true";
 
         if (!cred.user.emailVerified && !isProfileDone && !isLocallyVerified) {
-          let expires = Date.now() + 10 * 60 * 1000;
+          const now = Date.now();
+          let expires = now + 10 * 60 * 1000;
           try {
             const res = await fetch("/api/auth/send-verification", {
               method: "POST",
@@ -103,18 +104,24 @@ export default function LoginPage() {
             console.warn("Kod gönderim hatası:", resErr);
           }
 
+          // Tekil tetikleme & F5 koruması için sessionStorage kilidi
+          sessionStorage.setItem("last_code_sent", now.toString());
+          sessionStorage.setItem("code_expires_at", expires.toString());
+          sessionStorage.setItem("pending_email", email.trim());
           localStorage.setItem(
             "pending_verification",
-            JSON.stringify({ email: email.trim(), expiresAt: expires, sentAt: Date.now() })
+            JSON.stringify({ email: email.trim(), expiresAt: expires, sentAt: now })
           );
+
           router.push("/auth/verify-email");
           return;
         }
       } else if (view === "register-password") {
         const cred = await createUserWithEmailAndPassword(auth, email.trim(), password);
 
-        // Resend ile 4 haneli doğrulama kodunu gönder
-        let expires = Date.now() + 10 * 60 * 1000;
+        // Kullanıcı Kayıt Ol butonuna bastığı an TEK BİR KEZ kod gönderilir
+        const now = Date.now();
+        let expires = now + 10 * 60 * 1000;
         try {
           const res = await fetch("/api/auth/send-verification", {
             method: "POST",
@@ -129,10 +136,15 @@ export default function LoginPage() {
           console.warn("Resend doğrulama kodu hatası:", resendErr);
         }
 
+        // Tekil tetikleme & F5 koruması için sessionStorage kilidi
+        sessionStorage.setItem("last_code_sent", now.toString());
+        sessionStorage.setItem("code_expires_at", expires.toString());
+        sessionStorage.setItem("pending_email", email.trim());
         localStorage.setItem(
           "pending_verification",
-          JSON.stringify({ email: email.trim(), expiresAt: expires, sentAt: Date.now() })
+          JSON.stringify({ email: email.trim(), expiresAt: expires, sentAt: now })
         );
+
         router.push("/auth/verify-email");
         return;
       }
@@ -178,9 +190,17 @@ export default function LoginPage() {
               type="button"
               onClick={() => {
                 setError(null);
-                if (view === "login-password") setView("login-email");
-                else if (view === "register-password") setView("register-email");
-                else setView("welcome");
+                if (view === "login-password") {
+                  setPassword("");
+                  setView("login-email");
+                } else if (view === "register-password") {
+                  setPassword("");
+                  setView("register-email");
+                } else {
+                  setEmail("");
+                  setPassword("");
+                  setView("welcome");
+                }
               }}
               className="w-10 h-10 rounded-full bg-zinc-900/90 border border-zinc-800 flex items-center justify-center text-zinc-300 hover:text-white hover:bg-zinc-800 transition-colors"
             >
@@ -222,6 +242,8 @@ export default function LoginPage() {
               <button
                 type="button"
                 onClick={() => {
+                  setEmail("");
+                  setPassword("");
                   setError(null);
                   setView("register-email");
                 }}
@@ -233,6 +255,8 @@ export default function LoginPage() {
               <button
                 type="button"
                 onClick={() => {
+                  setEmail("");
+                  setPassword("");
                   setError(null);
                   setView("login-email");
                 }}
@@ -282,7 +306,11 @@ export default function LoginPage() {
 
         {/* 2. ADIM: E-POSTA ADIMI (GİRİŞ VEYA KAYIT) */}
         {(view === "login-email" || view === "register-email") && (
-          <form onSubmit={handleEmailContinue} className="flex-1 flex flex-col justify-between">
+          <form
+            onSubmit={handleEmailContinue}
+            autoComplete="off"
+            className="flex-1 flex flex-col justify-between"
+          >
             <div>
               <h1 className="text-3xl font-extrabold tracking-tight text-white mb-2">
                 {view === "login-email" ? "Tekrar hoş geldin" : "E-postanızı girin"}
@@ -298,6 +326,7 @@ export default function LoginPage() {
                   type="email"
                   autoFocus
                   required
+                  autoComplete="off"
                   value={email}
                   onChange={(e) => {
                     setEmail(e.target.value);
@@ -363,7 +392,11 @@ export default function LoginPage() {
 
         {/* 3. ADIM: ŞİFRE ADIMI (GİRİŞ VEYA KAYIT) */}
         {(view === "login-password" || view === "register-password") && (
-          <form onSubmit={handleAuthSubmit} className="flex-1 flex flex-col justify-between">
+          <form
+            onSubmit={handleAuthSubmit}
+            autoComplete="off"
+            className="flex-1 flex flex-col justify-between"
+          >
             <div>
               <h1 className="text-3xl font-extrabold tracking-tight text-white mb-2">
                 {view === "login-password" ? "Şifrenizi girin" : "Şifre belirleyin"}
@@ -381,6 +414,7 @@ export default function LoginPage() {
                     type={showPassword ? "text" : "password"}
                     autoFocus
                     required
+                    autoComplete={view === "register-password" ? "new-password" : "current-password"}
                     value={password}
                     onChange={(e) => {
                       setPassword(e.target.value);
