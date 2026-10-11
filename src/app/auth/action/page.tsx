@@ -105,11 +105,27 @@ function AuthActionContent() {
     };
   }, [mode, oobCode, profile, refreshProfile, router]);
 
+  const isPasswordValid = (pwd: string) => {
+    return pwd.length >= 8 && /[a-z]/.test(pwd) && /[A-Z]/.test(pwd) && /[0-9]/.test(pwd);
+  };
+
   const handlePasswordResetSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!oobCode) return;
-    if (newPassword.length < 6) {
-      setErrorMessage("Şifre en az 6 karakter olmalıdır.");
+    if (newPassword.length < 8) {
+      setErrorMessage("Şifre en az 8 karakter olmalıdır.");
+      return;
+    }
+    if (!/[a-z]/.test(newPassword)) {
+      setErrorMessage("Şifre en az bir küçük harf içermelidir.");
+      return;
+    }
+    if (!/[A-Z]/.test(newPassword)) {
+      setErrorMessage("Şifre en az bir büyük harf içermelidir.");
+      return;
+    }
+    if (!/[0-9]/.test(newPassword)) {
+      setErrorMessage("Şifre en az bir rakam içermelidir.");
       return;
     }
 
@@ -132,7 +148,7 @@ function AuthActionContent() {
 
   return (
     <main className="min-h-[100dvh] flex items-center justify-center p-4 sm:p-6 pt-[calc(1rem+env(safe-area-inset-top,0px))] pb-[calc(1rem+env(safe-area-inset-bottom,0px))] pl-[calc(1rem+env(safe-area-inset-left,0px))] pr-[calc(1rem+env(safe-area-inset-right,0px))] bg-black text-white">
-      <div className="w-full max-w-[420px] flex flex-col justify-between min-h-[500px] p-6 sm:p-8 bg-zinc-950/80 border border-zinc-900 rounded-3xl shadow-2xl backdrop-blur-2xl text-center">
+      <div className="w-full max-w-[420px] flex flex-col justify-between min-h-[500px] p-6 sm:p-8 bg-zinc-950/80 border border-zinc-900 rounded-3xl shadow-2xl backdrop-blur-2xl text-center animate-auth-scale">
         {/* Üst Logo */}
         <div className="flex justify-center mb-6">
           <img
@@ -144,7 +160,7 @@ function AuthActionContent() {
 
         {/* 1. YÜKLENİYOR / İŞLENİYOR */}
         {status === "loading" && (
-          <div className="flex-1 flex flex-col items-center justify-center py-6">
+          <div key="loading" className="flex-1 flex flex-col items-center justify-center py-6 animate-auth-fade">
             <Loader2 className="w-10 h-10 text-emerald-400 animate-spin mb-4" />
             <h1 className="text-xl font-bold text-white mb-2">
               İşlem Doğrulanıyor
@@ -157,7 +173,7 @@ function AuthActionContent() {
 
         {/* 2. BAŞARILI */}
         {status === "success" && (
-          <div className="flex-1 flex flex-col items-center justify-center py-6">
+          <div key="success" className="flex-1 flex flex-col items-center justify-center py-6 animate-auth-fade">
             <CheckCircle2 className="w-12 h-12 text-emerald-400 mb-4" />
             <h1 className="text-xl font-bold text-white mb-2">
               {mode === "resetPassword"
@@ -175,7 +191,7 @@ function AuthActionContent() {
 
         {/* 3. HATA */}
         {status === "error" && (
-          <div className="flex-1 flex flex-col items-center justify-center py-6">
+          <div key="error" className="flex-1 flex flex-col items-center justify-center py-6 animate-auth-fade">
             <AlertCircle className="w-12 h-12 text-rose-400 mb-4" />
             <h1 className="text-xl font-bold text-white mb-2">İşlem Başarısız</h1>
             <p className="text-sm text-zinc-400 mb-6">
@@ -183,7 +199,7 @@ function AuthActionContent() {
             </p>
             <button
               onClick={() => router.push("/login")}
-              className="w-full h-12 rounded-2xl bg-white hover:bg-zinc-200 text-black font-semibold text-sm transition-colors flex items-center justify-center"
+              className="w-full h-12 rounded-2xl bg-white hover:bg-zinc-200 text-black font-semibold text-sm transition-colors flex items-center justify-center btn-press"
             >
               Giriş Ekranına Dön
             </button>
@@ -193,8 +209,9 @@ function AuthActionContent() {
         {/* 4. ŞİFRE SIFIRLAMA FORMU */}
         {status === "reset-password" && (
           <form
+            key="reset"
             onSubmit={handlePasswordResetSubmit}
-            className="flex-1 flex flex-col justify-between"
+            className="flex-1 flex flex-col justify-between animate-auth-fade"
           >
             <div>
               <div className="w-12 h-12 rounded-2xl bg-zinc-900 border border-zinc-800 flex items-center justify-center mx-auto mb-4 text-emerald-400">
@@ -213,7 +230,7 @@ function AuthActionContent() {
                 type="password"
                 required
                 autoFocus
-                placeholder="En az 6 karakterli yeni şifre"
+                placeholder="En az 8 karakter, büyük/küçük harf, rakam"
                 value={newPassword}
                 onChange={(e) => {
                   setNewPassword(e.target.value);
@@ -232,8 +249,8 @@ function AuthActionContent() {
             <div className="pt-6">
               <button
                 type="submit"
-                disabled={resetting || newPassword.length < 6}
-                className="w-full h-14 rounded-2xl bg-white hover:bg-zinc-200 text-black font-semibold text-base transition-colors disabled:opacity-40 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+                disabled={resetting || !isPasswordValid(newPassword)}
+                className="w-full h-14 rounded-2xl bg-white hover:bg-zinc-200 text-black font-semibold text-base transition-colors disabled:opacity-40 disabled:cursor-not-allowed flex items-center justify-center gap-2 btn-press"
               >
                 {resetting ? (
                   <Loader2 className="w-5 h-5 animate-spin" />

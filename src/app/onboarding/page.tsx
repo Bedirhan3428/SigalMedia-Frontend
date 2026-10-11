@@ -186,14 +186,14 @@ export default function OnboardingPage() {
 
   return (
     <main className="min-h-[100dvh] flex items-center justify-center p-4 sm:p-6 pt-[calc(1rem+env(safe-area-inset-top,0px))] pb-[calc(1rem+env(safe-area-inset-bottom,0px))] pl-[calc(1rem+env(safe-area-inset-left,0px))] pr-[calc(1rem+env(safe-area-inset-right,0px))] bg-black text-white">
-      <div className="w-full max-w-[420px] flex flex-col justify-between min-h-[580px] p-6 sm:p-8 bg-zinc-950/80 border border-zinc-900 rounded-3xl shadow-2xl backdrop-blur-2xl">
+      <div className="w-full max-w-[420px] flex flex-col justify-between min-h-[580px] p-6 sm:p-8 bg-zinc-950/80 border border-zinc-900 rounded-3xl shadow-2xl backdrop-blur-2xl animate-auth-scale">
         {/* ÜST BAR (Geri Butonu, Adım Çizgileri ve Çıkış Butonu) */}
         <div className="flex items-center justify-between h-10 mb-4">
           {step > 1 ? (
             <button
               type="button"
               onClick={() => setStep((prev) => (prev - 1) as 1 | 2)}
-              className="w-10 h-10 rounded-full bg-zinc-900/90 border border-zinc-800 flex items-center justify-center text-zinc-300 hover:text-white hover:bg-zinc-800 transition-colors"
+              className="w-10 h-10 rounded-full bg-zinc-900/90 border border-zinc-800 flex items-center justify-center text-zinc-300 hover:text-white hover:bg-zinc-800 transition-colors btn-press-subtle"
             >
               <ArrowLeft className="w-5 h-5" />
             </button>
@@ -224,7 +224,7 @@ export default function OnboardingPage() {
             type="button"
             onClick={signOut}
             title="Çıkış Yap"
-            className="w-10 h-10 rounded-full bg-zinc-900/90 border border-zinc-800 flex items-center justify-center text-zinc-400 hover:text-white hover:bg-zinc-800 transition-colors"
+            className="w-10 h-10 rounded-full bg-zinc-900/90 border border-zinc-800 flex items-center justify-center text-zinc-400 hover:text-white hover:bg-zinc-800 transition-colors btn-press-subtle"
           >
             <LogOut className="w-4 h-4" />
           </button>
@@ -232,7 +232,7 @@ export default function OnboardingPage() {
 
         {/* ADIM 3: DOĞUM TARİHİ VE YAŞ */}
         {step === 1 && (
-          <div className="flex-1 flex flex-col justify-between">
+          <div key={1} className="flex-1 flex flex-col justify-between animate-auth-fade">
             <div>
               <h1 className="text-3xl font-extrabold tracking-tight text-white mb-2">
                 Doğum tarihinizi girin
@@ -272,7 +272,7 @@ export default function OnboardingPage() {
                 type="button"
                 onClick={() => setStep(2)}
                 disabled={calculatedAge === null || calculatedAge < 13}
-                className="w-full h-14 rounded-2xl bg-white hover:bg-zinc-200 text-black font-semibold text-base transition-colors disabled:opacity-40 disabled:cursor-not-allowed flex items-center justify-center"
+                className="w-full h-14 rounded-2xl bg-white hover:bg-zinc-200 text-black font-semibold text-base transition-colors disabled:opacity-40 disabled:cursor-not-allowed flex items-center justify-center btn-press"
               >
                 Devam Et
               </button>
@@ -282,7 +282,7 @@ export default function OnboardingPage() {
 
         {/* ADIM 4: KULLANICI ADI SEÇİMİ */}
         {step === 2 && (
-          <div className="flex-1 flex flex-col justify-between">
+          <div key={2} className="flex-1 flex flex-col justify-between animate-auth-fade">
             <div>
               <h1 className="text-3xl font-extrabold tracking-tight text-white mb-2">
                 Kullanıcı adı seçin
@@ -336,7 +336,7 @@ export default function OnboardingPage() {
                 type="button"
                 onClick={() => setStep(3)}
                 disabled={usernameStatus !== "available"}
-                className="w-full h-14 rounded-2xl bg-white hover:bg-zinc-200 text-black font-semibold text-base transition-colors disabled:opacity-40 disabled:cursor-not-allowed flex items-center justify-center"
+                className="w-full h-14 rounded-2xl bg-white hover:bg-zinc-200 text-black font-semibold text-base transition-colors disabled:opacity-40 disabled:cursor-not-allowed flex items-center justify-center btn-press"
               >
                 Devam Et
               </button>
@@ -346,7 +346,7 @@ export default function OnboardingPage() {
 
         {/* ADIM 5: PROFİL BELİRLEME (FOTOĞRAF & İSİM) */}
         {step === 3 && (
-          <div className="flex-1 flex flex-col justify-between">
+          <div key={3} className="flex-1 flex flex-col justify-between animate-auth-fade">
             <div>
               <h1 className="text-3xl font-extrabold tracking-tight text-white mb-2">
                 Profilinizi tamamlayın
@@ -359,7 +359,7 @@ export default function OnboardingPage() {
               <div className="flex flex-col items-center justify-center mb-6">
                 <div
                   onClick={() => fileInputRef.current?.click()}
-                  className="relative group cursor-pointer w-28 h-28 rounded-full border-2 border-dashed border-zinc-700 hover:border-zinc-500 flex items-center justify-center overflow-hidden transition-all bg-zinc-900"
+                  className="relative group cursor-pointer w-28 h-28 rounded-full border-2 border-dashed border-zinc-700 hover:border-zinc-500 flex items-center justify-center overflow-hidden transition-all bg-zinc-900 btn-press-subtle"
                 >
                   {avatarPreview ? (
                     <img
@@ -387,7 +387,7 @@ export default function OnboardingPage() {
                 <button
                   type="button"
                   onClick={() => fileInputRef.current?.click()}
-                  className="mt-2 text-xs text-zinc-400 hover:text-white font-medium transition-colors"
+                  className="mt-2 text-xs text-zinc-400 hover:text-white font-medium transition-colors btn-press-subtle"
                 >
                   {avatarPreview ? "Fotoğrafı Değiştir" : "Fotoğraf Seç"}
                 </button>
@@ -402,7 +402,7 @@ export default function OnboardingPage() {
                   type="text"
                   value={displayName}
                   onChange={(e) => setDisplayName(e.target.value)}
-                  placeholder="Örn: Bedirhan veya Takma Adın"
+                  placeholder="Örn: Sigal Medya"
                   maxLength={30}
                   autoComplete="off"
                   className="w-full h-14 px-4 bg-zinc-900 border border-zinc-800 rounded-2xl text-base text-white placeholder-zinc-500 focus:outline-none focus:border-zinc-500 transition-colors"
@@ -418,7 +418,7 @@ export default function OnboardingPage() {
                 type="button"
                 disabled={submitting}
                 onClick={() => handleComplete(false)}
-                className="w-full h-14 rounded-2xl bg-white hover:bg-zinc-200 text-black font-semibold text-base transition-colors disabled:opacity-40 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+                className="w-full h-14 rounded-2xl bg-white hover:bg-zinc-200 text-black font-semibold text-base transition-colors disabled:opacity-40 disabled:cursor-not-allowed flex items-center justify-center gap-2 btn-press"
               >
                 {submitting ? (
                   <>
@@ -434,7 +434,7 @@ export default function OnboardingPage() {
                 type="button"
                 disabled={submitting}
                 onClick={() => handleComplete(true)}
-                className="w-full h-12 rounded-2xl text-zinc-400 hover:text-white text-sm font-medium transition-colors disabled:opacity-40"
+                className="w-full h-12 rounded-2xl text-zinc-400 hover:text-white text-sm font-medium transition-colors disabled:opacity-40 btn-press-subtle"
               >
                 Şimdilik Geç
               </button>

@@ -308,10 +308,10 @@ function VerifyEmailContent() {
 
   return (
     <main className="min-h-[100dvh] flex items-center justify-center p-4 sm:p-6 pt-[calc(1rem+env(safe-area-inset-top,0px))] pb-[calc(1rem+env(safe-area-inset-bottom,0px))] pl-[calc(1rem+env(safe-area-inset-left,0px))] pr-[calc(1rem+env(safe-area-inset-right,0px))] bg-black text-white">
-      <div className="w-full max-w-[420px] flex flex-col justify-between min-h-[520px] p-6 sm:p-8 bg-zinc-950/80 border border-zinc-900 rounded-3xl shadow-2xl backdrop-blur-2xl text-center">
+      <div className="w-full max-w-[420px] flex flex-col justify-between min-h-[520px] p-6 sm:p-8 bg-zinc-950/80 border border-zinc-900 rounded-3xl shadow-2xl backdrop-blur-2xl text-center animate-auth-scale">
         {status === "success" ? (
           /* BAŞARILI ONAY EKRANI */
-          <div className="py-12 my-auto">
+          <div key="success" className="py-12 my-auto animate-auth-fade">
             <CheckCircle2 className="w-16 h-16 text-emerald-400 mx-auto mb-4 animate-in zoom-in duration-300" />
             <h1 className="text-2xl font-bold text-white mb-2">E-posta Doğrulandı</h1>
             <p className="text-sm text-zinc-400 mb-6">
@@ -321,7 +321,7 @@ function VerifyEmailContent() {
           </div>
         ) : status === "expired" ? (
           /* DURUM B: status === 'expired' (Yenileme Ekranı) */
-          <div className="flex flex-col justify-between flex-1 py-2">
+          <div key="expired" className="flex flex-col justify-between flex-1 py-2 animate-auth-fade">
             <div>
               <div className="w-14 h-14 rounded-2xl bg-amber-500/10 border border-amber-500/20 flex items-center justify-center mx-auto mb-4 text-amber-400">
                 <AlertCircle className="w-7 h-7" />
@@ -345,7 +345,7 @@ function VerifyEmailContent() {
                     placeholder="E-posta adresiniz"
                     autoComplete="off"
                     autoFocus
-                    className="w-full h-14 px-4 bg-zinc-900 border border-zinc-800 rounded-2xl text-base text-white text-center placeholder-zinc-500 focus:outline-none focus:border-emerald-500 transition-colors"
+                    className="w-full h-14 px-4 bg-zinc-900 border border-zinc-800 rounded-2xl text-base text-white text-center placeholder-zinc-500 focus:outline-none focus:border-zinc-500 transition-colors"
                   />
                 </div>
               ) : (
@@ -356,7 +356,7 @@ function VerifyEmailContent() {
                   <button
                     type="button"
                     onClick={() => setIsEditingEmail(true)}
-                    className="text-xs text-zinc-400 hover:text-white flex items-center gap-1 transition-colors ml-1"
+                    className="text-xs text-zinc-400 hover:text-white flex items-center gap-1 transition-colors ml-1 btn-press-subtle"
                   >
                     <Edit3 className="w-3.5 h-3.5" /> Değiştir
                   </button>
@@ -370,13 +370,13 @@ function VerifyEmailContent() {
               )}
             </div>
 
-            {/* Ortada Kocaman Yeşil/Mavi Aktif Buton */}
+            {/* Yenileme Butonları (Neon gölge içermez, zarif buton etkileşimi) */}
             <div className="space-y-3 pt-4">
               <button
                 type="button"
                 onClick={handleSendCode}
                 disabled={resending || !pendingEmail.trim()}
-                className="w-full h-14 rounded-2xl bg-emerald-500 hover:bg-emerald-400 text-black font-semibold text-base transition-all shadow-lg shadow-emerald-500/20 flex items-center justify-center gap-2 disabled:opacity-40 disabled:cursor-not-allowed"
+                className="w-full h-14 rounded-2xl bg-white hover:bg-zinc-200 text-black font-semibold text-base transition-colors flex items-center justify-center gap-2 disabled:opacity-40 disabled:cursor-not-allowed btn-press"
               >
                 {resending ? (
                   <>
@@ -394,7 +394,7 @@ function VerifyEmailContent() {
               <button
                 type="button"
                 onClick={handleReturnHome}
-                className="w-full py-2 text-zinc-500 hover:text-zinc-300 text-xs font-medium transition-colors"
+                className="w-full py-2 text-zinc-500 hover:text-zinc-300 text-xs font-medium transition-colors btn-press-subtle"
               >
                 Giriş Ekranına Dön
               </button>
@@ -402,7 +402,7 @@ function VerifyEmailContent() {
           </div>
         ) : (
           /* DURUM A: status === 'active' (Doğrulama Ekranı) */
-          <div className="flex flex-col justify-between flex-1 py-2">
+          <div key="active" className="flex flex-col justify-between flex-1 py-2 animate-auth-fade">
             <div>
               <div className="w-14 h-14 rounded-2xl bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-center mx-auto mb-4 text-emerald-400">
                 <MailCheck className="w-7 h-7" />
@@ -431,7 +431,7 @@ function VerifyEmailContent() {
                     onPaste={handlePaste}
                     disabled={status === "verifying"}
                     autoComplete="off"
-                    className="w-14 h-16 sm:w-16 sm:h-18 text-2xl sm:text-3xl font-mono font-bold text-center bg-zinc-900/90 border border-zinc-800 rounded-2xl text-white focus:outline-none focus:border-white focus:ring-1 focus:ring-white transition-all disabled:opacity-50"
+                    className="w-14 h-16 sm:w-16 sm:h-18 text-2xl sm:text-3xl font-mono font-bold text-center bg-zinc-900/90 border border-zinc-800 rounded-2xl text-white focus:outline-none focus:border-zinc-400 transition-colors disabled:opacity-50"
                   />
                 ))}
               </div>
@@ -457,7 +457,7 @@ function VerifyEmailContent() {
                 type="button"
                 onClick={() => handleVerify()}
                 disabled={status === "verifying" || digits.join("").length !== 4}
-                className="w-full h-14 rounded-2xl bg-white hover:bg-zinc-200 text-black font-semibold text-base transition-colors disabled:opacity-40 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+                className="w-full h-14 rounded-2xl bg-white hover:bg-zinc-200 text-black font-semibold text-base transition-colors disabled:opacity-40 disabled:cursor-not-allowed flex items-center justify-center gap-2 btn-press"
               >
                 {status === "verifying" ? (
                   <>
@@ -479,7 +479,7 @@ function VerifyEmailContent() {
                   type="button"
                   onClick={handleSendCode}
                   disabled={resending}
-                  className="w-full h-12 rounded-2xl bg-zinc-900 hover:bg-zinc-800 text-zinc-300 hover:text-white text-sm font-medium transition-colors flex items-center justify-center gap-2 disabled:opacity-40"
+                  className="w-full h-12 rounded-2xl bg-zinc-900 hover:bg-zinc-800 text-zinc-300 hover:text-white text-sm font-medium transition-colors flex items-center justify-center gap-2 disabled:opacity-40 btn-press"
                 >
                   {resending ? (
                     <Loader2 className="w-4 h-4 animate-spin" />
@@ -493,7 +493,7 @@ function VerifyEmailContent() {
               <button
                 type="button"
                 onClick={handleReturnHome}
-                className="w-full py-2 text-zinc-500 hover:text-zinc-300 text-xs font-medium transition-colors"
+                className="w-full py-2 text-zinc-500 hover:text-zinc-300 text-xs font-medium transition-colors btn-press-subtle"
               >
                 Giriş Ekranına Dön
               </button>

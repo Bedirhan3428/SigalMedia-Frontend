@@ -38,6 +38,22 @@ export default function LoginPage() {
     return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(val.trim());
   };
 
+  const isPasswordValid = (pwd: string) => {
+    const hasMinLength = pwd.length >= 8;
+    const hasLowerCase = /[a-z]/.test(pwd);
+    const hasUpperCase = /[A-Z]/.test(pwd);
+    const hasNumber = /[0-9]/.test(pwd);
+    return hasMinLength && hasLowerCase && hasUpperCase && hasNumber;
+  };
+
+  const getPasswordValidationError = (pwd: string): string | null => {
+    if (pwd.length < 8) return "Şifre en az 8 karakter olmalıdır.";
+    if (!/[a-z]/.test(pwd)) return "Şifre en az bir küçük harf içermelidir.";
+    if (!/[A-Z]/.test(pwd)) return "Şifre en az bir büyük harf içermelidir.";
+    if (!/[0-9]/.test(pwd)) return "Şifre en az bir rakam içermelidir.";
+    return null;
+  };
+
   const handleGoogleSignIn = async () => {
     try {
       setError(null);
@@ -70,9 +86,17 @@ export default function LoginPage() {
     e.preventDefault();
     setError(null);
 
-    if (password.length < 6) {
-      setError("Şifre en az 6 karakter olmalıdır.");
-      return;
+    if (view === "register-password") {
+      const pwdErr = getPasswordValidationError(password);
+      if (pwdErr) {
+        setError(pwdErr);
+        return;
+      }
+    } else {
+      if (!password) {
+        setError("Lütfen şifrenizi girin.");
+        return;
+      }
     }
 
     setLoading(true);
@@ -181,7 +205,7 @@ export default function LoginPage() {
 
   return (
     <main className="min-h-[100dvh] flex items-center justify-center p-4 sm:p-6 pt-[calc(1rem+env(safe-area-inset-top,0px))] pb-[calc(1rem+env(safe-area-inset-bottom,0px))] pl-[calc(1rem+env(safe-area-inset-left,0px))] pr-[calc(1rem+env(safe-area-inset-right,0px))] bg-black text-white">
-      <div className="w-full max-w-[420px] flex flex-col justify-between min-h-[580px] p-6 sm:p-8 bg-zinc-950/80 border border-zinc-900 rounded-3xl shadow-2xl backdrop-blur-2xl">
+      <div className="w-full max-w-[420px] flex flex-col justify-between min-h-[580px] p-6 sm:p-8 bg-zinc-950/80 border border-zinc-900 rounded-3xl shadow-2xl backdrop-blur-2xl animate-auth-scale">
         {/* ÜST BAR (Geri Butonu ve Küçük Logo) */}
         <div className="flex items-center justify-between h-10 mb-4">
           {view !== "welcome" ? (
@@ -201,7 +225,7 @@ export default function LoginPage() {
                   setView("welcome");
                 }
               }}
-              className="w-10 h-10 rounded-full bg-zinc-900/90 border border-zinc-800 flex items-center justify-center text-zinc-300 hover:text-white hover:bg-zinc-800 transition-colors"
+              className="w-10 h-10 rounded-full bg-zinc-900/90 border border-zinc-800 flex items-center justify-center text-zinc-300 hover:text-white hover:bg-zinc-800 transition-colors btn-press-subtle"
             >
               <ArrowLeft className="w-5 h-5" />
             </button>
@@ -220,7 +244,7 @@ export default function LoginPage() {
 
         {/* 1. GİRİŞ/KAYIT SEÇİM EKRANI (INPUTSUZ BAŞLANGIÇ) */}
         {view === "welcome" && (
-          <div className="flex-1 flex flex-col justify-between">
+          <div key="welcome" className="flex-1 flex flex-col justify-between animate-auth-fade">
             <div className="pt-6">
               <div className="mb-6">
                 <img
@@ -246,7 +270,7 @@ export default function LoginPage() {
                   setError(null);
                   setView("register-email");
                 }}
-                className="w-full h-14 rounded-2xl bg-white hover:bg-zinc-200 text-black font-semibold text-base transition-colors flex items-center justify-center"
+                className="w-full h-14 rounded-2xl bg-white hover:bg-zinc-200 text-black font-semibold text-base transition-colors flex items-center justify-center btn-press"
               >
                 Hesap Oluştur
               </button>
@@ -259,7 +283,7 @@ export default function LoginPage() {
                   setError(null);
                   setView("login-email");
                 }}
-                className="w-full h-14 rounded-2xl bg-zinc-900 hover:bg-zinc-800 border border-zinc-800 text-white font-semibold text-base transition-colors flex items-center justify-center"
+                className="w-full h-14 rounded-2xl bg-zinc-900 hover:bg-zinc-800 border border-zinc-800 text-white font-semibold text-base transition-colors flex items-center justify-center btn-press"
               >
                 Giriş Yap
               </button>
@@ -277,7 +301,7 @@ export default function LoginPage() {
                 type="button"
                 onClick={handleGoogleSignIn}
                 disabled={loading}
-                className="w-full h-14 rounded-2xl bg-zinc-900/90 hover:bg-zinc-800 border border-zinc-800 text-white font-medium text-sm transition-colors flex items-center justify-center gap-3 disabled:opacity-50"
+                className="w-full h-14 rounded-2xl bg-zinc-900/90 hover:bg-zinc-800 border border-zinc-800 text-white font-medium text-sm transition-colors flex items-center justify-center gap-3 disabled:opacity-50 btn-press"
               >
                 <svg className="w-5 h-5" viewBox="0 0 24 24">
                   <path
@@ -306,9 +330,10 @@ export default function LoginPage() {
         {/* 2. ADIM: E-POSTA ADIMI (GİRİŞ VEYA KAYIT) */}
         {(view === "login-email" || view === "register-email") && (
           <form
+            key={view}
             onSubmit={handleEmailContinue}
             autoComplete="off"
-            className="flex-1 flex flex-col justify-between"
+            className="flex-1 flex flex-col justify-between animate-auth-fade"
           >
             <div>
               <h1 className="text-3xl font-extrabold tracking-tight text-white mb-2">
@@ -345,7 +370,7 @@ export default function LoginPage() {
               <button
                 type="submit"
                 disabled={!isValidEmail(email)}
-                className="w-full h-14 rounded-2xl bg-white hover:bg-zinc-200 text-black font-semibold text-base transition-colors disabled:opacity-40 disabled:cursor-not-allowed flex items-center justify-center"
+                className="w-full h-14 rounded-2xl bg-white hover:bg-zinc-200 text-black font-semibold text-base transition-colors disabled:opacity-40 disabled:cursor-not-allowed flex items-center justify-center btn-press"
               >
                 Devam Et
               </button>
@@ -363,7 +388,7 @@ export default function LoginPage() {
                 type="button"
                 onClick={handleGoogleSignIn}
                 disabled={loading}
-                className="w-full h-14 rounded-2xl bg-zinc-900/90 hover:bg-zinc-800 border border-zinc-800 text-white font-medium text-sm transition-colors flex items-center justify-center gap-3 disabled:opacity-50"
+                className="w-full h-14 rounded-2xl bg-zinc-900/90 hover:bg-zinc-800 border border-zinc-800 text-white font-medium text-sm transition-colors flex items-center justify-center gap-3 disabled:opacity-50 btn-press"
               >
                 <svg className="w-5 h-5" viewBox="0 0 24 24">
                   <path
@@ -392,9 +417,10 @@ export default function LoginPage() {
         {/* 3. ADIM: ŞİFRE ADIMI (GİRİŞ VEYA KAYIT) */}
         {(view === "login-password" || view === "register-password") && (
           <form
+            key={view}
             onSubmit={handleAuthSubmit}
             autoComplete="off"
-            className="flex-1 flex flex-col justify-between"
+            className="flex-1 flex flex-col justify-between animate-auth-fade"
           >
             <div>
               <h1 className="text-3xl font-extrabold tracking-tight text-white mb-2">
@@ -404,7 +430,7 @@ export default function LoginPage() {
                 <span className="text-zinc-200 font-medium">{email}</span>{" "}
                 {view === "login-password"
                   ? "hesabınızın şifresini yazın."
-                  : "için en az 6 karakterli bir şifre seçin."}
+                  : "için en az 8 karakterli, büyük/küçük harf ve rakam içeren şifre belirleyin."}
               </p>
 
               <div className="space-y-3">
@@ -425,7 +451,7 @@ export default function LoginPage() {
                   <button
                     type="button"
                     onClick={() => setShowPassword(!showPassword)}
-                    className="absolute right-4 top-4 text-zinc-500 hover:text-zinc-300 transition-colors"
+                    className="absolute right-4 top-4 text-zinc-500 hover:text-zinc-300 transition-colors btn-press-subtle"
                   >
                     {showPassword ? <EyeOff className="w-5 h-5" /> : <Eye className="w-5 h-5" />}
                   </button>
@@ -440,8 +466,8 @@ export default function LoginPage() {
             <div className="pt-6">
               <button
                 type="submit"
-                disabled={loading || password.length < 6}
-                className="w-full h-14 rounded-2xl bg-white hover:bg-zinc-200 text-black font-semibold text-base transition-colors disabled:opacity-40 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+                disabled={loading || (view === "register-password" ? !isPasswordValid(password) : !password)}
+                className="w-full h-14 rounded-2xl bg-white hover:bg-zinc-200 text-black font-semibold text-base transition-colors disabled:opacity-40 disabled:cursor-not-allowed flex items-center justify-center gap-2 btn-press"
               >
                 {loading ? (
                   <Loader2 className="w-5 h-5 animate-spin" />
