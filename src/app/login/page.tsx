@@ -91,11 +91,21 @@ export default function LoginPage() {
         }
       } else if (view === "register-password") {
         const cred = await createUserWithEmailAndPassword(auth, email.trim(), password);
-        const actionCodeSettings = {
-          url: `${window.location.origin}/auth/action`,
-          handleCodeInApp: true,
-        };
-        await sendEmailVerification(cred.user, actionCodeSettings);
+
+        // Özel Next.js + Resend doğrulama e-postası gönder
+        try {
+          const res = await fetch("/api/auth/send-verification", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ email: email.trim() }),
+          });
+          if (!res.ok) {
+            // Yedek olarak Firebase istemci metodunu çalıştır
+            await sendEmailVerification(cred.user);
+          }
+        } catch {
+          await sendEmailVerification(cred.user);
+        }
 
         const expiresAt = Date.now() + 10 * 60 * 1000;
         localStorage.setItem(

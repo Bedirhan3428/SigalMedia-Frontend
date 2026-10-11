@@ -119,12 +119,18 @@ function VerifyEmailContent() {
       setResending(true);
       setResendSuccess(false);
 
-      const actionCodeSettings = {
-        url: `${window.location.origin}/auth/action`,
-        handleCodeInApp: true,
-      };
-
-      await sendEmailVerification(auth.currentUser, actionCodeSettings);
+      try {
+        const res = await fetch("/api/auth/send-verification", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ email: pendingEmail }),
+        });
+        if (!res.ok) {
+          await sendEmailVerification(auth.currentUser);
+        }
+      } catch {
+        await sendEmailVerification(auth.currentUser);
+      }
 
       const newExpiresAt = Date.now() + 10 * 60 * 1000;
       localStorage.setItem(
