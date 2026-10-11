@@ -28,37 +28,46 @@ function VerifyEmailContent() {
 
   // 1. Sayfa Açılışı: SessionStorage okuma ve Durum Tespiti (Asla otomatik istek atmaz)
   useEffect(() => {
-    const sessionEmail = typeof window !== "undefined" ? sessionStorage.getItem("pending_email") : null;
-    const lastSentStr = typeof window !== "undefined" ? sessionStorage.getItem("last_code_sent") : null;
-    const expiresStr = typeof window !== "undefined" ? sessionStorage.getItem("code_expires_at") : null;
+    if (typeof window === "undefined") return;
 
-    const email = sessionEmail || user?.email || "";
-    setPendingEmail(email);
+    const savedEmail =
+      sessionStorage.getItem("verify_email") ||
+      sessionStorage.getItem("pending_email") ||
+      auth.currentUser?.email ||
+      user?.email ||
+      "";
+
+    const expiresAtStr = sessionStorage.getItem("code_expires_at");
+    const lastSentStr = sessionStorage.getItem("last_code_sent");
 
     const now = Date.now();
-    const lastSent = Number(lastSentStr || 0);
-    const expiresAt = Number(expiresStr || 0);
+    const expiresAt = expiresAtStr ? parseInt(expiresAtStr, 10) : 0;
+    const lastSent = lastSentStr ? parseInt(lastSentStr, 10) : 0;
 
-    // Eğer e-posta yoksa veya 3 dakikalık süre dolmuşsa doğrudan Durum B (expired)
-    if (!email || !expiresAt || now >= expiresAt) {
-      setStatus("expired");
-      setTimeLeft(0);
-      setCooldown(0);
+    // 1. Kural: E-posta varsa VE kodun 3 dakikalık süresi henüz dolmadıysa -> KESİNLİKLE AKTİF!
+    if (savedEmail && expiresAt > now) {
+      setPendingEmail(savedEmail);
+      setStatus("active");
+
+      // Kalan cooldown süresini hesapla (ilk 60 saniye boyunca buton kilitli)
+      const elapsedSeconds = Math.floor((now - lastSent) / 1000);
+      const remainingCooldown = Math.max(0, COOLDOWN_SECONDS - elapsedSeconds);
+      setCooldown(remainingCooldown);
+
+      const remainingTime = Math.max(0, Math.floor((expiresAt - now) / 1000));
+      setTimeLeft(remainingTime);
+
+      setTimeout(() => {
+        inputRefs.current[0]?.focus();
+      }, 150);
       return;
     }
 
-    // Aktif Durum (Durum A)
-    const remainingTime = Math.max(0, Math.floor((expiresAt - now) / 1000));
-    const currentCooldown =
-      lastSent > 0 ? Math.max(0, COOLDOWN_SECONDS - Math.floor((now - lastSent) / 1000)) : 0;
-
-    setTimeLeft(remainingTime);
-    setCooldown(currentCooldown);
-    setStatus("active");
-
-    setTimeout(() => {
-      inputRefs.current[0]?.focus();
-    }, 150);
+    // 2. Kural: Kodun süresi gerçekten bitmişse veya hiç kod gönderilmemişse:
+    if (savedEmail) {
+      setPendingEmail(savedEmail);
+    }
+    setStatus("expired");
   }, [user]);
 
   // 2. Canlı Zamanlayıcı (F5 ve Otomatik Durum B Geçişi)
@@ -129,9 +138,10 @@ function VerifyEmailContent() {
       }
 
       // Başarılı doğrulama: Tüm oturum kilitlerini temizle
+      sessionStorage.removeItem("verify_email");
+      sessionStorage.removeItem("pending_email");
       sessionStorage.removeItem("last_code_sent");
       sessionStorage.removeItem("code_expires_at");
-      sessionStorage.removeItem("pending_email");
       localStorage.removeItem("pending_verification");
 
       if (user?.uid) {
@@ -184,11 +194,13 @@ function VerifyEmailContent() {
       const now = Date.now();
       const expiresAt = now + CODE_LIFETIME_SECONDS * 1000;
 
+      const cleanEmail = email.trim().toLowerCase();
+      sessionStorage.setItem("verify_email", cleanEmail);
+      sessionStorage.setItem("pending_email", cleanEmail);
       sessionStorage.setItem("last_code_sent", now.toString());
       sessionStorage.setItem("code_expires_at", expiresAt.toString());
-      sessionStorage.setItem("pending_email", email);
 
-      setPendingEmail(email);
+      setPendingEmail(cleanEmail);
       setCooldown(COOLDOWN_SECONDS);
       setTimeLeft(CODE_LIFETIME_SECONDS);
       setDigits(["", "", "", ""]);

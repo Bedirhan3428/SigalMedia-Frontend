@@ -101,12 +101,14 @@ export default function LoginPage() {
           }
 
           // Tekil tetikleme & F5 koruması için sessionStorage kilidi
+          const cleanEmail = email.trim().toLowerCase();
+          sessionStorage.setItem("verify_email", cleanEmail);
+          sessionStorage.setItem("pending_email", cleanEmail);
           sessionStorage.setItem("last_code_sent", now.toString());
           sessionStorage.setItem("code_expires_at", expires.toString());
-          sessionStorage.setItem("pending_email", email.trim());
           localStorage.setItem(
             "pending_verification",
-            JSON.stringify({ email: email.trim(), expiresAt: expires, sentAt: now })
+            JSON.stringify({ email: cleanEmail, expiresAt: expires, sentAt: now })
           );
 
           router.replace("/auth/verify-email");
@@ -129,12 +131,14 @@ export default function LoginPage() {
         }
 
         // Tekil tetikleme & F5 koruması için sessionStorage kilidi
+        const cleanEmail = email.trim().toLowerCase();
+        sessionStorage.setItem("verify_email", cleanEmail);
+        sessionStorage.setItem("pending_email", cleanEmail);
         sessionStorage.setItem("last_code_sent", now.toString());
         sessionStorage.setItem("code_expires_at", expires.toString());
-        sessionStorage.setItem("pending_email", email.trim());
         localStorage.setItem(
           "pending_verification",
-          JSON.stringify({ email: email.trim(), expiresAt: expires, sentAt: now })
+          JSON.stringify({ email: cleanEmail, expiresAt: expires, sentAt: now })
         );
 
         router.replace("/auth/verify-email");
