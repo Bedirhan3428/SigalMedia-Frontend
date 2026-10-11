@@ -9,7 +9,7 @@ import {
 } from "firebase/auth";
 import { auth } from "@/lib/firebase";
 import { useAuth } from "@/context/AuthContext";
-import { CheckCircle2, AlertCircle, Loader2, KeyRound } from "lucide-react";
+import { CheckCircle2, AlertCircle, Loader2, KeyRound, Check } from "lucide-react";
 
 function AuthActionContent() {
   const router = useRouter();
@@ -238,6 +238,37 @@ function AuthActionContent() {
                 }}
                 className="w-full h-14 px-4 bg-zinc-900 border border-zinc-800 rounded-2xl text-base text-white placeholder-zinc-500 focus:outline-none focus:border-zinc-500 transition-colors"
               />
+
+              <div className="grid grid-cols-2 gap-2 pt-2 px-1 text-left">
+                {[
+                  { label: "En az 8 karakter", valid: newPassword.length >= 8 },
+                  { label: "Büyük harf (A-Z)", valid: /[A-Z]/.test(newPassword) },
+                  { label: "Küçük harf (a-z)", valid: /[a-z]/.test(newPassword) },
+                  { label: "Rakam (0-9)", valid: /[0-9]/.test(newPassword) },
+                ].map((rule, idx) => (
+                  <div
+                    key={idx}
+                    className={`flex items-center gap-1.5 text-xs transition-colors duration-150 ${
+                      rule.valid ? "text-emerald-400 font-medium" : "text-zinc-500"
+                    }`}
+                  >
+                    <div
+                      className={`w-3.5 h-3.5 rounded-full flex items-center justify-center transition-all ${
+                        rule.valid
+                          ? "bg-emerald-500/20 text-emerald-400"
+                          : "bg-zinc-900 border border-zinc-800 text-zinc-600"
+                      }`}
+                    >
+                      {rule.valid ? (
+                        <Check className="w-2.5 h-2.5" />
+                      ) : (
+                        <div className="w-1 h-1 rounded-full bg-zinc-600" />
+                      )}
+                    </div>
+                    <span className="truncate">{rule.label}</span>
+                  </div>
+                ))}
+              </div>
 
               {errorMessage && (
                 <p className="text-xs text-rose-400 mt-2 font-medium">
