@@ -7,6 +7,7 @@ export abstract class BaseLayer {
   public visible: boolean = true;
   public locked: boolean = false;
   public selected: boolean = false;
+  public isInteracting: boolean = false; // İki parmakla dokunulduğunda aktifleşen yaylanma durumu
 
   constructor(options?: {
     id?: string;
@@ -57,72 +58,11 @@ export abstract class BaseLayer {
     );
   }
 
-  public getRotateHandleY(ctx: CanvasRenderingContext2D, _canvasWidth: number, canvasHeight: number): number {
-    const bounds = this.getBoundingBox(ctx, _canvasWidth, canvasHeight);
-    const h = bounds.height * this.transform.scale;
-    if (this.type === 'media') {
-      // Görsel ekranı kaplasa dahi döndürme pini tuval içinde rahatça görünebilir ve tıklanabilir kalsın
-      return -Math.min(h / 2 + 46, canvasHeight * 0.40);
-    }
-    return -h / 2 - 38;
-  }
-
-  public renderSelectionHighlight(ctx: CanvasRenderingContext2D, canvasWidth: number, canvasHeight: number): void {
-    if (!this.selected) return;
-
-    const center = this.getPixelPosition(canvasWidth, canvasHeight);
-    const bounds = this.getBoundingBox(ctx, canvasWidth, canvasHeight);
-    const w = bounds.width * this.transform.scale;
-    const h = bounds.height * this.transform.scale;
-
-    ctx.save();
-    ctx.translate(center.x, center.y);
-    ctx.rotate((this.transform.rotation * Math.PI) / 180);
-
-    // SigalMedia yeşil çerçevesi
-    ctx.lineWidth = 2.5;
-    ctx.strokeStyle = '#10b981';
-    ctx.setLineDash([8, 6]);
-    ctx.strokeRect(-w / 2 - 12, -h / 2 - 12, w + 24, h + 24);
-    ctx.setLineDash([]);
-
-    // Köşe tutamaçları (Dokunmatik için rahat boyut)
-    const handleRadius = 10;
-    ctx.fillStyle = '#ffffff';
-    ctx.strokeStyle = '#10b981';
-    ctx.lineWidth = 3;
-
-    const corners = [
-      [-w / 2 - 12, -h / 2 - 12],
-      [w / 2 + 12, -h / 2 - 12],
-      [-w / 2 - 12, h / 2 + 12],
-      [w / 2 + 12, h / 2 + 12]
-    ];
-
-    for (const [cx, cy] of corners) {
-      ctx.beginPath();
-      ctx.arc(cx, cy, handleRadius, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.stroke();
-    }
-
-    // Üst döndürme pini (Her zaman tuvalin içinde ve görünür)
-    const rotateHandleY = this.getRotateHandleY(ctx, canvasWidth, canvasHeight);
-    ctx.beginPath();
-    ctx.moveTo(0, this.type === 'media' ? rotateHandleY + 24 : -h / 2 - 12);
-    ctx.lineTo(0, rotateHandleY);
-    ctx.strokeStyle = '#10b981';
-    ctx.lineWidth = 2.5;
-    ctx.stroke();
-
-    ctx.beginPath();
-    ctx.arc(0, rotateHandleY, 13, 0, Math.PI * 2);
-    ctx.fillStyle = '#10b981';
-    ctx.fill();
-    ctx.strokeStyle = '#ffffff';
-    ctx.lineWidth = 3;
-    ctx.stroke();
-
-    ctx.restore();
+  /**
+   * Borderless Canvas: Nesneler etrafında çirkin dikdörtgen çizgiler veya tutamaçlar çizilmez.
+   * Geri bildirim doğrudan katmanın kendi render döngüsündeki yaylanma ve hafif parlama ile verilir.
+   */
+  public renderSelectionHighlight(_ctx: CanvasRenderingContext2D, _canvasWidth: number, _canvasHeight: number): void {
+    // Sıfır çizgi ilkesi gereği tutamaç veya çizgi çizilmez
   }
 }

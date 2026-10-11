@@ -57,7 +57,82 @@ export interface LayerTransform {
   flipV?: boolean; // Vertical flip
 }
 
+export type TransformState = LayerTransform;
+
 export type FitMode = 'contain' | 'cover' | 'fill';
+
+export interface StoryFilterPreset {
+  id: string;
+  name: string;
+  filters: Partial<MediaFilters>;
+}
+
+export const STORY_FILTER_PRESETS: StoryFilterPreset[] = [
+  {
+    id: 'normal',
+    name: 'Normal',
+    filters: {
+      brightness: 100,
+      contrast: 100,
+      saturation: 100,
+      blur: 0,
+      sepia: 0,
+      grayscale: 0,
+      hueRotate: 0,
+      invert: 0
+    }
+  },
+  {
+    id: 'oslo',
+    name: 'Oslo',
+    filters: {
+      brightness: 106,
+      contrast: 112,
+      saturation: 90,
+      hueRotate: 15,
+      sepia: 5
+    }
+  },
+  {
+    id: 'tokyo',
+    name: 'Tokyo',
+    filters: {
+      brightness: 105,
+      contrast: 118,
+      saturation: 135,
+      sepia: 12
+    }
+  },
+  {
+    id: 'vintage',
+    name: 'Vintage',
+    filters: {
+      brightness: 102,
+      contrast: 95,
+      saturation: 85,
+      sepia: 45
+    }
+  },
+  {
+    id: 'cyberpunk',
+    name: 'Cyberpunk',
+    filters: {
+      brightness: 100,
+      contrast: 130,
+      saturation: 150,
+      hueRotate: -25
+    }
+  },
+  {
+    id: 'bw',
+    name: 'B&W',
+    filters: {
+      grayscale: 100,
+      contrast: 135,
+      brightness: 105
+    }
+  }
+];
 
 export interface EngineOptions {
   canvas: HTMLCanvasElement;

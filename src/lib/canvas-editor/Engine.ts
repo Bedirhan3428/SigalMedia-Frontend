@@ -1,6 +1,7 @@
 import { BaseLayer } from './layers/BaseLayer';
 import { MediaLayer, DEFAULT_FILTERS } from './layers/MediaLayer';
 import { TextLayer } from './layers/TextLayer';
+import { OverlayImageLayer } from './layers/OverlayImageLayer';
 import { MediaSourceManager } from './MediaSource';
 import { InteractionManager } from './interaction/InteractionManager';
 import { ImageExporter, ExportImageOptions } from './exporter/ImageExporter';
@@ -10,10 +11,11 @@ import {
   MediaFilters,
   MediaType,
   TextStyle,
-  FitMode
+  FitMode,
+  STORY_FILTER_PRESETS,
 } from './types';
 
-export type EngineEvent = 'render' | 'select' | 'change' | 'double-tap' | 'single-tap';
+export type EngineEvent = 'render' | 'select' | 'change' | 'double-tap' | 'single-tap' | 'filter-swipe';
 export type EventListener = (...args: any[]) => void;
 
 export class CanvasEngine {
@@ -28,6 +30,7 @@ export class CanvasEngine {
   private interactionManager: InteractionManager;
 
   private isDirty = false;
+  private activeFilterIndex: number = 0;
   private listeners: Map<EngineEvent, Set<EventListener>> = new Map();
 
   constructor(options: EngineOptions) {
@@ -58,6 +61,10 @@ export class CanvasEngine {
       },
       onSingleTapLayer: (layer) => {
         this.emit('single-tap', layer);
+      },
+      onFilterSwipe: (direction) => {
+        const filterName = this.cycleFilter(direction);
+        this.emit('filter-swipe', direction, filterName);
       }
     });
 
@@ -187,8 +194,59 @@ export class CanvasEngine {
     this.emit('change');
   }
 
-  public getFilters(): MediaFilters {
-    return this.mediaLayer ? { ...this.mediaLayer.filters } : { ...DEFAULT_FILTERS };
+  public cycleFilter(direction: 'prev' | 'next'): string {
+    const total = STORY_FILTER_PRESETS.length;
+    if (direction === 'next') {
+      this.activeFilterIndex = (this.activeFilterIndex + 1) % total;
+    } else {
+      this.activeFilterIndex = (this.activeFilterIndex - 1 + total) % total;
+    }
+
+    const preset = STORY_FILTER_PRESETS[this.activeFilterIndex];
+    this.setFilters(preset.filters);
+    return preset.name;
+  }
+
+  public getCurrentFilterName(): string {
+    return STORY_FILTER_PRESETS[this.activeFilterIndex]?.name || 'Normal';
+  }
+
+  public getCurrentFilterIndex(): number {
+    return this.activeFilterIndex;
+  }
+
+  public setFilterByIndex(index: number): string {
+    const total = STORY_FILTER_PRESETS.length;
+    this.activeFilterIndex = ((index % total) + total) % total;
+    const preset = STORY_FILTER_PRESETS[this.activeFilterIndex];
+    this.setFilters(preset.filters);
+    return preset.name;
+  }
+
+  public async addOverlayImage(
+    source: string | Blob | File | HTMLImageElement,
+    x = 0.5,
+    y = 0.5
+  ): Promise<OverlayImageLayer> {
+    let imgElement: HTMLImageElement;
+
+    if (source instanceof HTMLImageElement) {
+      imgElement = source;
+    } else {
+      const media = await MediaSourceManager.load(source, 'image');
+      imgElement = media.element as HTMLImageElement;
+    }
+
+    const layer = new OverlayImageLayer({
+      image: imgElement,
+      transform: { x, y, scale: 1.0, rotation: 0 }
+    });
+
+    this.overlayLayers.push(layer);
+    this.interactionManager.setSelectedLayer(layer);
+    this.requestRender();
+    this.emit('change');
+    return layer;
   }
 
   public addText(text = 'Yazı Ekleyin', style?: Partial<TextStyle>, x = 0.5, y = 0.5): TextLayer {

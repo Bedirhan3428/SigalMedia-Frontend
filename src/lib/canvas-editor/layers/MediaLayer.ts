@@ -87,9 +87,10 @@ export class MediaLayer extends BaseLayer {
     ctx.translate(center.x, center.y);
     // 2. Serbest açı (döndürme)
     ctx.rotate((this.transform.rotation * Math.PI) / 180);
-    // 3. Serbest ölçekleme (büyütme / küçültme) ve ayna (flip)
-    const scaleX = this.transform.scale * (this.transform.flipH ? -1 : 1);
-    const scaleY = this.transform.scale * (this.transform.flipV ? -1 : 1);
+    // 3. Serbest ölçekleme (büyütme / küçültme), ayna (flip) ve etkileşim yaylanması
+    const interactionScale = this.isInteracting ? 1.03 : 1.0;
+    const scaleX = this.transform.scale * (this.transform.flipH ? -1 : 1) * interactionScale;
+    const scaleY = this.transform.scale * (this.transform.flipV ? -1 : 1) * interactionScale;
     ctx.scale(scaleX, scaleY);
 
     const filterStr = this.getFilterString();

@@ -207,7 +207,8 @@ export class TextLayer extends BaseLayer {
     ctx.save();
     ctx.translate(center.x, center.y);
     ctx.rotate((this.transform.rotation * Math.PI) / 180);
-    ctx.scale(this.transform.scale, this.transform.scale);
+    const interactionScale = this.isInteracting ? 1.05 : 1.0;
+    ctx.scale(this.transform.scale * interactionScale, this.transform.scale * interactionScale);
 
     // 1. Instagram Story tarzı arka plan kutusu / hapı
     if (this.style.backgroundColor && this.style.backgroundColor !== 'transparent') {
