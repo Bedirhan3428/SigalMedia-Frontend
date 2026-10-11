@@ -208,10 +208,10 @@ function VerifyEmailContent() {
 
   // 5. Giriş Ekranına Dön (Hafızayı temizler)
   const handleReturnHome = async () => {
-    sessionStorage.removeItem("last_code_sent");
-    sessionStorage.removeItem("code_expires_at");
-    sessionStorage.removeItem("pending_email");
-    localStorage.removeItem("pending_verification");
+    if (typeof window !== "undefined") {
+      localStorage.clear();
+      sessionStorage.clear();
+    }
     try {
       await firebaseSignOut(auth);
     } catch {}
