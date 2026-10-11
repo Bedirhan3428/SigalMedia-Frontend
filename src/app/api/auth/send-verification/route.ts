@@ -37,54 +37,56 @@ export async function POST(request: Request) {
     // 3. Resend üzerinden özel tasarımlı e-posta gönder
     const resendApiKey = process.env.RESEND_API_KEY;
 
-    if (resendApiKey) {
-      const resend = new Resend(resendApiKey);
-      const fromEmail = process.env.RESEND_FROM_EMAIL || "SigalMedia <onboarding@resend.dev>";
+    if (!resendApiKey) {
+      return NextResponse.json(
+        { error: "RESEND_API_KEY tanımlı değil.", fallbackToFirebase: true },
+        { status: 422 }
+      );
+    }
 
-      const sendResult = await resend.emails.send({
-        from: fromEmail,
-        to: [email.trim()],
-        subject: "SigalMedia - E-posta Adresinizi Doğrulayın",
-        html: `
-          <!DOCTYPE html>
-          <html>
-          <head>
-            <meta charset="utf-8">
-            <meta name="viewport" content="width=device-width, initial-scale=1.0">
-          </head>
-          <body style="margin: 0; padding: 20px; background-color: #000000; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; color: #ffffff;">
-            <div style="max-width: 500px; margin: 40px auto; background-color: #09090b; border: 1px solid #27272a; border-radius: 24px; padding: 40px 32px; text-align: center;">
-              
-              <div style="margin-bottom: 24px;">
-                <h1 style="color: #ffffff; font-size: 28px; font-weight: 800; margin: 0 0 8px 0; letter-spacing: -0.5px;">SigalMedia</h1>
-                <p style="color: #a1a1aa; font-size: 15px; margin: 0; line-height: 1.5;">Topluluğa katılmak için hesabınızı onaylayın.</p>
-              </div>
+    const resend = new Resend(resendApiKey);
+    const fromEmail = process.env.RESEND_FROM_EMAIL || "SigalMedia <onboarding@resend.dev>";
 
-              <div style="margin: 32px 0;">
-                <a href="${directVerifyLink}" target="_blank" style="background-color: #ffffff; color: #000000; font-weight: 700; font-size: 16px; padding: 16px 36px; border-radius: 16px; text-decoration: none; display: inline-block;">
-                  Hesabımı Doğrula
-                </a>
-              </div>
-
-              <p style="color: #71717a; font-size: 13px; line-height: 1.6; margin: 0;">
-                Bu işlemi siz yapmadıysanız bu e-postayı görmezden gelebilirsiniz.<br>
-                Doğrulama bağlantısı 10 dakika boyunca geçerlidir.
-              </p>
+    const sendResult = await resend.emails.send({
+      from: fromEmail,
+      to: [email.trim()],
+      subject: "SigalMedia - E-posta Adresinizi Doğrulayın",
+      html: `
+        <!DOCTYPE html>
+        <html>
+        <head>
+          <meta charset="utf-8">
+          <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        </head>
+        <body style="margin: 0; padding: 20px; background-color: #000000; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; color: #ffffff;">
+          <div style="max-width: 500px; margin: 40px auto; background-color: #09090b; border: 1px solid #27272a; border-radius: 24px; padding: 40px 32px; text-align: center;">
+            <div style="margin-bottom: 24px;">
+              <h1 style="color: #ffffff; font-size: 28px; font-weight: 800; margin: 0 0 8px 0; letter-spacing: -0.5px;">SigalMedia</h1>
+              <p style="color: #a1a1aa; font-size: 15px; margin: 0; line-height: 1.5;">Topluluğa katılmak için hesabınızı onaylayın.</p>
             </div>
-          </body>
-          </html>
-        `,
-      });
 
-      if (sendResult.error) {
-        console.error("Resend e-posta gönderim hatası:", sendResult.error);
-        return NextResponse.json(
-          { error: "E-posta gönderilemedi: " + sendResult.error.message },
-          { status: 500 }
-        );
-      }
-    } else {
-      console.warn("RESEND_API_KEY tanımlanmamış. Konsola link basılıyor:", directVerifyLink);
+            <div style="margin: 32px 0;">
+              <a href="${directVerifyLink}" target="_blank" style="background-color: #ffffff; color: #000000; font-weight: 700; font-size: 16px; padding: 16px 36px; border-radius: 16px; text-decoration: none; display: inline-block;">
+                Hesabımı Doğrula
+              </a>
+            </div>
+
+            <p style="color: #71717a; font-size: 13px; line-height: 1.6; margin: 0;">
+              Bu işlemi siz yapmadıysanız bu e-postayı görmezden gelebilirsiniz.<br>
+              Doğrulama bağlantısı 10 dakika boyunca geçerlidir.
+            </p>
+          </div>
+        </body>
+        </html>
+      `,
+    });
+
+    if (sendResult.error) {
+      console.error("Resend e-posta gönderim hatası:", sendResult.error);
+      return NextResponse.json(
+        { error: sendResult.error.message, fallbackToFirebase: true },
+        { status: 500 }
+      );
     }
 
     return NextResponse.json({

@@ -92,19 +92,29 @@ export default function LoginPage() {
       } else if (view === "register-password") {
         const cred = await createUserWithEmailAndPassword(auth, email.trim(), password);
 
-        // Özel Next.js + Resend doğrulama e-postası gönder
+        // 1. Önce Resend ile doğrudan SigalMedia e-postası göndermeyi dene
+        let sentViaResend = false;
         try {
           const res = await fetch("/api/auth/send-verification", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ email: email.trim() }),
           });
-          if (!res.ok) {
-            // Yedek olarak Firebase istemci metodunu çalıştır
-            await sendEmailVerification(cred.user);
+          const data = await res.json().catch(() => ({}));
+          if (res.ok && data.success) {
+            sentViaResend = true;
           }
-        } catch {
-          await sendEmailVerification(cred.user);
+        } catch (resendErr) {
+          console.warn("Resend bağlantı hatası, Firebase servisine geçiliyor:", resendErr);
+        }
+
+        // 2. Resend hata verdiyse veya anahtar yoksa Firebase varsayılanına geç
+        if (!sentViaResend) {
+          const actionCodeSettings = {
+            url: `${window.location.origin}/auth/action`,
+            handleCodeInApp: true,
+          };
+          await sendEmailVerification(cred.user, actionCodeSettings);
         }
 
         const expiresAt = Date.now() + 10 * 60 * 1000;

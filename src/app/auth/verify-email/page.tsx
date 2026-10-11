@@ -119,17 +119,29 @@ function VerifyEmailContent() {
       setResending(true);
       setResendSuccess(false);
 
+      // 1. Önce Resend ile doğrudan SigalMedia e-postası göndermeyi dene
+      let sentViaResend = false;
       try {
         const res = await fetch("/api/auth/send-verification", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ email: pendingEmail }),
         });
-        if (!res.ok) {
-          await sendEmailVerification(auth.currentUser);
+        const data = await res.json().catch(() => ({}));
+        if (res.ok && data.success) {
+          sentViaResend = true;
         }
-      } catch {
-        await sendEmailVerification(auth.currentUser);
+      } catch (resendErr) {
+        console.warn("Resend bağlantı hatası, Firebase servisine geçiliyor:", resendErr);
+      }
+
+      // 2. Resend hata verdiyse veya anahtar yoksa Firebase varsayılanına geç
+      if (!sentViaResend && auth.currentUser) {
+        const actionCodeSettings = {
+          url: `${window.location.origin}/auth/action`,
+          handleCodeInApp: true,
+        };
+        await sendEmailVerification(auth.currentUser, actionCodeSettings);
       }
 
       const newExpiresAt = Date.now() + 10 * 60 * 1000;
