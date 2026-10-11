@@ -92,7 +92,7 @@ export default function LoginPage() {
       } else if (view === "register-password") {
         const cred = await createUserWithEmailAndPassword(auth, email.trim(), password);
         const actionCodeSettings = {
-          url: `${window.location.origin}/auth/verify-email`,
+          url: `${window.location.origin}/auth/action`,
           handleCodeInApp: true,
         };
         await sendEmailVerification(cred.user, actionCodeSettings);

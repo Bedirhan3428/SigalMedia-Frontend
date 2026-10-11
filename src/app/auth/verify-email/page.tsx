@@ -120,7 +120,7 @@ function VerifyEmailContent() {
       setResendSuccess(false);
 
       const actionCodeSettings = {
-        url: `${window.location.origin}/auth/verify-email`,
+        url: `${window.location.origin}/auth/action`,
         handleCodeInApp: true,
       };
 
