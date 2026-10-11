@@ -131,6 +131,7 @@ export default function OnboardingPage() {
         birthDate: birthDate,
         age: calculatedAge,
         isVerified: false,
+        emailVerified: true,
         role: "user",
         onboardingCompleted: true,
         stats: {

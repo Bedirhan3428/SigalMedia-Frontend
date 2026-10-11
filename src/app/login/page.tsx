@@ -6,9 +6,9 @@ import {
   signInWithPopup,
   signInWithEmailAndPassword,
   createUserWithEmailAndPassword,
-  sendEmailVerification,
 } from "firebase/auth";
-import { auth, googleProvider } from "@/lib/firebase";
+import { doc, getDoc } from "firebase/firestore";
+import { auth, db, googleProvider } from "@/lib/firebase";
 import { ArrowLeft, Eye, EyeOff, Loader2 } from "lucide-react";
 
 type AuthView =
@@ -80,11 +80,34 @@ export default function LoginPage() {
     try {
       if (view === "login-password") {
         const cred = await signInWithEmailAndPassword(auth, email.trim(), password);
-        if (!cred.user.emailVerified) {
-          const expiresAt = Date.now() + 10 * 60 * 1000;
+
+        // Profil veya yerel doğrulama durumunu kontrol et
+        const userDocRef = doc(db, "users", cred.user.uid);
+        const userSnap = await getDoc(userDocRef).catch(() => null);
+        const isProfileDone = userSnap?.exists() && userSnap.data()?.onboardingCompleted;
+        const isLocallyVerified = localStorage.getItem(`email_verified_${cred.user.uid}`) === "true";
+
+        if (!cred.user.emailVerified && !isProfileDone && !isLocallyVerified) {
+          let token = "";
+          let expires = Date.now() + 10 * 60 * 1000;
+          try {
+            const res = await fetch("/api/auth/send-verification", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ email: email.trim() }),
+            });
+            const data = await res.json().catch(() => ({}));
+            if (res.ok && data.verificationToken) {
+              token = data.verificationToken;
+              expires = data.expiresAt || expires;
+            }
+          } catch (resErr) {
+            console.warn("Kod gönderim hatası:", resErr);
+          }
+
           localStorage.setItem(
             "pending_verification",
-            JSON.stringify({ email: email.trim(), expiresAt })
+            JSON.stringify({ email: email.trim(), expiresAt: expires, token })
           );
           router.push("/auth/verify-email");
           return;
@@ -92,8 +115,9 @@ export default function LoginPage() {
       } else if (view === "register-password") {
         const cred = await createUserWithEmailAndPassword(auth, email.trim(), password);
 
-        // 1. Önce Resend ile doğrudan SigalMedia e-postası göndermeyi dene
-        let sentViaResend = false;
+        // Resend ile 4 haneli doğrulama kodunu gönder
+        let token = "";
+        let expires = Date.now() + 10 * 60 * 1000;
         try {
           const res = await fetch("/api/auth/send-verification", {
             method: "POST",
@@ -101,30 +125,17 @@ export default function LoginPage() {
             body: JSON.stringify({ email: email.trim() }),
           });
           const data = await res.json().catch(() => ({}));
-          if (res.ok && data.success) {
-            sentViaResend = true;
+          if (res.ok && data.verificationToken) {
+            token = data.verificationToken;
+            expires = data.expiresAt || expires;
           }
         } catch (resendErr) {
-          console.warn("Resend bağlantı hatası, Firebase servisine geçiliyor:", resendErr);
+          console.warn("Resend doğrulama kodu hatası:", resendErr);
         }
 
-        // 2. Resend hata verdiyse veya anahtar yoksa Firebase varsayılanına geç
-        if (!sentViaResend) {
-          try {
-            const actionCodeSettings = {
-              url: `${window.location.origin}/auth/action`,
-              handleCodeInApp: true,
-            };
-            await sendEmailVerification(cred.user, actionCodeSettings);
-          } catch (fbErr) {
-            console.warn("Firebase e-posta gönderim uyarısı:", fbErr);
-          }
-        }
-
-        const expiresAt = Date.now() + 10 * 60 * 1000;
         localStorage.setItem(
           "pending_verification",
-          JSON.stringify({ email: email.trim(), expiresAt })
+          JSON.stringify({ email: email.trim(), expiresAt: expires, token })
         );
         router.push("/auth/verify-email");
         return;

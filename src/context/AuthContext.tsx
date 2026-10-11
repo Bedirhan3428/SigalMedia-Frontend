@@ -87,9 +87,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       return;
     }
 
-    // Google dışındaki hesaplarda email doğrulaması zorunlu
+    // Google hesapları, yerel doğrulanan 4 haneli kod veya profili tamamlanmış hesaplar doğrulanmış kabul edilir
     const isGoogleUser = user.providerData.some((p) => p.providerId === "google.com");
-    if (!user.emailVerified && !isGoogleUser) {
+    const isLocalVerified =
+      typeof window !== "undefined" &&
+      (localStorage.getItem(`email_verified_${user.uid}`) === "true" ||
+        (user.email && localStorage.getItem(`email_verified_${user.email}`) === "true"));
+    const isProfileVerified = Boolean(profile?.onboardingCompleted || (profile as any)?.emailVerified);
+    const isVerified = user.emailVerified || isGoogleUser || isLocalVerified || isProfileVerified;
+
+    if (!isVerified) {
       if (pathname !== "/auth/verify-email") {
         router.push("/auth/verify-email");
       }
