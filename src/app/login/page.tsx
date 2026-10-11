@@ -9,7 +9,7 @@ import {
 } from "firebase/auth";
 import { doc, getDoc } from "firebase/firestore";
 import { auth, db, googleProvider } from "@/lib/firebase";
-import { ArrowLeft, Eye, EyeOff, Loader2, Check } from "lucide-react";
+import { ArrowLeft, Eye, EyeOff, Loader2, Check, X } from "lucide-react";
 
 type AuthView =
   | "welcome"
@@ -458,7 +458,7 @@ export default function LoginPage() {
                 </div>
 
                 {view === "register-password" && (
-                  <div className="grid grid-cols-2 gap-2 pt-1 px-1">
+                  <div className="space-y-1.5 pt-1.5 px-1">
                     {[
                       { label: "En az 8 karakter", valid: password.length >= 8 },
                       { label: "Büyük harf (A-Z)", valid: /[A-Z]/.test(password) },
@@ -467,24 +467,16 @@ export default function LoginPage() {
                     ].map((rule, idx) => (
                       <div
                         key={idx}
-                        className={`flex items-center gap-1.5 text-xs transition-colors duration-150 ${
+                        className={`flex items-center gap-2 text-xs transition-colors duration-150 ${
                           rule.valid ? "text-emerald-400 font-medium" : "text-zinc-500"
                         }`}
                       >
-                        <div
-                          className={`w-3.5 h-3.5 rounded-full flex items-center justify-center transition-all ${
-                            rule.valid
-                              ? "bg-emerald-500/20 text-emerald-400"
-                              : "bg-zinc-900 border border-zinc-800 text-zinc-600"
-                          }`}
-                        >
-                          {rule.valid ? (
-                            <Check className="w-2.5 h-2.5" />
-                          ) : (
-                            <div className="w-1 h-1 rounded-full bg-zinc-600" />
-                          )}
-                        </div>
-                        <span className="truncate">{rule.label}</span>
+                        {rule.valid ? (
+                          <Check className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+                        ) : (
+                          <X className="w-3.5 h-3.5 text-zinc-500 shrink-0" />
+                        )}
+                        <span>{rule.label}</span>
                       </div>
                     ))}
                   </div>
