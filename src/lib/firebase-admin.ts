@@ -14,6 +14,17 @@ if (!getApps().length) {
         credential: cert(serviceAccount),
         projectId: "sigalmedia-social",
       });
+    } else if (process.env.FIREBASE_SERVICE_ACCOUNT_KEY) {
+      try {
+        const serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT_KEY);
+        app = initializeApp({
+          credential: cert(serviceAccount),
+          projectId: "sigalmedia-social",
+        });
+      } catch (parseErr) {
+        console.error("FIREBASE_SERVICE_ACCOUNT_KEY parse error:", parseErr);
+        app = initializeApp({ projectId: "sigalmedia-social" });
+      }
     } else if (process.env.FIREBASE_PRIVATE_KEY && process.env.FIREBASE_CLIENT_EMAIL) {
       app = initializeApp({
         credential: cert({

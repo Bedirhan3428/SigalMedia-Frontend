@@ -152,9 +152,13 @@ function VerifyEmailContent() {
       setTimeLeft(600);
       setStatus("idle");
       setResendSuccess(true);
-    } catch (err) {
+    } catch (err: any) {
       console.error("Resend error:", err);
-      setErrorMessage("Doğrulama e-postası gönderilemedi. Lütfen daha sonra tekrar deneyin.");
+      if (err?.code === "auth/too-many-requests") {
+        setErrorMessage("Çok fazla deneme yapıldı. Lütfen 1-2 dakika bekleyip tekrar deneyin.");
+      } else {
+        setErrorMessage("Doğrulama e-postası gönderilemedi. Lütfen daha sonra tekrar deneyin.");
+      }
     } finally {
       setResending(false);
     }

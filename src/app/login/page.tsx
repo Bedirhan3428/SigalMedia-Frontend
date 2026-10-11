@@ -110,11 +110,15 @@ export default function LoginPage() {
 
         // 2. Resend hata verdiyse veya anahtar yoksa Firebase varsayılanına geç
         if (!sentViaResend) {
-          const actionCodeSettings = {
-            url: `${window.location.origin}/auth/action`,
-            handleCodeInApp: true,
-          };
-          await sendEmailVerification(cred.user, actionCodeSettings);
+          try {
+            const actionCodeSettings = {
+              url: `${window.location.origin}/auth/action`,
+              handleCodeInApp: true,
+            };
+            await sendEmailVerification(cred.user, actionCodeSettings);
+          } catch (fbErr) {
+            console.warn("Firebase e-posta gönderim uyarısı:", fbErr);
+          }
         }
 
         const expiresAt = Date.now() + 10 * 60 * 1000;
