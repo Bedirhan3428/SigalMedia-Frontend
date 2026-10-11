@@ -11,6 +11,7 @@ interface PendingVerification {
   email: string;
   expiresAt: number;
   token?: string;
+  fallbackCode?: string;
 }
 
 function VerifyEmailContent() {
@@ -53,6 +54,10 @@ function VerifyEmailContent() {
     const token = parsed?.token || "";
     setVerificationToken(token);
 
+    if (parsed?.fallbackCode) {
+      setDigits(parsed.fallbackCode.split(""));
+    }
+
     let targetExpiresAt = parsed?.expiresAt;
 
     if (!targetExpiresAt || targetExpiresAt <= now) {
@@ -83,8 +88,16 @@ function VerifyEmailContent() {
             setExpiresAt(newExp);
             localStorage.setItem(
               "pending_verification",
-              JSON.stringify({ email, expiresAt: newExp, token: data.verificationToken })
+              JSON.stringify({
+                email,
+                expiresAt: newExp,
+                token: data.verificationToken,
+                fallbackCode: data.fallbackCode,
+              })
             );
+            if (data.fallbackCode) {
+              setDigits(data.fallbackCode.split(""));
+            }
           }
         })
         .catch((err) => console.error("İlk kod gönderim hatası:", err));
@@ -209,13 +222,22 @@ function VerifyEmailContent() {
 
       localStorage.setItem(
         "pending_verification",
-        JSON.stringify({ email, expiresAt: newExpiresAt, token: newToken })
+        JSON.stringify({
+          email,
+          expiresAt: newExpiresAt,
+          token: newToken,
+          fallbackCode: data.fallbackCode,
+        })
       );
 
       setExpiresAt(newExpiresAt);
       setTimeLeft(600);
       setVerificationToken(newToken);
-      setDigits(["", "", "", ""]);
+      if (data.fallbackCode) {
+        setDigits(data.fallbackCode.split(""));
+      } else {
+        setDigits(["", "", "", ""]);
+      }
       setStatus("idle");
       setResendSuccess(true);
 
