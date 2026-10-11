@@ -16,11 +16,13 @@ export async function POST(request: Request) {
       );
     }
 
+    const ip = request.headers.get("x-forwarded-for")?.split(",")[0]?.trim() || "unknown-ip";
+
     // E-posta gönderimi ve 4 haneli kod üretimi Firebase Cloud Functions üzerinden yürütülür
     const response = await fetch(CLOUD_FUNCTION_URL, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ email }),
+      body: JSON.stringify({ email, ip }),
     });
 
     const data = await response.json().catch(() => ({}));

@@ -56,6 +56,21 @@ export default function OnboardingPage() {
     }
   }, [user]);
 
+  const handleUsernameChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const rawValue = e.target.value;
+    const sanitized = rawValue
+      .toLowerCase()
+      .replace(/ğ/g, "g")
+      .replace(/ü/g, "u")
+      .replace(/ş/g, "s")
+      .replace(/ı/g, "i")
+      .replace(/ö/g, "o")
+      .replace(/ç/g, "c")
+      .replace(/[^a-z0-9_]/g, ""); // Sadece a-z, 0-9 ve alt çizgi kalır
+
+    setUsername(sanitized);
+  };
+
   // Username validation & availability debounce (300ms)
   useEffect(() => {
     if (!username) {
@@ -64,10 +79,10 @@ export default function OnboardingPage() {
       return;
     }
 
-    const regex = /^[a-zA-Z0-9_]{3,15}$/;
+    const regex = /^[a-z0-9_]{3,15}$/;
     if (!regex.test(username)) {
       setUsernameStatus("invalid");
-      setUsernameError("Kullanıcı adı 3-15 karakter ve sadece harf, rakam, alt tire içerebilir.");
+      setUsernameError("Kullanıcı adı 3-15 karakter ve sadece küçük harf, rakam, alt tire içerebilir.");
       return;
     }
 
@@ -285,8 +300,9 @@ export default function OnboardingPage() {
                     type="text"
                     autoFocus
                     autoComplete="off"
+                    maxLength={15}
                     value={username}
-                    onChange={(e) => setUsername(e.target.value.trim())}
+                    onChange={handleUsernameChange}
                     placeholder="kullanici_adi"
                     className="w-full h-14 pl-10 pr-12 bg-zinc-900 border border-zinc-800 rounded-2xl text-base text-white placeholder-zinc-500 focus:outline-none focus:border-zinc-500 transition-colors"
                   />
@@ -377,17 +393,23 @@ export default function OnboardingPage() {
                 </button>
               </div>
 
-              {/* Ad Soyad (Görünen İsim) Girişi */}
-              <div className="space-y-2">
+              {/* Görünen Ad Girişi */}
+              <div className="space-y-1.5 text-left">
+                <label className="text-sm font-medium text-zinc-300">
+                  Görünen Ad
+                </label>
                 <input
                   type="text"
-                  autoFocus
-                  autoComplete="off"
                   value={displayName}
                   onChange={(e) => setDisplayName(e.target.value)}
-                  placeholder="Adınız Soyadınız"
+                  placeholder="Örn: Bedirhan veya Takma Adın"
+                  maxLength={30}
+                  autoComplete="off"
                   className="w-full h-14 px-4 bg-zinc-900 border border-zinc-800 rounded-2xl text-base text-white placeholder-zinc-500 focus:outline-none focus:border-zinc-500 transition-colors"
                 />
+                <p className="text-xs text-zinc-500">
+                  Profilinde ve gönderilerinde bu ad gösterilir. Daha sonra değiştirebilirsin.
+                </p>
               </div>
             </div>
 

@@ -4,7 +4,9 @@ service cloud.firestore {
     // Kullanıcı adları tablosu
     match /usernames/{username} {
       allow read: if true;
-      allow create: if request.auth != null && request.resource.data.uid == request.auth.uid;
+      allow create: if request.auth != null 
+        && username.matches('^[a-z0-9_]{3,15}$')
+        && request.resource.data.uid == request.auth.uid;
       allow update, delete: if false;
     }
 
