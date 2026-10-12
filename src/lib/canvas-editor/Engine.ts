@@ -12,6 +12,8 @@ import {
   MediaType,
   TextStyle,
   FitMode,
+  FILTER_PRESETS,
+  FilterPreset,
   STORY_FILTER_PRESETS,
 } from './types';
 
@@ -195,20 +197,28 @@ export class CanvasEngine {
   }
 
   public cycleFilter(direction: 'prev' | 'next'): string {
-    const total = STORY_FILTER_PRESETS.length;
+    const total = FILTER_PRESETS.length;
     if (direction === 'next') {
       this.activeFilterIndex = (this.activeFilterIndex + 1) % total;
     } else {
       this.activeFilterIndex = (this.activeFilterIndex - 1 + total) % total;
     }
 
-    const preset = STORY_FILTER_PRESETS[this.activeFilterIndex];
-    this.setFilters(preset.filters);
+    const preset = FILTER_PRESETS[this.activeFilterIndex];
+    if (this.mediaLayer) {
+      this.mediaLayer.setPreset(preset, () => this.requestRender());
+    }
+    this.requestRender();
+    this.emit('change');
     return preset.name;
   }
 
   public getCurrentFilterName(): string {
-    return STORY_FILTER_PRESETS[this.activeFilterIndex]?.name || 'Normal';
+    return FILTER_PRESETS[this.activeFilterIndex]?.name || 'Simple';
+  }
+
+  public getCurrentFilterPreset(): FilterPreset {
+    return FILTER_PRESETS[this.activeFilterIndex] || FILTER_PRESETS[0];
   }
 
   public getCurrentFilterIndex(): number {
@@ -216,10 +226,14 @@ export class CanvasEngine {
   }
 
   public setFilterByIndex(index: number): string {
-    const total = STORY_FILTER_PRESETS.length;
+    const total = FILTER_PRESETS.length;
     this.activeFilterIndex = ((index % total) + total) % total;
-    const preset = STORY_FILTER_PRESETS[this.activeFilterIndex];
-    this.setFilters(preset.filters);
+    const preset = FILTER_PRESETS[this.activeFilterIndex];
+    if (this.mediaLayer) {
+      this.mediaLayer.setPreset(preset, () => this.requestRender());
+    }
+    this.requestRender();
+    this.emit('change');
     return preset.name;
   }
 
@@ -298,9 +312,44 @@ export class CanvasEngine {
     });
   }
 
+  /**
+   * Tuval arkasındaki dinamik radyal gradyan:
+   * - Arka plan varsayılan olarak saf siyah (#000000).
+   * - Renkli efektlerde merkeze odaklı, kenarlara doğru yumuşakça siyaha eriyen radyal gradyan (0% centerColor -> 75% #000000).
+   * - Renksiz efektlerde doğrudan saf siyah.
+   */
+  public renderAmbientBackground(ctx: CanvasRenderingContext2D, width: number, height: number): void {
+    const preset = FILTER_PRESETS[this.activeFilterIndex] || FILTER_PRESETS[0];
+
+    if (!preset.hasColor || !preset.bgCenterColor || preset.bgCenterColor === '#000000') {
+      ctx.fillStyle = '#000000';
+      ctx.fillRect(0, 0, width, height);
+      return;
+    }
+
+    const centerX = width * 0.5;
+    const centerY = height * 0.5;
+    const radius = Math.hypot(width, height) * 0.55;
+
+    const radGrad = ctx.createRadialGradient(
+      centerX, centerY, 10,
+      centerX, centerY, radius
+    );
+    radGrad.addColorStop(0, preset.bgCenterColor);
+    radGrad.addColorStop(0.75, '#000000');
+    radGrad.addColorStop(1, '#000000');
+
+    ctx.fillStyle = radGrad;
+    ctx.fillRect(0, 0, width, height);
+  }
+
   public render() {
     this.ctx.clearRect(0, 0, this.width, this.height);
 
+    // 1. Aktif filtreye özel dinamik ışık süzmesi ve atmosferik arka plan
+    this.renderAmbientBackground(this.ctx, this.width, this.height);
+
+    // 2. Katmanlar (Görsel / Metin / Çıkartmalar)
     const layers = this.getAllLayers();
     for (const layer of layers) {
       if (layer.visible) {
@@ -316,6 +365,10 @@ export class CanvasEngine {
 
   public renderClean(targetCtx: CanvasRenderingContext2D, width: number, height: number) {
     targetCtx.clearRect(0, 0, width, height);
+
+    // Dışa aktarmada da aynı büyüleyici ışık süzmesi ve arka plan atmosferi korunur
+    this.renderAmbientBackground(targetCtx, width, height);
+
     const layers = this.getAllLayers();
     for (const layer of layers) {
       if (layer.visible) {

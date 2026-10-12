@@ -29,13 +29,12 @@ export class OverlayImageLayer extends BaseLayer {
   }
 
   /**
-   * İkincil görselin varsayılan tuval taban boyutları:
-   * Tuval genişliğinin %35'i kadar başlatılır ve en-boy oranı korunur.
+   * İkincil görselin 16:9 çerçeve taban boyutları:
+   * Tuval genişliğinin %46'sı kadar genişlik ve tam 16:9 en-boy oranı.
    */
   public getBaseDimensions(canvasWidth: number): { width: number; height: number } {
-    const targetW = canvasWidth * 0.35;
-    const aspect = this.naturalHeight / (this.naturalWidth || 1);
-    const targetH = targetW * aspect;
+    const targetW = canvasWidth * 0.46;
+    const targetH = targetW * (9 / 16); // 16:9 En-Boy Oranı
 
     return {
       width: targetW,
@@ -58,31 +57,82 @@ export class OverlayImageLayer extends BaseLayer {
 
     const center = this.getPixelPosition(canvasWidth, canvasHeight);
     const dims = this.getBaseDimensions(canvasWidth);
+    const frameW = dims.width;
+    const frameH = dims.height;
+    // Çerçevenin yuvarlak köşesi
+    const cornerRadius = Math.max(12, Math.round(frameH * 0.12));
 
     ctx.save();
+
+    // 1. Filtrelerden Kesinlikle Etkilenmesin (Story efektleri bu katmana sızamaz)
+    ctx.filter = 'none';
+
     ctx.translate(center.x, center.y);
     ctx.rotate((this.transform.rotation * Math.PI) / 180);
 
-    // Etkileşim yaylanması (İki parmakla dokunulduğunda hafif spring feedback)
+    // Etkileşim yaylanması (Tek veya iki parmakla dokunulduğunda hafif spring feedback)
     const interactionScale = this.isInteracting ? 1.04 : 1.0;
     const scaleX = this.transform.scale * (this.transform.flipH ? -1 : 1) * interactionScale;
     const scaleY = this.transform.scale * (this.transform.flipV ? -1 : 1) * interactionScale;
     ctx.scale(scaleX, scaleY);
 
-    if (this.isInteracting) {
-      ctx.shadowColor = 'rgba(0, 0, 0, 0.45)';
-      ctx.shadowBlur = 18;
-      ctx.shadowOffsetX = 0;
-      ctx.shadowOffsetY = 6;
-    }
+    // 2. 16:9 Çerçevenin Yuvarlatılmış Patikası (Rounded Rect Path)
+    const createFramePath = () => {
+      ctx.beginPath();
+      if (typeof ctx.roundRect === 'function') {
+        ctx.roundRect(-frameW / 2, -frameH / 2, frameW, frameH, cornerRadius);
+      } else {
+        const x = -frameW / 2, y = -frameH / 2, w = frameW, h = frameH, r = cornerRadius;
+        ctx.moveTo(x + r, y);
+        ctx.arcTo(x + w, y, x + w, y + h, r);
+        ctx.arcTo(x + w, y + h, x, y + h, r);
+        ctx.arcTo(x, y + h, x, y, r);
+        ctx.arcTo(x, y, x + w, y, r);
+        ctx.closePath();
+      }
+    };
+
+    // 3. Çerçeve Dış Gölgesi (Hafif sinematik yükselti)
+    ctx.shadowColor = 'rgba(0, 0, 0, 0.45)';
+    ctx.shadowBlur = this.isInteracting ? 22 : 14;
+    ctx.shadowOffsetX = 0;
+    ctx.shadowOffsetY = this.isInteracting ? 8 : 4;
+
+    // 4. Çerçeve Tabanı: Tam Siyah (#000000 - Sığmayan kısımlar siyah kalır)
+    createFramePath();
+    ctx.fillStyle = '#000000';
+    ctx.fill();
+
+    // 5. Çerçevenin İçine Kırp (Clip to rounded frame - Köşeler çerçevenin köşeleridir)
+    ctx.save();
+    ctx.shadowColor = 'transparent';
+    ctx.shadowBlur = 0;
+    createFramePath();
+    ctx.clip();
+
+    // 6. Görseli 16:9 Çerçeve İçine Orantılı Sığdır (object-fit: contain)
+    const imgScale = Math.min(frameW / (this.naturalWidth || 1), frameH / (this.naturalHeight || 1));
+    const drawW = (this.naturalWidth || 1) * imgScale;
+    const drawH = (this.naturalHeight || 1) * imgScale;
 
     ctx.drawImage(
       this.image,
-      -dims.width / 2,
-      -dims.height / 2,
-      dims.width,
-      dims.height
+      -drawW / 2,
+      -drawH / 2,
+      drawW,
+      drawH
     );
+    ctx.restore(); // Kırpmayı sıfırla
+
+    // 7. Çerçevenin Zarif İnce Kenarlık Çizgisi
+    ctx.save();
+    ctx.shadowColor = 'transparent';
+    ctx.shadowBlur = 0;
+    createFramePath();
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.18)';
+    ctx.lineWidth = 1.5;
+    ctx.stroke();
+    ctx.restore();
 
     ctx.restore();
   }

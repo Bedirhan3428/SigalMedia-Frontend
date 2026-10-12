@@ -2,27 +2,27 @@ import { BaseLayer } from './BaseLayer';
 import { Rect, TextStyle } from '../types';
 
 export type FontPreset = 'modern' | 'neon' | 'typewriter' | 'classic' | 'heavy';
-export type TextBgPreset = 'dark' | 'white' | 'color' | 'none';
+export type TextBgPreset = 'dark' | 'white' | 'none';
 
 export const FONT_PRESET_CONFIGS: Record<FontPreset, {
   name: string;
   fontFamily: string;
-  fontWeight: 'normal' | 'bold' | '600' | '800';
+  fontWeight: 'normal' | 'bold' | '600' | '700' | '800';
   fontStyle: 'normal' | 'italic';
   shadowColor?: string;
   shadowBlur?: number;
 }> = {
   modern: {
     name: 'Modern',
-    fontFamily: 'Inter, system-ui, -apple-system, sans-serif',
-    fontWeight: 'bold',
+    fontFamily: "'Plus Jakarta Sans', 'Google Sans', 'Inter', -apple-system, BlinkMacSystemFont, sans-serif",
+    fontWeight: '800',
     fontStyle: 'normal',
-    shadowColor: 'rgba(0, 0, 0, 0.6)',
-    shadowBlur: 8,
+    shadowColor: 'transparent',
+    shadowBlur: 0,
   },
   neon: {
     name: 'Neon',
-    fontFamily: 'system-ui, -apple-system, sans-serif',
+    fontFamily: "'Plus Jakarta Sans', 'Google Sans', -apple-system, sans-serif",
     fontWeight: '800',
     fontStyle: 'normal',
     shadowColor: '#10b981',
@@ -30,45 +30,45 @@ export const FONT_PRESET_CONFIGS: Record<FontPreset, {
   },
   typewriter: {
     name: 'Daktilo',
-    fontFamily: '"Courier New", Courier, monospace',
-    fontWeight: 'bold',
+    fontFamily: "'Space Mono', 'SF Mono', 'Roboto Mono', 'Courier New', monospace",
+    fontWeight: '700',
     fontStyle: 'normal',
     shadowColor: 'transparent',
     shadowBlur: 0,
   },
   classic: {
-    name: 'Klasik',
-    fontFamily: 'Georgia, Cambria, serif',
-    fontWeight: 'bold',
+    name: 'Zarif',
+    fontFamily: "'Playfair Display', 'Didot', 'Cinzel', Georgia, serif",
+    fontWeight: '700',
     fontStyle: 'italic',
-    shadowColor: 'rgba(0, 0, 0, 0.5)',
-    shadowBlur: 6,
+    shadowColor: 'transparent',
+    shadowBlur: 0,
   },
   heavy: {
-    name: 'Kalın',
-    fontFamily: '"Arial Black", Impact, sans-serif',
+    name: 'Manşet',
+    fontFamily: "'Space Grotesk', 'Impact', -apple-system, sans-serif",
     fontWeight: '800',
     fontStyle: 'normal',
-    shadowColor: 'rgba(0, 0, 0, 0.8)',
-    shadowBlur: 10,
+    shadowColor: 'transparent',
+    shadowBlur: 0,
   },
 };
 
 export const DEFAULT_TEXT_STYLE: TextStyle = {
   text: 'Yazı Ekleyin',
   fontSize: 48,
-  fontFamily: 'Inter, system-ui, -apple-system, sans-serif',
+  fontFamily: "'Plus Jakarta Sans', 'Google Sans', 'Inter', -apple-system, BlinkMacSystemFont, sans-serif",
   color: '#ffffff',
-  fontWeight: 'bold',
+  fontWeight: '800',
   fontStyle: 'normal',
   textAlign: 'center',
-  backgroundColor: 'rgba(0, 0, 0, 0.7)',
-  backgroundPadding: 18,
-  borderRadius: 16,
+  backgroundColor: '#000000', // Tam Siyah
+  backgroundPadding: 16,
+  borderRadius: 9999, // Şık hap tasarım
   strokeColor: 'transparent',
   strokeWidth: 0,
-  shadowColor: 'rgba(0, 0, 0, 0.6)',
-  shadowBlur: 8,
+  shadowColor: 'transparent',
+  shadowBlur: 0,
 };
 
 export class TextLayer extends BaseLayer {
@@ -129,7 +129,7 @@ export class TextLayer extends BaseLayer {
   }
 
   public cycleFontPreset(): FontPreset {
-    const list: FontPreset[] = ['modern', 'neon', 'typewriter', 'classic', 'heavy'];
+    const list: FontPreset[] = ['modern', 'heavy', 'classic', 'typewriter', 'neon'];
     const idx = list.indexOf(this.fontPreset);
     const next = list[(idx + 1) % list.length];
     this.setFontPreset(next);
@@ -140,14 +140,15 @@ export class TextLayer extends BaseLayer {
     this.bgPreset = preset;
     if (preset === 'none') {
       this.style.backgroundColor = 'transparent';
-    } else if (preset === 'dark') {
-      this.style.backgroundColor = 'rgba(0, 0, 0, 0.72)';
-    } else if (preset === 'white') {
-      this.style.backgroundColor = 'rgba(255, 255, 255, 0.95)';
-      if (this.style.color === '#ffffff') this.style.color = '#09090b';
-    } else if (preset === 'color') {
-      this.style.backgroundColor = this.style.color || '#10b981';
       this.style.color = '#ffffff';
+    } else if (preset === 'dark') {
+      // Tam Siyah (#000000 zemin, saf beyaz yazı)
+      this.style.backgroundColor = '#000000';
+      this.style.color = '#ffffff';
+    } else if (preset === 'white') {
+      // Tam Beyaz (#ffffff zemin, saf siyah yazı)
+      this.style.backgroundColor = '#ffffff';
+      this.style.color = '#000000';
     }
   }
 
@@ -205,15 +206,19 @@ export class TextLayer extends BaseLayer {
       : 8;
 
     ctx.save();
+    // 0. Story filtrelerinden kesinlikle etkilenmesin (Text her zaman net ve berrak)
+    ctx.filter = 'none';
+
     ctx.translate(center.x, center.y);
     ctx.rotate((this.transform.rotation * Math.PI) / 180);
     const interactionScale = this.isInteracting ? 1.05 : 1.0;
     ctx.scale(this.transform.scale * interactionScale, this.transform.scale * interactionScale);
 
-    // 1. Instagram Story tarzı arka plan kutusu / hapı
+    // 1. Instagram Story tarzı arka plan kutusu / hapı (Tam Siyah veya Tam Beyaz)
     if (this.style.backgroundColor && this.style.backgroundColor !== 'transparent') {
       ctx.fillStyle = this.style.backgroundColor;
-      const radius = this.style.borderRadius ?? 16;
+      const maxRadius = Math.min(bounds.width / 2, bounds.height / 2);
+      const radius = Math.min(maxRadius, this.style.borderRadius ?? 20);
 
       ctx.beginPath();
       if (typeof ctx.roundRect === 'function') {

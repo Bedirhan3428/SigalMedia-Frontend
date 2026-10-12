@@ -149,6 +149,17 @@ export class InteractionManager {
       this.isMoved = false;
       this.isSwipeTriggered = false;
       this.candidateLayer = this.findHitLayer(pt);
+
+      // Tek elle etiket/resim taşıma (Single-finger sticker drag):
+      // Dokunulan nesne taban medya değilse doğrudan tek elle taşıma moduna al
+      if (this.candidateLayer && this.candidateLayer.type !== 'media' && !this.candidateLayer.locked) {
+        this.transformingLayer = this.candidateLayer;
+        this.setSelectedLayer(this.candidateLayer);
+        this.candidateLayer.isInteracting = true;
+        this.startLayerTransform = { ...this.candidateLayer.transform };
+        this.startCenter = { x: pt.x, y: pt.y };
+        this.onStateChange();
+      }
       return;
     }
 
@@ -162,10 +173,10 @@ export class InteractionManager {
       const p1 = pts[0];
       const p2 = pts[1];
 
-      // Dokunulan nesneyi bul (p1 veya p2 altında olan)
+      // Dokunulan nesneyi bul (zaten tutulan veya p1/p2 altında olan)
       const hit1 = this.findHitLayer(p1);
       const hit2 = this.findHitLayer(p2);
-      const target = hit1 || hit2 || this.selectedLayer || this.getLayers().find((l) => l.type === 'media' && l.visible && !l.locked) || null;
+      const target = this.transformingLayer || hit1 || hit2 || this.selectedLayer || this.getLayers().find((l) => l.type === 'media' && l.visible && !l.locked) || null;
 
       if (target && !target.locked) {
         this.transformingLayer = target;
@@ -236,19 +247,30 @@ export class InteractionManager {
     }
 
     // ─────────────────────────────────────────────────────────────
-    // 2. TEK PARMAK MODU: HİÇBİR NESNEYİ HAREKET ETTİRMEZ!
-    //    SADECE YATAY SWIPE (FİLTRE DEĞİŞİMİ) DİNLER
+    // 2. TEK PARMAK MODU:
+    // A) Eğer bir etiket/görsel (Overlay/Text) tutulduysa: TEK ELLE SERBEST TAŞIMA (Single-Finger Drag)
+    // B) Eğer boş tuvalde sürükleniyorsa: YATAY SWIPE (FİLTRE DEĞİŞİMİ)
     // ─────────────────────────────────────────────────────────────
     if (this.activePointers.size === 1) {
       const deltaX = e.clientX - this.touchStartX;
       const deltaY = e.clientY - this.touchStartY;
 
-      if (Math.hypot(deltaX, deltaY) > 10) {
+      if (Math.hypot(deltaX, deltaY) > 8) {
         this.isMoved = true;
         this.cancelTapTimer();
       }
 
-      // Yatay Swipe Eşiği: 42px ve düşey hareketten belirgin biçimde fazla olmalı
+      // A. Tek elle etiket / çıkartma / metin taşıma
+      if (this.transformingLayer && this.transformingLayer.type !== 'media' && !this.transformingLayer.locked) {
+        const dx = (pt.x - this.startCenter.x) / this.canvas.width;
+        const dy = (pt.y - this.startCenter.y) / this.canvas.height;
+        this.transformingLayer.transform.x = Math.max(-1.5, Math.min(2.5, this.startLayerTransform.x + dx));
+        this.transformingLayer.transform.y = Math.max(-1.5, Math.min(2.5, this.startLayerTransform.y + dy));
+        this.onStateChange();
+        return;
+      }
+
+      // B. Boş Tuvalde Yatay Swipe Eşiği: 42px ve düşey hareketten belirgin biçimde fazla olmalı
       const SWIPE_THRESHOLD = 42;
       if (!this.isSwipeTriggered && Math.abs(deltaX) > SWIPE_THRESHOLD && Math.abs(deltaX) > Math.abs(deltaY) * 1.25) {
         this.isSwipeTriggered = true;
@@ -267,8 +289,15 @@ export class InteractionManager {
       // sessiz geç
     }
 
-    // İki parmak bittiğinde yaylanma efektini kaldır
-    if (this.activePointers.size < 2 && this.transformingLayer) {
+    // İki parmaktan tek parmağa düşüldüyse tek parmak taşımasını sürdür
+    if (this.activePointers.size === 1 && this.transformingLayer && this.transformingLayer.type !== 'media') {
+      const remainingPt = Array.from(this.activePointers.values())[0].pt;
+      this.startCenter = { x: remainingPt.x, y: remainingPt.y };
+      this.startLayerTransform = { ...this.transformingLayer.transform };
+    }
+
+    // Dokunuş tamamen bittiğinde etkileşimi kaldır
+    if (this.activePointers.size === 0 && this.transformingLayer) {
       this.transformingLayer.isInteracting = false;
       this.transformingLayer = null;
       this.onStateChange();
