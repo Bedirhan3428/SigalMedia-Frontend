@@ -10,6 +10,10 @@ export class InteractionManager {
   private onDoubleTapLayer?: (layer: BaseLayer) => void;
   private onSingleTapLayer?: (layer: BaseLayer) => void;
   private onFilterSwipe?: (direction: 'prev' | 'next') => void;
+  private onBringToFront?: (layer: BaseLayer) => void;
+  private onSnapGuide?: (snap: { x: boolean; y: boolean }) => void;
+  private onDragMove?: (info: { layer: BaseLayer; clientX: number; clientY: number; isDragging: boolean }) => void;
+  private onDragEnd?: (info: { layer: BaseLayer; clientX: number; clientY: number }) => void;
 
   private selectedLayer: BaseLayer | null = null;
   private transformingLayer: BaseLayer | null = null;
@@ -30,7 +34,10 @@ export class InteractionManager {
   private startAngle: number = 0;
   private startLayerTransform = { x: 0.5, y: 0.5, scale: 1.0, rotation: 0 };
 
-  // TapCoordinator (250ms Diferansiyeli)
+  // Yüksek Hassasiyetli ve Sıfır Gecikmeli Tap Koordinatörü
+  private lastTapTime: number = 0;
+  private lastTapLayer: BaseLayer | null = null;
+  private prevFontBeforeTap: string | null = null;
   private pendingTapTimer: ReturnType<typeof setTimeout> | null = null;
   private pendingTapLayer: BaseLayer | null = null;
 
@@ -43,6 +50,10 @@ export class InteractionManager {
     onDoubleTapLayer?: (layer: BaseLayer) => void;
     onSingleTapLayer?: (layer: BaseLayer) => void;
     onFilterSwipe?: (direction: 'prev' | 'next') => void;
+    onBringToFront?: (layer: BaseLayer) => void;
+    onSnapGuide?: (snap: { x: boolean; y: boolean }) => void;
+    onDragMove?: (info: { layer: BaseLayer; clientX: number; clientY: number; isDragging: boolean }) => void;
+    onDragEnd?: (info: { layer: BaseLayer; clientX: number; clientY: number }) => void;
   }) {
     this.canvas = options.canvas;
     this.getLayers = options.getLayers;
@@ -52,6 +63,10 @@ export class InteractionManager {
     this.onDoubleTapLayer = options.onDoubleTapLayer;
     this.onSingleTapLayer = options.onSingleTapLayer;
     this.onFilterSwipe = options.onFilterSwipe;
+    this.onBringToFront = options.onBringToFront;
+    this.onSnapGuide = options.onSnapGuide;
+    this.onDragMove = options.onDragMove;
+    this.onDragEnd = options.onDragEnd;
 
     // Dokunmatik varsayılan kaydırmaları engelle
     this.canvas.style.touchAction = 'none';
@@ -91,7 +106,7 @@ export class InteractionManager {
     const layers = [...this.getLayers()].reverse();
     const ctx = this.getContext();
 
-    // 1. Önce üst katmanlar (Metin, çıkartma, görsel üzeri görsel)
+    // 1. Önce üst katmanlar (Metin, çıkartma, ikincil görsel, müzik rozeti)
     for (const layer of layers) {
       if (layer.type !== 'media' && layer.visible && !layer.locked && layer.containsPoint(pt, ctx, this.canvas.width, this.canvas.height)) {
         return layer;
@@ -108,6 +123,9 @@ export class InteractionManager {
   }
 
   private cancelTapTimer() {
+    this.lastTapTime = 0;
+    this.lastTapLayer = null;
+    this.prevFontBeforeTap = null;
     if (this.pendingTapTimer) {
       clearTimeout(this.pendingTapTimer);
       this.pendingTapTimer = null;
@@ -150,12 +168,13 @@ export class InteractionManager {
       this.isSwipeTriggered = false;
       this.candidateLayer = this.findHitLayer(pt);
 
-      // Tek elle etiket/resim taşıma (Single-finger sticker drag):
-      // Dokunulan nesne taban medya değilse doğrudan tek elle taşıma moduna al
+      // Tek elle etiket/resim taşıma (Single-finger drag):
       if (this.candidateLayer && this.candidateLayer.type !== 'media' && !this.candidateLayer.locked) {
         this.transformingLayer = this.candidateLayer;
         this.setSelectedLayer(this.candidateLayer);
         this.candidateLayer.isInteracting = true;
+        // Otomatik Öne Getirme (Auto Z-Index)
+        this.onBringToFront?.(this.candidateLayer);
         this.startLayerTransform = { ...this.candidateLayer.transform };
         this.startCenter = { x: pt.x, y: pt.y };
         this.onStateChange();
@@ -173,15 +192,21 @@ export class InteractionManager {
       const p1 = pts[0];
       const p2 = pts[1];
 
-      // Dokunulan nesneyi bul (zaten tutulan veya p1/p2 altında olan)
+      // Dokunulan nesneyi bul (öncelikle üst katmanlar, yoksa taban fotoğraf)
       const hit1 = this.findHitLayer(p1);
       const hit2 = this.findHitLayer(p2);
-      const target = this.transformingLayer || hit1 || hit2 || this.selectedLayer || this.getLayers().find((l) => l.type === 'media' && l.visible && !l.locked) || null;
+      const overlayHit = (hit1 && hit1.type !== 'media') ? hit1 : ((hit2 && hit2.type !== 'media') ? hit2 : null);
+      const target = overlayHit || this.transformingLayer || hit1 || hit2 || this.selectedLayer || this.getLayers().find((l) => l.type === 'media' && l.visible && !l.locked) || null;
 
       if (target && !target.locked) {
         this.transformingLayer = target;
         this.setSelectedLayer(target);
-        target.isInteracting = true; // Hafif yaylanma ve gölge geri bildirimi
+        target.isInteracting = true;
+
+        if (target.type !== 'media') {
+          // Otomatik Öne Getirme (Auto Z-Index)
+          this.onBringToFront?.(target);
+        }
 
         this.startCenter = {
           x: (p1.x + p2.x) / 2,
@@ -217,8 +242,26 @@ export class InteractionManager {
       };
       const dx = (currentCenter.x - this.startCenter.x) / this.canvas.width;
       const dy = (currentCenter.y - this.startCenter.y) / this.canvas.height;
-      this.transformingLayer.transform.x = Math.max(-2.5, Math.min(3.5, this.startLayerTransform.x + dx));
-      this.transformingLayer.transform.y = Math.max(-2.5, Math.min(3.5, this.startLayerTransform.y + dy));
+      let newX = Math.max(-2.5, Math.min(3.5, this.startLayerTransform.x + dx));
+      let newY = Math.max(-2.5, Math.min(3.5, this.startLayerTransform.y + dy));
+
+      // MERKEZ MIKNATISI: Ekranın tam ortasına geldiğinde (x=0.5 veya y=0.5) tutunur
+      let snapX = false;
+      let snapY = false;
+      if (Math.abs(newX - 0.5) < 0.015) {
+        newX = 0.5;
+        snapX = true;
+      }
+      if (Math.abs(newY - 0.5) < 0.015) {
+        newY = 0.5;
+        snapY = true;
+      }
+      if (snapX || snapY) {
+        this.onSnapGuide?.({ x: snapX, y: snapY });
+      }
+
+      this.transformingLayer.transform.x = newX;
+      this.transformingLayer.transform.y = newY;
 
       // B. Ölçekleme (Pinch / Scale)
       const currentDist = Math.hypot(p2.x - p1.x, p2.y - p1.y);
@@ -228,19 +271,32 @@ export class InteractionManager {
         this.transformingLayer.transform.scale = Math.round(newScale * 100) / 100;
       }
 
-      // C. Döndürme (Rotate)
+      // C. Döndürme (Rotate) + AÇI MIKNATISI: 0, 90, 180, 270 +-3 derece kilitlenme
       const currentAngle = Math.atan2(p2.y - p1.y, p2.x - p1.x) * (180 / Math.PI);
       const angleDelta = currentAngle - this.startAngle;
       let newRot = (this.startLayerTransform.rotation + angleDelta) % 360;
       if (newRot < 0) newRot += 360;
 
-      // 0, 90, 180, 270 dereceye hafif mıknatıslanma (snap)
-      if (Math.abs(newRot - 0) < 3 || Math.abs(newRot - 360) < 3) newRot = 0;
-      else if (Math.abs(newRot - 90) < 3) newRot = 90;
-      else if (Math.abs(newRot - 180) < 3) newRot = 180;
-      else if (Math.abs(newRot - 270) < 3) newRot = 270;
+      if (Math.abs(newRot - 0) <= 3 || Math.abs(newRot - 360) <= 3) newRot = 0;
+      else if (Math.abs(newRot - 90) <= 3) newRot = 90;
+      else if (Math.abs(newRot - 180) <= 3) newRot = 180;
+      else if (Math.abs(newRot - 270) <= 3) newRot = 270;
 
       this.transformingLayer.transform.rotation = Math.round(newRot);
+
+      // Mıknatıslı Çöp Kutusu Takibi
+      if (this.transformingLayer.type !== 'media') {
+        const clientCenter = {
+          x: (e.clientX + this.touchStartX) / 2,
+          y: (e.clientY + this.touchStartY) / 2,
+        };
+        this.onDragMove?.({
+          layer: this.transformingLayer,
+          clientX: clientCenter.x,
+          clientY: clientCenter.y,
+          isDragging: true
+        });
+      }
 
       this.onStateChange();
       return;
@@ -248,24 +304,59 @@ export class InteractionManager {
 
     // ─────────────────────────────────────────────────────────────
     // 2. TEK PARMAK MODU:
-    // A) Eğer bir etiket/görsel (Overlay/Text) tutulduysa: TEK ELLE SERBEST TAŞIMA (Single-Finger Drag)
-    // B) Eğer boş tuvalde sürükleniyorsa: YATAY SWIPE (FİLTRE DEĞİŞİMİ)
+    // A) Üst nesne tutulduysa: Tek elle serbest taşıma + Merkez Mıknatısı + Çöp Takibi
+    // B) Boş tuvalde sürükleniyorsa: Yatay Swipe (Filtre Değişimi)
     // ─────────────────────────────────────────────────────────────
     if (this.activePointers.size === 1) {
       const deltaX = e.clientX - this.touchStartX;
       const deltaY = e.clientY - this.touchStartY;
+      const deltaDist = Math.hypot(deltaX, deltaY);
 
-      if (Math.hypot(deltaX, deltaY) > 8) {
-        this.isMoved = true;
-        this.cancelTapTimer();
+      // Taşıma/Sürükleme Eşiği (8px): 8px'den fazla hareket kesinlikle sürüklemedir, tıklama değildir
+      const DRAG_THRESHOLD = 8;
+      if (!this.isMoved) {
+        if (deltaDist > DRAG_THRESHOLD) {
+          this.isMoved = true;
+          this.cancelTapTimer();
+        } else {
+          // 8px aşılmadığı sürece nesneyi kımıldatma, anlık tıklama hassasiyetini koru
+          return;
+        }
       }
 
       // A. Tek elle etiket / çıkartma / metin taşıma
       if (this.transformingLayer && this.transformingLayer.type !== 'media' && !this.transformingLayer.locked) {
         const dx = (pt.x - this.startCenter.x) / this.canvas.width;
         const dy = (pt.y - this.startCenter.y) / this.canvas.height;
-        this.transformingLayer.transform.x = Math.max(-1.5, Math.min(2.5, this.startLayerTransform.x + dx));
-        this.transformingLayer.transform.y = Math.max(-1.5, Math.min(2.5, this.startLayerTransform.y + dy));
+        let newX = Math.max(-1.5, Math.min(2.5, this.startLayerTransform.x + dx));
+        let newY = Math.max(-1.5, Math.min(2.5, this.startLayerTransform.y + dy));
+
+        // Merkez Mıknatısı
+        let snapX = false;
+        let snapY = false;
+        if (Math.abs(newX - 0.5) < 0.015) {
+          newX = 0.5;
+          snapX = true;
+        }
+        if (Math.abs(newY - 0.5) < 0.015) {
+          newY = 0.5;
+          snapY = true;
+        }
+        if (snapX || snapY) {
+          this.onSnapGuide?.({ x: snapX, y: snapY });
+        }
+
+        this.transformingLayer.transform.x = newX;
+        this.transformingLayer.transform.y = newY;
+
+        // Mıknatıslı çöp kutusu konumu bildirimi
+        this.onDragMove?.({
+          layer: this.transformingLayer,
+          clientX: e.clientX,
+          clientY: e.clientY,
+          isDragging: true
+        });
+
         this.onStateChange();
         return;
       }
@@ -289,6 +380,15 @@ export class InteractionManager {
       // sessiz geç
     }
 
+    // Sürükleme bittiğinde çöp kutusu bırakma kontrolü
+    if (this.transformingLayer && this.transformingLayer.type !== 'media') {
+      this.onDragEnd?.({
+        layer: this.transformingLayer,
+        clientX: e.clientX,
+        clientY: e.clientY
+      });
+    }
+
     // İki parmaktan tek parmağa düşüldüyse tek parmak taşımasını sürdür
     if (this.activePointers.size === 1 && this.transformingLayer && this.transformingLayer.type !== 'media') {
       const remainingPt = Array.from(this.activePointers.values())[0].pt;
@@ -304,35 +404,64 @@ export class InteractionManager {
     }
 
     // ─────────────────────────────────────────────────────────────
-    // TAP COORDINATOR (250ms Diferansiyeli)
+    // GÜVENLİ VE HASSAS ÇİFT TIKLAMA / TEK TIKLAMA YÖNETİMİ
+    // Çift tık yapıldığında yazı tipi ASLA DEĞİŞMEZ!
     // ─────────────────────────────────────────────────────────────
     if (this.activePointers.size === 0 && !this.isMoved && !this.isSwipeTriggered) {
       const target = this.candidateLayer;
+      const now = performance.now();
+      const DOUBLE_TAP_WINDOW = 320; // 320ms çift tıklama algılama penceresi
+      const isDoubleTap = (now - this.lastTapTime < DOUBLE_TAP_WINDOW) && (this.lastTapLayer === target);
 
-      if (this.pendingTapTimer) {
-        // İKİNCİ DOKUNUŞ 250ms İÇİNDE GELDİ ➔ ÇİFT TIK EYLEMİ
-        this.cancelTapTimer();
+      if (isDoubleTap) {
+        // ÇİFT DOKUNMA GERÇEKLEŞTİ:
+        // Bekleyen tek tık zamanlayıcısını anında iptal et (böylece font asla değişmez!)
+        if (this.pendingTapTimer) {
+          clearTimeout(this.pendingTapTimer);
+          this.pendingTapTimer = null;
+          this.pendingTapLayer = null;
+        }
+        this.lastTapTime = 0;
+        this.lastTapLayer = null;
 
         if (target) {
           this.setSelectedLayer(target);
           this.onDoubleTapLayer?.(target);
+        } else {
+          // Tuvalde boş alana çift dokunulursa yeni metin ekleme açılır
+          this.onDoubleTapLayer?.(undefined as unknown as BaseLayer);
         }
       } else {
-        // İLK DOKUNUŞ ➔ 250ms ZAMANLAYICIYI BAŞLAT
-        this.pendingTapLayer = target;
-        this.pendingTapTimer = setTimeout(() => {
-          const finalTarget = this.pendingTapLayer;
-          this.pendingTapTimer = null;
-          this.pendingTapLayer = null;
+        // İLK DOKUNMA:
+        this.lastTapTime = now;
+        this.lastTapLayer = target;
 
-          // 250ms DOLDU VE 2. TIK GELMEDİ ➔ TEK TIK EYLEMİ
-          if (finalTarget) {
-            this.setSelectedLayer(finalTarget);
-            this.onSingleTapLayer?.(finalTarget);
-          } else {
-            this.setSelectedLayer(null);
-          }
-        }, 250);
+        // Katmanı anında seçili yap (gecikmesiz seçim)
+        if (target) {
+          this.setSelectedLayer(target);
+        } else {
+          this.setSelectedLayer(null);
+        }
+
+        // Önceki bekleyen zamanlayıcı varsa temizle
+        if (this.pendingTapTimer) {
+          clearTimeout(this.pendingTapTimer);
+          this.pendingTapTimer = null;
+        }
+
+        // Tek tık eylemini (font/şekil döngüsü) çift tık penceresi (240ms) kadar beklet.
+        // Eğer kullanıcı çift tıklarsa bu zamanlayıcı anında iptal edilir ve font KESİNLİKLE değişmez!
+        if (target) {
+          this.pendingTapLayer = target;
+          this.pendingTapTimer = setTimeout(() => {
+            const l = this.pendingTapLayer;
+            this.pendingTapTimer = null;
+            this.pendingTapLayer = null;
+            if (l) {
+              this.onSingleTapLayer?.(l);
+            }
+          }, 240);
+        }
       }
     }
 

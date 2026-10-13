@@ -1,7 +1,8 @@
 import { BaseLayer } from './layers/BaseLayer';
-import { MediaLayer, DEFAULT_FILTERS } from './layers/MediaLayer';
+import { MediaLayer } from './layers/MediaLayer';
 import { TextLayer } from './layers/TextLayer';
 import { OverlayImageLayer } from './layers/OverlayImageLayer';
+import { MusicStickerLayer } from './layers/MusicStickerLayer';
 import { MediaSourceManager } from './MediaSource';
 import { InteractionManager } from './interaction/InteractionManager';
 import { ImageExporter, ExportImageOptions } from './exporter/ImageExporter';
@@ -14,11 +15,24 @@ import {
   FitMode,
   FILTER_PRESETS,
   FilterPreset,
-  STORY_FILTER_PRESETS,
+  StoryAudioMeta,
+  SnapGuideState,
 } from './types';
 
-export type EngineEvent = 'render' | 'select' | 'change' | 'double-tap' | 'single-tap' | 'filter-swipe';
-export type EventListener = (...args: any[]) => void;
+export type EngineEventMap = {
+  'render': [];
+  'select': [layer: BaseLayer | null];
+  'change': [];
+  'double-tap': [layer?: BaseLayer];
+  'single-tap': [layer: BaseLayer];
+  'filter-swipe': [direction: string, filterName: string];
+  'drag-move': [info: { layer: BaseLayer; clientX: number; clientY: number; isDragging: boolean }];
+  'drag-end': [info: { layer: BaseLayer; clientX: number; clientY: number }];
+  'snap-guide': [snap: SnapGuideState];
+};
+
+export type EngineEvent = keyof EngineEventMap;
+export type EventListener<K extends EngineEvent = EngineEvent> = (...args: EngineEventMap[K]) => void;
 
 export class CanvasEngine {
   private canvas: HTMLCanvasElement;
@@ -33,7 +47,11 @@ export class CanvasEngine {
 
   private isDirty = false;
   private activeFilterIndex: number = 0;
-  private listeners: Map<EngineEvent, Set<EventListener>> = new Map();
+  private listeners: Map<EngineEvent, Set<(args: unknown) => void>> = new Map();
+
+  // Merkez Mıknatısı Hizalama Çizgisi Durumu
+  private snapGuide: SnapGuideState = { x: false, y: false };
+  private snapGuideTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor(options: EngineOptions) {
     this.canvas = options.canvas;
@@ -67,6 +85,18 @@ export class CanvasEngine {
       onFilterSwipe: (direction) => {
         const filterName = this.cycleFilter(direction);
         this.emit('filter-swipe', direction, filterName);
+      },
+      onBringToFront: (layer) => {
+        this.bringToFront(layer);
+      },
+      onSnapGuide: (snap) => {
+        this.setSnapGuide(snap);
+      },
+      onDragMove: (info) => {
+        this.emit('drag-move', info);
+      },
+      onDragEnd: (info) => {
+        this.emit('drag-end', info);
       }
     });
 
@@ -141,7 +171,7 @@ export class CanvasEngine {
     const sel = this.interactionManager.getSelectedLayer();
     const target = sel || this.mediaLayer;
     if (target) {
-      let norm = (degrees % 360 + 360) % 360;
+      const norm = (degrees % 360 + 360) % 360;
       target.transform.rotation = Math.round(norm);
       this.render();
       this.requestRender();
@@ -277,6 +307,57 @@ export class CanvasEngine {
     return layer;
   }
 
+  public addMusicSticker(audioMeta: StoryAudioMeta, x = 0.5, y = 0.65): MusicStickerLayer {
+    // Önceki müzik çıkartması varsa güncelle/temizle
+    this.overlayLayers = this.overlayLayers.filter((l) => !(l instanceof MusicStickerLayer));
+    const layer = new MusicStickerLayer({ audioMeta, x, y });
+    this.overlayLayers.push(layer);
+    this.interactionManager.setSelectedLayer(layer);
+    this.requestRender();
+    this.emit('change');
+    return layer;
+  }
+
+  public getMusicSticker(): MusicStickerLayer | null {
+    const found = this.overlayLayers.find((l) => l instanceof MusicStickerLayer);
+    return (found as MusicStickerLayer) || null;
+  }
+
+  /**
+   * Otomatik Öne Getirme (Auto Z-Index):
+   * Dokunulan katman dizinin en sonuna taşınır.
+   */
+  public bringToFront(layer: BaseLayer) {
+    if (layer.type === 'media') return;
+    const idx = this.overlayLayers.indexOf(layer);
+    if (idx !== -1 && idx < this.overlayLayers.length - 1) {
+      this.overlayLayers.splice(idx, 1);
+      this.overlayLayers.push(layer);
+      this.requestRender();
+      this.emit('change');
+    }
+  }
+
+  /**
+   * Merkez Mıknatısı Hizalama Çizgisi:
+   * Fotoğraf/nesne merkeze oturduğunda 300ms ince kılavuz çizgisi gösterilir.
+   */
+  public setSnapGuide(snap: SnapGuideState) {
+    this.snapGuide = snap;
+    if (this.snapGuideTimer) {
+      clearTimeout(this.snapGuideTimer);
+      this.snapGuideTimer = null;
+    }
+    if (snap.x || snap.y) {
+      this.snapGuideTimer = setTimeout(() => {
+        this.snapGuide = { x: false, y: false };
+        this.requestRender();
+      }, 300);
+    }
+    this.requestRender();
+    this.emit('snap-guide', snap);
+  }
+
   public removeLayer(layerId: string) {
     const sel = this.interactionManager.getSelectedLayer();
     if (sel && sel.id === layerId) {
@@ -357,6 +438,28 @@ export class CanvasEngine {
       }
     }
 
+    // 3. Merkez Mıknatısı İnce Kılavuz Çizgileri (0.3s)
+    if (this.snapGuide.x) {
+      this.ctx.save();
+      this.ctx.strokeStyle = 'rgba(59, 130, 246, 0.75)'; // Soft blue Instagram alignment line
+      this.ctx.lineWidth = 2;
+      this.ctx.beginPath();
+      this.ctx.moveTo(this.width * 0.5, 0);
+      this.ctx.lineTo(this.width * 0.5, this.height);
+      this.ctx.stroke();
+      this.ctx.restore();
+    }
+    if (this.snapGuide.y) {
+      this.ctx.save();
+      this.ctx.strokeStyle = 'rgba(59, 130, 246, 0.75)';
+      this.ctx.lineWidth = 2;
+      this.ctx.beginPath();
+      this.ctx.moveTo(0, this.height * 0.5);
+      this.ctx.lineTo(this.width, this.height * 0.5);
+      this.ctx.stroke();
+      this.ctx.restore();
+    }
+
     const sel = this.interactionManager.getSelectedLayer();
     if (sel && sel.visible && !sel.locked) {
       sel.renderSelectionHighlight(this.ctx, this.width, this.height);
@@ -366,7 +469,7 @@ export class CanvasEngine {
   public renderClean(targetCtx: CanvasRenderingContext2D, width: number, height: number) {
     targetCtx.clearRect(0, 0, width, height);
 
-    // Dışa aktarmada da aynı büyüleyici ışık süzmesi ve arka plan atmosferi korunur
+    // Dışa aktarmada da aynı büyüleyici ışık süzmesi ve arka plan atmosferi korunur (kılavuz çizgileri basılmaz)
     this.renderAmbientBackground(targetCtx, width, height);
 
     const layers = this.getAllLayers();
@@ -381,7 +484,11 @@ export class CanvasEngine {
     return ImageExporter.exportToBlob(
       this.canvas,
       (targetCtx, w, h) => this.renderClean(targetCtx, w, h),
-      options
+      {
+        mimeType: 'image/webp',
+        quality: 0.92,
+        ...(options || {})
+      }
     );
   }
 
@@ -390,19 +497,21 @@ export class CanvasEngine {
     ImageExporter.downloadBlob(blob, filename);
   }
 
-  public on(event: EngineEvent, fn: EventListener) {
+  public on<K extends EngineEvent>(event: K, fn: EventListener<K>) {
     if (!this.listeners.has(event)) {
       this.listeners.set(event, new Set());
     }
-    this.listeners.get(event)!.add(fn);
+    this.listeners.get(event)!.add(fn as unknown as (args: unknown) => void);
   }
 
-  public off(event: EngineEvent, fn: EventListener) {
-    this.listeners.get(event)?.delete(fn);
+  public off<K extends EngineEvent>(event: K, fn: EventListener<K>) {
+    this.listeners.get(event)?.delete(fn as unknown as (args: unknown) => void);
   }
 
-  private emit(event: EngineEvent, ...args: any[]) {
-    this.listeners.get(event)?.forEach((fn) => fn(...args));
+  private emit<K extends EngineEvent>(event: K, ...args: EngineEventMap[K]) {
+    this.listeners.get(event)?.forEach((fn) => {
+      (fn as unknown as (...a: unknown[]) => void)(...args);
+    });
   }
 
   public destroy() {

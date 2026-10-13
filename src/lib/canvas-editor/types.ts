@@ -35,6 +35,26 @@ export interface Rect {
   height: number;
 }
 
+export type OverlayShapeMode = 'rounded' | 'circle' | 'polaroid' | 'heart' | 'star';
+export type FontPreset = 'modern' | 'classic' | 'neon' | 'typewriter' | 'heavy';
+export type TextBgPreset = 'none' | 'solid' | 'translucent' | 'neon';
+
+export interface StoryAudioMeta {
+  id: string;
+  title: string;
+  artist: string;
+  url: string;
+  duration: number; // e.g. 15s
+  startTime: number;
+  coverUrl?: string;
+}
+
+export interface SnapGuideState {
+  x: boolean;
+  y: boolean;
+  activeTime?: number;
+}
+
 export interface TextStyle {
   text: string;
   fontSize: number;          // Base font size in px relative to canvas

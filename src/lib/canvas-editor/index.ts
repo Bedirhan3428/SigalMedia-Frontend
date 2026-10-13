@@ -5,5 +5,6 @@ export * from './layers/BaseLayer';
 export * from './layers/MediaLayer';
 export * from './layers/TextLayer';
 export * from './layers/OverlayImageLayer';
+export * from './layers/MusicStickerLayer';
 export * from './interaction/InteractionManager';
 export * from './exporter/ImageExporter';

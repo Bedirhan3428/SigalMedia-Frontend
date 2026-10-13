@@ -1,15 +1,17 @@
 import { BaseLayer } from './BaseLayer';
-import { LayerTransform, Rect } from '../types';
+import { LayerTransform, Rect, OverlayShapeMode } from '../types';
 
 export class OverlayImageLayer extends BaseLayer {
   public override type = 'image_overlay';
   public image: HTMLImageElement;
   public naturalWidth: number;
   public naturalHeight: number;
+  public shapeMode: OverlayShapeMode = 'rounded';
 
   constructor(options: {
     image: HTMLImageElement;
     id?: string;
+    shapeMode?: OverlayShapeMode;
     transform?: Partial<LayerTransform>;
   }) {
     super({
@@ -26,19 +28,37 @@ export class OverlayImageLayer extends BaseLayer {
     this.image = options.image;
     this.naturalWidth = options.image.naturalWidth || options.image.width || 300;
     this.naturalHeight = options.image.naturalHeight || options.image.height || 300;
+    if (options.shapeMode) {
+      this.shapeMode = options.shapeMode;
+    }
   }
 
   /**
-   * İkincil görselin 16:9 çerçeve taban boyutları:
-   * Tuval genişliğinin %46'sı kadar genişlik ve tam 16:9 en-boy oranı.
+   * Tek tıkla 5'li Şekil Döngüsü:
+   * Mod 1 (rounded) -> Mod 2 (circle) -> Mod 3 (polaroid) -> Mod 4 (heart) -> Mod 5 (star)
+   */
+  public cycleShapeMode(): OverlayShapeMode {
+    const sequence: OverlayShapeMode[] = ['rounded', 'circle', 'polaroid', 'heart', 'star'];
+    const currentIndex = sequence.indexOf(this.shapeMode);
+    const nextIndex = (currentIndex + 1) % sequence.length;
+    this.shapeMode = sequence[nextIndex];
+    return this.shapeMode;
+  }
+
+  /**
+   * İkincil fotoğraf tuval genişliğinin %40'ı boyutunda açılır.
    */
   public getBaseDimensions(canvasWidth: number): { width: number; height: number } {
-    const targetW = canvasWidth * 0.46;
-    const targetH = targetW * (9 / 16); // 16:9 En-Boy Oranı
-
+    const size = canvasWidth * 0.40;
+    if (this.shapeMode === 'polaroid') {
+      return {
+        width: size,
+        height: size * 1.22
+      };
+    }
     return {
-      width: targetW,
-      height: targetH
+      width: size,
+      height: size
     };
   }
 
@@ -52,68 +72,165 @@ export class OverlayImageLayer extends BaseLayer {
     };
   }
 
+  /**
+   * Kalp Kesim Patikası (Heart Path)
+   */
+  private createHeartPath(ctx: CanvasRenderingContext2D, size: number) {
+    const s = size * 0.5;
+    ctx.beginPath();
+    ctx.moveTo(0, s * 0.72);
+    // Sol alt eğri -> sol kanat -> sol üst yuvarlak tepe -> tepe çukuru
+    ctx.bezierCurveTo(-s * 0.45, s * 0.35, -s * 0.95, -s * 0.1, -s * 0.95, -s * 0.48);
+    ctx.bezierCurveTo(-s * 0.95, -s * 0.88, -s * 0.45, -s * 0.96, 0, -s * 0.45);
+    // Tepe çukuru -> sağ üst yuvarlak tepe -> sağ kanat -> alt sivri uç
+    ctx.bezierCurveTo(s * 0.45, -s * 0.96, s * 0.95, -s * 0.88, s * 0.95, -s * 0.48);
+    ctx.bezierCurveTo(s * 0.95, -s * 0.1, s * 0.45, s * 0.35, 0, s * 0.72);
+    ctx.closePath();
+  }
+
+  /**
+   * 5 Köşeli Yıldız Kesim Patikası (Star Path)
+   */
+  private createStarPath(ctx: CanvasRenderingContext2D, size: number) {
+    const outerR = size * 0.50;
+    const innerR = size * 0.22;
+    ctx.beginPath();
+    for (let i = 0; i < 10; i++) {
+      const angle = (i * Math.PI) / 5 - Math.PI / 2;
+      const r = i % 2 === 0 ? outerR : innerR;
+      const px = Math.cos(angle) * r;
+      const py = Math.sin(angle) * r;
+      if (i === 0) ctx.moveTo(px, py);
+      else ctx.lineTo(px, py);
+    }
+    ctx.closePath();
+  }
+
   public override render(ctx: CanvasRenderingContext2D, canvasWidth: number, canvasHeight: number): void {
     if (!this.visible || !this.image) return;
 
     const center = this.getPixelPosition(canvasWidth, canvasHeight);
     const dims = this.getBaseDimensions(canvasWidth);
-    const frameW = dims.width;
-    const frameH = dims.height;
-    // Çerçevenin yuvarlak köşesi
-    const cornerRadius = Math.max(12, Math.round(frameH * 0.12));
+    const size = canvasWidth * 0.40;
 
     ctx.save();
 
-    // 1. Filtrelerden Kesinlikle Etkilenmesin (Story efektleri bu katmana sızamaz)
+    // 1. Filtrelerden Kesinlikle Etkilenmesin (Story filtreleri bu katmana sızamaz)
     ctx.filter = 'none';
 
     ctx.translate(center.x, center.y);
     ctx.rotate((this.transform.rotation * Math.PI) / 180);
 
-    // Etkileşim yaylanması (Tek veya iki parmakla dokunulduğunda hafif spring feedback)
-    const interactionScale = this.isInteracting ? 1.04 : 1.0;
+    // Hafif ve zarif etkileşim yaylanması (%2 spring scale, çerçeve çizgisi yok)
+    const interactionScale = this.isInteracting ? 1.02 : 1.0;
     const scaleX = this.transform.scale * (this.transform.flipH ? -1 : 1) * interactionScale;
     const scaleY = this.transform.scale * (this.transform.flipV ? -1 : 1) * interactionScale;
     ctx.scale(scaleX, scaleY);
 
-    // 2. 16:9 Çerçevenin Yuvarlatılmış Patikası (Rounded Rect Path)
-    const createFramePath = () => {
+    const cornerRadius = Math.round(20 * (canvasWidth / 414));
+
+    // ─────────────────────────────────────────────────────────────
+    // MOD 3: BEYAZ ÇERÇEVELİ POLAROID
+    // ─────────────────────────────────────────────────────────────
+    if (this.shapeMode === 'polaroid') {
+      const cardW = dims.width;
+      const cardH = dims.height;
+      const cardRadius = Math.max(8, Math.round(12 * (canvasWidth / 414)));
+      const photoMargin = Math.round(14 * (canvasWidth / 414));
+      const photoW = cardW - photoMargin * 2;
+      const photoH = photoW;
+      const photoTop = -cardH / 2 + photoMargin;
+
+      // Polaroid Kart Gölgesi
+      ctx.shadowColor = 'rgba(0, 0, 0, 0.40)';
+      ctx.shadowBlur = this.isInteracting ? 30 : 18;
+      ctx.shadowOffsetX = 0;
+      ctx.shadowOffsetY = this.isInteracting ? 10 : 5;
+
+      // Polaroid Beyaz Gövdesi
+      ctx.fillStyle = '#FFFFFF';
       ctx.beginPath();
       if (typeof ctx.roundRect === 'function') {
-        ctx.roundRect(-frameW / 2, -frameH / 2, frameW, frameH, cornerRadius);
+        ctx.roundRect(-cardW / 2, -cardH / 2, cardW, cardH, cardRadius);
       } else {
-        const x = -frameW / 2, y = -frameH / 2, w = frameW, h = frameH, r = cornerRadius;
-        ctx.moveTo(x + r, y);
-        ctx.arcTo(x + w, y, x + w, y + h, r);
-        ctx.arcTo(x + w, y + h, x, y + h, r);
-        ctx.arcTo(x, y + h, x, y, r);
-        ctx.arcTo(x, y, x + w, y, r);
+        ctx.rect(-cardW / 2, -cardH / 2, cardW, cardH);
+      }
+      ctx.fill();
+
+      // Gölgeyi sıfırla ve fotoğraf alanına kırp
+      ctx.save();
+      ctx.shadowColor = 'transparent';
+      ctx.shadowBlur = 0;
+
+      ctx.beginPath();
+      ctx.rect(-cardW / 2 + photoMargin, photoTop, photoW, photoH);
+      ctx.clip();
+
+      // Görseli kare fotoğraf alanına cover ölçekle
+      const scale = Math.max(photoW / (this.naturalWidth || 1), photoH / (this.naturalHeight || 1));
+      const drawW = (this.naturalWidth || 1) * scale;
+      const drawH = (this.naturalHeight || 1) * scale;
+      const imgCenterX = 0;
+      const imgCenterY = photoTop + photoH / 2;
+
+      ctx.drawImage(
+        this.image,
+        imgCenterX - drawW / 2,
+        imgCenterY - drawH / 2,
+        drawW,
+        drawH
+      );
+      ctx.restore();
+
+      ctx.restore();
+      return;
+    }
+
+    // ─────────────────────────────────────────────────────────────
+    // DİĞER 4 MOD: YUMUŞAK KÖŞELİ KARE, DAİRE, KALP, YILDIZ
+    // ─────────────────────────────────────────────────────────────
+    ctx.shadowColor = 'rgba(0, 0, 0, 0.38)';
+    ctx.shadowBlur = this.isInteracting ? 26 : 16;
+    ctx.shadowOffsetX = 0;
+    ctx.shadowOffsetY = this.isInteracting ? 8 : 4;
+
+    const defineShapePath = () => {
+      if (this.shapeMode === 'circle') {
+        ctx.beginPath();
+        ctx.arc(0, 0, size / 2, 0, Math.PI * 2);
+        ctx.closePath();
+      } else if (this.shapeMode === 'heart') {
+        this.createHeartPath(ctx, size);
+      } else if (this.shapeMode === 'star') {
+        this.createStarPath(ctx, size);
+      } else {
+        // 'rounded' - Yumuşak Köşeli Kare (20px radius)
+        ctx.beginPath();
+        if (typeof ctx.roundRect === 'function') {
+          ctx.roundRect(-size / 2, -size / 2, size, size, cornerRadius);
+        } else {
+          ctx.rect(-size / 2, -size / 2, size, size);
+        }
         ctx.closePath();
       }
     };
 
-    // 3. Çerçeve Dış Gölgesi (Hafif sinematik yükselti)
-    ctx.shadowColor = 'rgba(0, 0, 0, 0.45)';
-    ctx.shadowBlur = this.isInteracting ? 22 : 14;
-    ctx.shadowOffsetX = 0;
-    ctx.shadowOffsetY = this.isInteracting ? 8 : 4;
-
-    // 4. Çerçeve Tabanı: Tam Siyah (#000000 - Sığmayan kısımlar siyah kalır)
-    createFramePath();
+    // Taban silüet dolgusu (siyah)
+    defineShapePath();
     ctx.fillStyle = '#000000';
     ctx.fill();
 
-    // 5. Çerçevenin İçine Kırp (Clip to rounded frame - Köşeler çerçevenin köşeleridir)
+    // Şekil maskesine kırp (Clip)
     ctx.save();
     ctx.shadowColor = 'transparent';
     ctx.shadowBlur = 0;
-    createFramePath();
+    defineShapePath();
     ctx.clip();
 
-    // 6. Görseli 16:9 Çerçeve İçine Orantılı Sığdır (object-fit: contain)
-    const imgScale = Math.min(frameW / (this.naturalWidth || 1), frameH / (this.naturalHeight || 1));
-    const drawW = (this.naturalWidth || 1) * imgScale;
-    const drawH = (this.naturalHeight || 1) * imgScale;
+    // Görseli şeklin içine object-fit: cover olarak merkezle
+    const coverScale = Math.max(size / (this.naturalWidth || 1), size / (this.naturalHeight || 1));
+    const drawW = (this.naturalWidth || 1) * coverScale;
+    const drawH = (this.naturalHeight || 1) * coverScale;
 
     ctx.drawImage(
       this.image,
@@ -122,16 +239,6 @@ export class OverlayImageLayer extends BaseLayer {
       drawW,
       drawH
     );
-    ctx.restore(); // Kırpmayı sıfırla
-
-    // 7. Çerçevenin Zarif İnce Kenarlık Çizgisi
-    ctx.save();
-    ctx.shadowColor = 'transparent';
-    ctx.shadowBlur = 0;
-    createFramePath();
-    ctx.strokeStyle = 'rgba(255, 255, 255, 0.18)';
-    ctx.lineWidth = 1.5;
-    ctx.stroke();
     ctx.restore();
 
     ctx.restore();

@@ -3,7 +3,6 @@ import {
   DEFAULT_FILTER_VALUES,
   EditorMedia,
   FilterPreset,
-  FILTER_PRESETS,
   FilterValues,
   FitMode,
   MediaFilters,
@@ -198,6 +197,24 @@ export class MediaLayer extends BaseLayer {
     const center = this.getPixelPosition(canvasWidth, canvasHeight);
     const dims = this.getBaseDimensions(canvasWidth, canvasHeight);
 
+    // ─────────────────────────────────────────────────────────────
+    // AKILLI SIĞDIRMA VE OTOMATİK KÖŞE YUVARLAMA (24px KÖŞE DETAYI)
+    // 9:16 ve tam ekran temasındayken radius: 0px.
+    // Küçültüldüğü veya kenarlardan ayrıldığı anda otomatik 24px yuvarlama!
+    // ─────────────────────────────────────────────────────────────
+    const mediaAspect = (this.media.width || 1) / (this.media.height || 1);
+    const canvasAspect = canvasWidth / canvasHeight;
+    const is916 = Math.abs(mediaAspect - canvasAspect) < 0.025;
+
+    const isFullScreenTouching =
+      is916 &&
+      this.transform.scale >= 0.995 &&
+      Math.abs(this.transform.rotation % 360) < 0.5 &&
+      Math.abs(this.transform.x - 0.5) < 0.005 &&
+      Math.abs(this.transform.y - 0.5) < 0.005;
+
+    const cornerRadius = isFullScreenTouching ? 0 : Math.round(24 * (canvasWidth / 414));
+
     ctx.save();
     // 1. Serbest pozisyon (sağa / sola / yukarı / aşağı taşıma)
     ctx.translate(center.x, center.y);
@@ -209,16 +226,33 @@ export class MediaLayer extends BaseLayer {
     const scaleY = this.transform.scale * (this.transform.flipV ? -1 : 1) * interactionScale;
     ctx.scale(scaleX, scaleY);
 
+    // Otomatik Köşe Yuvarlama Kırpması (Eğer ekran sınırından ayrıldıysa)
+    if (cornerRadius > 0) {
+      ctx.beginPath();
+      if (typeof ctx.roundRect === 'function') {
+        ctx.roundRect(-dims.width / 2, -dims.height / 2, dims.width, dims.height, cornerRadius);
+      } else {
+        const x = -dims.width / 2, y = -dims.height / 2, w = dims.width, h = dims.height, r = cornerRadius;
+        ctx.moveTo(x + r, y);
+        ctx.arcTo(x + w, y, x + w, y + h, r);
+        ctx.arcTo(x + w, y + h, x, y + h, r);
+        ctx.arcTo(x, y + h, x, y, r);
+        ctx.arcTo(x, y, x + w, y, r);
+        ctx.closePath();
+      }
+      ctx.clip();
+    }
+
     const filterStr = this.getFilterString();
     ctx.filter = filterStr;
 
-    // A. Taban Çizim Kaynağı (Lo-Res / Pikselleştirme: 120 x H boyuta küçültülüp yumuşatma kapalı basılır)
+    // A. Taban Çizim Kaynağı (Lo-Res: 1/6 oranında küçültülüp yumuşatma kapalı tekrar büyütülür)
     let drawSource: CanvasImageSource = this.media.element;
     let usePixelated = false;
 
     if (this.activeEffect === 'pixelate') {
-      const offW = 120;
-      const offH = Math.max(12, Math.round(120 * (dims.height / dims.width)));
+      const offW = Math.max(16, Math.round(dims.width / 6));
+      const offH = Math.max(16, Math.round(dims.height / 6));
 
       if (!this.pixelCanvas) {
         this.pixelCanvas = document.createElement('canvas');
@@ -253,10 +287,10 @@ export class MediaLayer extends BaseLayer {
       ctx.imageSmoothingEnabled = prevSmooth;
     }
 
-    // B. Zoom Blur (%102 ve %104 oranında iki kez hafif opaklıkla alpha 0.25 üst üste bindirilir)
+    // B. Zoom Blur (%102 ve %104 oranında merkez sabit kalarak hafif opaklıkla üst üste bindirilir)
     if (this.activeEffect === 'zoom_blur') {
       ctx.save();
-      ctx.globalAlpha = 0.25;
+      ctx.globalAlpha = 0.22;
       for (const scaleFactor of [1.02, 1.04]) {
         ctx.save();
         ctx.scale(scaleFactor, scaleFactor);
@@ -272,7 +306,7 @@ export class MediaLayer extends BaseLayer {
       ctx.restore();
     }
 
-    // C. Soft Light / Bloom (Rüya gibi ışık dağılması / dreamy bloom)
+    // C. Soft Light (Parlak bölgeler screen harmanlama moduyla üst üste basılır)
     if (this.activeEffect === 'bloom') {
       ctx.save();
       ctx.globalCompositeOperation = 'screen';
@@ -287,11 +321,11 @@ export class MediaLayer extends BaseLayer {
       ctx.restore();
     }
 
-    // D. Handheld / Shake (Organik kamera sarsıntısı / hafif optik ayrışma)
+    // D. Handheld / Shake (Organik kamera sarsıntısı)
     if (this.activeEffect === 'shake') {
       ctx.save();
       ctx.globalCompositeOperation = 'screen';
-      ctx.globalAlpha = 0.3;
+      ctx.globalAlpha = 0.25;
       ctx.drawImage(
         drawSource,
         -dims.width / 2 - 3,
@@ -312,7 +346,7 @@ export class MediaLayer extends BaseLayer {
     // Filtre stringini sıfırla (gren dokusu filtrelenmesin)
     ctx.filter = 'none';
 
-    // E. Grainy (128x128 piksellik yarı saydam gürültü deseni ctx.globalCompositeOperation = 'overlay' basılır)
+    // E. Grainy (128x128 film kumu deseni %12 opaklıkla döşenir)
     if (this.activeEffect === 'grain') {
       const nCanvas = MediaLayer.getNoiseCanvas();
       if (nCanvas) {
@@ -320,7 +354,7 @@ export class MediaLayer extends BaseLayer {
         if (pattern) {
           ctx.save();
           ctx.globalCompositeOperation = 'overlay';
-          ctx.globalAlpha = 0.35;
+          ctx.globalAlpha = 0.12; // Tam %12 analog film kumu
           ctx.fillStyle = pattern;
           ctx.fillRect(-dims.width / 2, -dims.height / 2, dims.width, dims.height);
           ctx.restore();

@@ -1,8 +1,7 @@
 import { BaseLayer } from './BaseLayer';
-import { Rect, TextStyle } from '../types';
+import { Rect, TextStyle, FontPreset, TextBgPreset } from '../types';
 
-export type FontPreset = 'modern' | 'neon' | 'typewriter' | 'classic' | 'heavy';
-export type TextBgPreset = 'dark' | 'white' | 'none';
+export { type FontPreset, type TextBgPreset };
 
 export const FONT_PRESET_CONFIGS: Record<FontPreset, {
   name: string;
@@ -14,40 +13,40 @@ export const FONT_PRESET_CONFIGS: Record<FontPreset, {
 }> = {
   modern: {
     name: 'Modern',
-    fontFamily: "'Plus Jakarta Sans', 'Google Sans', 'Inter', -apple-system, BlinkMacSystemFont, sans-serif",
+    fontFamily: "'Outfit', 'Google Sans', 'Inter', -apple-system, BlinkMacSystemFont, sans-serif",
     fontWeight: '800',
-    fontStyle: 'normal',
-    shadowColor: 'transparent',
-    shadowBlur: 0,
-  },
-  neon: {
-    name: 'Neon',
-    fontFamily: "'Plus Jakarta Sans', 'Google Sans', -apple-system, sans-serif",
-    fontWeight: '800',
-    fontStyle: 'normal',
-    shadowColor: '#10b981',
-    shadowBlur: 20,
-  },
-  typewriter: {
-    name: 'Daktilo',
-    fontFamily: "'Space Mono', 'SF Mono', 'Roboto Mono', 'Courier New', monospace",
-    fontWeight: '700',
     fontStyle: 'normal',
     shadowColor: 'transparent',
     shadowBlur: 0,
   },
   classic: {
-    name: 'Zarif',
-    fontFamily: "'Playfair Display', 'Didot', 'Cinzel', Georgia, serif",
+    name: 'Klasik',
+    fontFamily: "'Playfair Display', Didot, 'Cinzel', Georgia, serif",
     fontWeight: '700',
     fontStyle: 'italic',
     shadowColor: 'transparent',
     shadowBlur: 0,
   },
+  neon: {
+    name: 'Neon',
+    fontFamily: "'Caveat', 'Outfit', cursive, sans-serif",
+    fontWeight: '700',
+    fontStyle: 'normal',
+    shadowColor: '#10b981',
+    shadowBlur: 24,
+  },
+  typewriter: {
+    name: 'Daktilo',
+    fontFamily: "'Space Mono', 'SF Mono', 'Courier New', monospace",
+    fontWeight: '700',
+    fontStyle: 'normal',
+    shadowColor: 'transparent',
+    shadowBlur: 0,
+  },
   heavy: {
-    name: 'Manşet',
-    fontFamily: "'Space Grotesk', 'Impact', -apple-system, sans-serif",
-    fontWeight: '800',
+    name: 'Güçlü',
+    fontFamily: "'Bebas Neue', 'Impact', sans-serif",
+    fontWeight: '700',
     fontStyle: 'normal',
     shadowColor: 'transparent',
     shadowBlur: 0,
@@ -56,15 +55,15 @@ export const FONT_PRESET_CONFIGS: Record<FontPreset, {
 
 export const DEFAULT_TEXT_STYLE: TextStyle = {
   text: 'Yazı Ekleyin',
-  fontSize: 48,
-  fontFamily: "'Plus Jakarta Sans', 'Google Sans', 'Inter', -apple-system, BlinkMacSystemFont, sans-serif",
+  fontSize: 52,
+  fontFamily: "'Outfit', 'Google Sans', 'Inter', -apple-system, BlinkMacSystemFont, sans-serif",
   color: '#ffffff',
   fontWeight: '800',
   fontStyle: 'normal',
   textAlign: 'center',
-  backgroundColor: '#000000', // Tam Siyah
+  backgroundColor: '#000000',
   backgroundPadding: 16,
-  borderRadius: 9999, // Şık hap tasarım
+  borderRadius: 12,
   strokeColor: 'transparent',
   strokeWidth: 0,
   shadowColor: 'transparent',
@@ -75,7 +74,7 @@ export class TextLayer extends BaseLayer {
   public override type = 'text';
   public style: TextStyle;
   public fontPreset: FontPreset = 'modern';
-  public bgPreset: TextBgPreset = 'dark';
+  public bgPreset: TextBgPreset = 'solid';
 
   constructor(options?: {
     id?: string;
@@ -118,45 +117,106 @@ export class TextLayer extends BaseLayer {
     this.style.text = text;
   }
 
-  public setFontPreset(preset: FontPreset) {
+  public setFontPreset(preset: FontPreset, onRender?: () => void) {
     this.fontPreset = preset;
     const cfg = FONT_PRESET_CONFIGS[preset];
     this.style.fontFamily = cfg.fontFamily;
     this.style.fontWeight = cfg.fontWeight;
     this.style.fontStyle = cfg.fontStyle;
-    this.style.shadowBlur = cfg.shadowBlur ?? 0;
-    this.style.shadowColor = preset === 'neon' ? (this.style.color || '#10b981') : (cfg.shadowColor ?? 'transparent');
+    if (preset === 'neon' || this.bgPreset === 'neon') {
+      this.style.shadowBlur = 24;
+      this.style.shadowColor = this.style.color || '#10b981';
+    } else {
+      this.style.shadowBlur = cfg.shadowBlur ?? 0;
+      this.style.shadowColor = cfg.shadowColor ?? 'transparent';
+    }
+
+    if (typeof document !== 'undefined' && document.fonts && document.fonts.load) {
+      const primaryFont = cfg.fontFamily.split(',')[0].replace(/['"]/g, '').trim();
+      document.fonts.load(`${cfg.fontWeight} 48px "${primaryFont}"`).then(() => {
+        onRender?.();
+      }).catch(() => {});
+    }
   }
 
-  public cycleFontPreset(): FontPreset {
-    const list: FontPreset[] = ['modern', 'heavy', 'classic', 'typewriter', 'neon'];
+  public pulseScale = 1.0;
+  private pulseAnimId: number | null = null;
+
+  /**
+   * Tıklandığında çok hafif ve zarif mikro stil animasyonu (%1.5 büyüme, 130ms)
+   */
+  public triggerStylePulse(onRender?: () => void) {
+    if (this.pulseAnimId !== null) {
+      cancelAnimationFrame(this.pulseAnimId);
+      this.pulseAnimId = null;
+    }
+    const startTime = performance.now();
+    const duration = 130; // ms
+    const maxScale = 1.015; // Çok daha hafif ve küçük büyüme
+
+    const animate = (now: number) => {
+      const elapsed = now - startTime;
+      const progress = Math.min(1, elapsed / duration);
+      // Sinüs eğrisiyle akıcı, yumuşak mikro yaylanma
+      const pop = Math.sin(progress * Math.PI) * (maxScale - 1.0);
+      this.pulseScale = 1.0 + pop;
+      onRender?.();
+
+      if (progress < 1) {
+        this.pulseAnimId = requestAnimationFrame(animate);
+      } else {
+        this.pulseScale = 1.0;
+        this.pulseAnimId = null;
+        onRender?.();
+      }
+    };
+    this.pulseAnimId = requestAnimationFrame(animate);
+  }
+
+  /**
+   * 5 Ana Arketip Arasında Döngü:
+   * Modern ➔ Klasik ➔ Neon ➔ Daktilo ➔ Güçlü
+   */
+  public cycleFontPreset(onRender?: () => void): FontPreset {
+    const list: FontPreset[] = ['modern', 'classic', 'neon', 'typewriter', 'heavy'];
     const idx = list.indexOf(this.fontPreset);
     const next = list[(idx + 1) % list.length];
-    this.setFontPreset(next);
+    this.setFontPreset(next, onRender);
+    this.triggerStylePulse(onRender);
     return next;
   }
 
+  /**
+   * 4 Arka Plan Hapı Modu:
+   * Saf Yazı (none) ➔ Tam Dolgulu Kutu (solid) ➔ Yarı Saydam Buzlu Kutu (translucent) ➔ Neon Dış Parlama (neon)
+   */
   public setBgPreset(preset: TextBgPreset) {
     this.bgPreset = preset;
     if (preset === 'none') {
       this.style.backgroundColor = 'transparent';
-      this.style.color = '#ffffff';
-    } else if (preset === 'dark') {
-      // Tam Siyah (#000000 zemin, saf beyaz yazı)
+      this.style.shadowBlur = 6;
+      this.style.shadowColor = 'rgba(0, 0, 0, 0.6)';
+    } else if (preset === 'solid') {
       this.style.backgroundColor = '#000000';
-      this.style.color = '#ffffff';
-    } else if (preset === 'white') {
-      // Tam Beyaz (#ffffff zemin, saf siyah yazı)
-      this.style.backgroundColor = '#ffffff';
-      this.style.color = '#000000';
+      this.style.shadowBlur = 0;
+      this.style.shadowColor = 'transparent';
+    } else if (preset === 'translucent') {
+      this.style.backgroundColor = 'rgba(0, 0, 0, 0.55)';
+      this.style.shadowBlur = 0;
+      this.style.shadowColor = 'transparent';
+    } else if (preset === 'neon') {
+      this.style.backgroundColor = 'transparent';
+      this.style.shadowBlur = 24;
+      this.style.shadowColor = this.style.color || '#10b981';
     }
   }
 
-  public cycleBgPreset(): TextBgPreset {
-    const list: TextBgPreset[] = ['dark', 'white', 'none'];
+  public cycleBgPreset(onRender?: () => void): TextBgPreset {
+    const list: TextBgPreset[] = ['none', 'solid', 'translucent', 'neon'];
     const idx = list.indexOf(this.bgPreset);
     const next = list[(idx + 1) % list.length];
     this.setBgPreset(next);
+    this.triggerStylePulse(onRender);
     return next;
   }
 
@@ -180,9 +240,8 @@ export class TextLayer extends BaseLayer {
     }
     ctx.restore();
 
-    const padding = this.style.backgroundColor && this.style.backgroundColor !== 'transparent'
-      ? (this.style.backgroundPadding ?? 18)
-      : 8;
+    const hasBg = this.bgPreset === 'solid' || this.bgPreset === 'translucent';
+    const padding = hasBg ? (this.style.backgroundPadding ?? 18) : 8;
     const totalW = maxLineWidth + padding * 2;
     const totalH = lines.length * lineHeight + padding * 2;
 
@@ -201,24 +260,27 @@ export class TextLayer extends BaseLayer {
     const bounds = this.getBoundingBox(ctx, canvasWidth, canvasHeight);
     const lines = this.style.text.split('\n');
     const lineHeight = this.style.fontSize * 1.25;
-    const padding = this.style.backgroundColor && this.style.backgroundColor !== 'transparent'
-      ? (this.style.backgroundPadding ?? 18)
-      : 8;
+    const hasBg = this.bgPreset === 'solid' || this.bgPreset === 'translucent';
+    const padding = hasBg ? (this.style.backgroundPadding ?? 18) : 8;
 
     ctx.save();
-    // 0. Story filtrelerinden kesinlikle etkilenmesin (Text her zaman net ve berrak)
+    // 0. Story filtrelerinden kesinlikle etkilenmesin (Metin her zaman berrak ve net kalır)
     ctx.filter = 'none';
 
     ctx.translate(center.x, center.y);
-    ctx.rotate((this.transform.rotation * Math.PI) / 180);
-    const interactionScale = this.isInteracting ? 1.05 : 1.0;
-    ctx.scale(this.transform.scale * interactionScale, this.transform.scale * interactionScale);
+    const interactionScale = this.isInteracting ? 1.015 : 1.0;
+    const finalScale = this.transform.scale * interactionScale * this.pulseScale;
+    ctx.scale(finalScale, finalScale);
 
-    // 1. Instagram Story tarzı arka plan kutusu / hapı (Tam Siyah veya Tam Beyaz)
-    if (this.style.backgroundColor && this.style.backgroundColor !== 'transparent') {
+    // 1. Arka Plan Kutusu (Solid veya Translucent)
+    if (hasBg && this.style.backgroundColor && this.style.backgroundColor !== 'transparent') {
       ctx.fillStyle = this.style.backgroundColor;
+      const baseRadius = (this.style.borderRadius !== undefined && this.style.borderRadius !== 9999)
+        ? this.style.borderRadius
+        : 14;
+      const scaledRadius = Math.round(baseRadius * (canvasWidth / 414));
       const maxRadius = Math.min(bounds.width / 2, bounds.height / 2);
-      const radius = Math.min(maxRadius, this.style.borderRadius ?? 20);
+      const radius = Math.min(maxRadius, scaledRadius);
 
       ctx.beginPath();
       if (typeof ctx.roundRect === 'function') {
@@ -234,11 +296,20 @@ export class TextLayer extends BaseLayer {
     ctx.textAlign = this.style.textAlign;
     ctx.textBaseline = 'middle';
 
-    if (this.style.shadowColor && this.style.shadowBlur && this.style.shadowBlur > 0) {
-      ctx.shadowColor = this.style.shadowColor;
-      ctx.shadowBlur = this.style.shadowBlur;
+    const isNeon = this.fontPreset === 'neon' || this.bgPreset === 'neon';
+    if (isNeon) {
+      ctx.shadowColor = this.style.color || '#10b981';
+      ctx.shadowBlur = 24;
+      ctx.shadowOffsetX = 0;
+      ctx.shadowOffsetY = 0;
+    } else if (this.bgPreset === 'none') {
+      ctx.shadowColor = 'rgba(0, 0, 0, 0.65)';
+      ctx.shadowBlur = 8;
       ctx.shadowOffsetX = 0;
       ctx.shadowOffsetY = 2;
+    } else {
+      ctx.shadowColor = 'transparent';
+      ctx.shadowBlur = 0;
     }
 
     // 3. Her satırı çiz
@@ -253,15 +324,15 @@ export class TextLayer extends BaseLayer {
         lineX = bounds.width / 2 - padding;
       }
 
-      // Stroke
-      if (this.style.strokeColor && this.style.strokeWidth && this.style.strokeWidth > 0) {
-        ctx.strokeStyle = this.style.strokeColor;
-        ctx.lineWidth = this.style.strokeWidth;
-        ctx.lineJoin = 'round';
-        ctx.strokeText(line, lineX, lineY);
+      // Neon modunda çift baskı (parlama yoğunluğu için)
+      if (isNeon) {
+        ctx.save();
+        ctx.shadowBlur = 32;
+        ctx.fillStyle = this.style.color;
+        ctx.fillText(line, lineX, lineY);
+        ctx.restore();
       }
 
-      // Fill
       ctx.fillStyle = this.style.color;
       ctx.fillText(line, lineX, lineY);
     });
