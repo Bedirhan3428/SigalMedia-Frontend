@@ -343,6 +343,7 @@ export class CanvasEngine {
    * Fotoğraf/nesne merkeze oturduğunda 300ms ince kılavuz çizgisi gösterilir.
    */
   public setSnapGuide(snap: SnapGuideState) {
+    if (this.snapGuide.x === snap.x && this.snapGuide.y === snap.y) return;
     this.snapGuide = snap;
     if (this.snapGuideTimer) {
       clearTimeout(this.snapGuideTimer);
@@ -352,7 +353,7 @@ export class CanvasEngine {
       this.snapGuideTimer = setTimeout(() => {
         this.snapGuide = { x: false, y: false };
         this.requestRender();
-      }, 300);
+      }, 200);
     }
     this.requestRender();
     this.emit('snap-guide', snap);

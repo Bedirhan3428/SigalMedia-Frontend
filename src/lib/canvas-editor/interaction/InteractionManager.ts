@@ -139,6 +139,9 @@ export class InteractionManager {
     this.canvas.addEventListener('pointerup', this.onPointerUp);
     this.canvas.addEventListener('pointercancel', this.onPointerUp);
     this.canvas.addEventListener('wheel', this.onWheel, { passive: false });
+    if (typeof window !== 'undefined') {
+      window.addEventListener('keydown', this.onKeyDown);
+    }
   }
 
   public destroy() {
@@ -148,6 +151,9 @@ export class InteractionManager {
     this.canvas.removeEventListener('pointerup', this.onPointerUp);
     this.canvas.removeEventListener('pointercancel', this.onPointerUp);
     this.canvas.removeEventListener('wheel', this.onWheel);
+    if (typeof window !== 'undefined') {
+      window.removeEventListener('keydown', this.onKeyDown);
+    }
   }
 
   private onPointerDown = (e: PointerEvent) => {
@@ -235,30 +241,36 @@ export class InteractionManager {
       const p1 = pts[0];
       const p2 = pts[1];
 
-      // A. Taşıma (Pan)
+      // A. Taşıma (Pan) - Akıcı ve Hızlı Hareket (1.35x Pan Hızı)
       const currentCenter = {
         x: (p1.x + p2.x) / 2,
         y: (p1.y + p2.y) / 2
       };
-      const dx = (currentCenter.x - this.startCenter.x) / this.canvas.width;
-      const dy = (currentCenter.y - this.startCenter.y) / this.canvas.height;
+      const PAN_SPEED = 1.35;
+      const dx = ((currentCenter.x - this.startCenter.x) / this.canvas.width) * PAN_SPEED;
+      const dy = ((currentCenter.y - this.startCenter.y) / this.canvas.height) * PAN_SPEED;
       let newX = Math.max(-2.5, Math.min(3.5, this.startLayerTransform.x + dx));
       let newY = Math.max(-2.5, Math.min(3.5, this.startLayerTransform.y + dy));
 
-      // MERKEZ MIKNATISI: Ekranın tam ortasına geldiğinde (x=0.5 veya y=0.5) tutunur
+      // MERKEZ MIKNATISI:
+      // KURAL: Yazılar (TextLayer) merkez kılavuzundan/mıknatısından tamamen hariç tutulur.
       let snapX = false;
       let snapY = false;
-      if (Math.abs(newX - 0.5) < 0.015) {
-        newX = 0.5;
-        snapX = true;
+      const isText = this.transformingLayer.type === 'text';
+
+      if (!isText) {
+        // Yumuşak ve esnek mıknatıs eşiği (0.0065 = ~7px)
+        const SNAP_THRESHOLD = 0.0065;
+        if (Math.abs(newX - 0.5) < SNAP_THRESHOLD) {
+          newX = 0.5;
+          snapX = true;
+        }
+        if (Math.abs(newY - 0.5) < SNAP_THRESHOLD) {
+          newY = 0.5;
+          snapY = true;
+        }
       }
-      if (Math.abs(newY - 0.5) < 0.015) {
-        newY = 0.5;
-        snapY = true;
-      }
-      if (snapX || snapY) {
-        this.onSnapGuide?.({ x: snapX, y: snapY });
-      }
+      this.onSnapGuide?.({ x: snapX, y: snapY });
 
       this.transformingLayer.transform.x = newX;
       this.transformingLayer.transform.y = newY;
@@ -271,18 +283,52 @@ export class InteractionManager {
         this.transformingLayer.transform.scale = Math.round(newScale * 100) / 100;
       }
 
-      // C. Döndürme (Rotate) + AÇI MIKNATISI: 0, 90, 180, 270 +-3 derece kilitlenme
+      // C. Döndürme (Rotate) - Fotoğraflar için Kasıtlı Döndürme Eşiği (Deadzone)
       const currentAngle = Math.atan2(p2.y - p1.y, p2.x - p1.x) * (180 / Math.PI);
-      const angleDelta = currentAngle - this.startAngle;
-      let newRot = (this.startLayerTransform.rotation + angleDelta) % 360;
-      if (newRot < 0) newRot += 360;
+      const isPhoto = this.transformingLayer.type === 'media' || this.transformingLayer.type === 'image_overlay';
 
-      if (Math.abs(newRot - 0) <= 3 || Math.abs(newRot - 360) <= 3) newRot = 0;
-      else if (Math.abs(newRot - 90) <= 3) newRot = 90;
-      else if (Math.abs(newRot - 180) <= 3) newRot = 180;
-      else if (Math.abs(newRot - 270) <= 3) newRot = 270;
+      let rotationToApply = this.startLayerTransform.rotation;
 
-      this.transformingLayer.transform.rotation = Math.round(newRot);
+      if (isPhoto) {
+        // Fotoğraflar için Dönme Eşiği: 8.5 Derece
+        // Parmaklar kasıtlı olarak döndürülmediği sürece fotoğraf sağa-sola yalpalamaz
+        let diff = (currentAngle - this.startAngle) % 360;
+        if (diff > 180) diff -= 360;
+        if (diff < -180) diff += 360;
+
+        const PHOTO_DEADZONE = 8.5;
+        if (Math.abs(diff) > PHOTO_DEADZONE) {
+          const activeDelta = (diff > 0 ? diff - PHOTO_DEADZONE : diff + PHOTO_DEADZONE) * 0.85;
+          let newRot = (this.startLayerTransform.rotation + activeDelta) % 360;
+          if (newRot < 0) newRot += 360;
+
+          // Dik açılara (0°, 90°, 180°, 270°) temiz mıknatıslanma
+          if (Math.abs(newRot - 0) <= 3.5 || Math.abs(newRot - 360) <= 3.5) newRot = 0;
+          else if (Math.abs(newRot - 90) <= 3.5) newRot = 90;
+          else if (Math.abs(newRot - 180) <= 3.5) newRot = 180;
+          else if (Math.abs(newRot - 270) <= 3.5) newRot = 270;
+
+          rotationToApply = Math.round(newRot);
+        }
+      } else if (isText) {
+        // Yazılar serbestçe dönebilmeli, sadece 0/360 dereceye 2 derece kala nazikçe düzlenir
+        const angleDelta = currentAngle - this.startAngle;
+        let newRot = (this.startLayerTransform.rotation + angleDelta) % 360;
+        if (newRot < 0) newRot += 360;
+        if (Math.abs(newRot - 0) <= 2.0 || Math.abs(newRot - 360) <= 2.0) newRot = 0;
+        rotationToApply = Math.round(newRot);
+      } else {
+        const angleDelta = currentAngle - this.startAngle;
+        let newRot = (this.startLayerTransform.rotation + angleDelta) % 360;
+        if (newRot < 0) newRot += 360;
+        if (Math.abs(newRot - 0) <= 3.0 || Math.abs(newRot - 360) <= 3.0) newRot = 0;
+        else if (Math.abs(newRot - 90) <= 3.0) newRot = 90;
+        else if (Math.abs(newRot - 180) <= 3.0) newRot = 180;
+        else if (Math.abs(newRot - 270) <= 3.0) newRot = 270;
+        rotationToApply = Math.round(newRot);
+      }
+
+      this.transformingLayer.transform.rotation = rotationToApply;
 
       // Mıknatıslı Çöp Kutusu Takibi
       if (this.transformingLayer.type !== 'media') {
@@ -324,27 +370,33 @@ export class InteractionManager {
         }
       }
 
-      // A. Tek elle etiket / çıkartma / metin taşıma
+      // A. Tek elle etiket / çıkartma / metin taşıma (Hızlı ve akıcı sürükleme)
       if (this.transformingLayer && this.transformingLayer.type !== 'media' && !this.transformingLayer.locked) {
-        const dx = (pt.x - this.startCenter.x) / this.canvas.width;
-        const dy = (pt.y - this.startCenter.y) / this.canvas.height;
+        const DRAG_SPEED = 1.25;
+        const dx = ((pt.x - this.startCenter.x) / this.canvas.width) * DRAG_SPEED;
+        const dy = ((pt.y - this.startCenter.y) / this.canvas.height) * DRAG_SPEED;
         let newX = Math.max(-1.5, Math.min(2.5, this.startLayerTransform.x + dx));
         let newY = Math.max(-1.5, Math.min(2.5, this.startLayerTransform.y + dy));
 
-        // Merkez Mıknatısı
+        // Merkez Mıknatısı:
+        // KURAL: Yazılar (TextLayer) merkez kılavuzundan/mıknatısından tamamen hariç tutulur.
         let snapX = false;
         let snapY = false;
-        if (Math.abs(newX - 0.5) < 0.015) {
-          newX = 0.5;
-          snapX = true;
+        const isText = this.transformingLayer.type === 'text';
+
+        if (!isText) {
+          // Yumuşak ve esnek mıknatıs eşiği (0.0065 = ~7px)
+          const SNAP_THRESHOLD = 0.0065;
+          if (Math.abs(newX - 0.5) < SNAP_THRESHOLD) {
+            newX = 0.5;
+            snapX = true;
+          }
+          if (Math.abs(newY - 0.5) < SNAP_THRESHOLD) {
+            newY = 0.5;
+            snapY = true;
+          }
         }
-        if (Math.abs(newY - 0.5) < 0.015) {
-          newY = 0.5;
-          snapY = true;
-        }
-        if (snapX || snapY) {
-          this.onSnapGuide?.({ x: snapX, y: snapY });
-        }
+        this.onSnapGuide?.({ x: snapX, y: snapY });
 
         this.transformingLayer.transform.x = newX;
         this.transformingLayer.transform.y = newY;
@@ -396,7 +448,10 @@ export class InteractionManager {
       this.startLayerTransform = { ...this.transformingLayer.transform };
     }
 
-    // Dokunuş tamamen bittiğinde etkileşimi kaldır
+    // Dokunuş tamamen bittiğinde etkileşimi kaldır ve kılavuz çizgisini kapat
+    if (this.activePointers.size === 0) {
+      this.onSnapGuide?.({ x: false, y: false });
+    }
     if (this.activePointers.size === 0 && this.transformingLayer) {
       this.transformingLayer.isInteracting = false;
       this.transformingLayer = null;
@@ -475,16 +530,25 @@ export class InteractionManager {
   // Masaüstü fare tekerleği desteği (Ölçekleme ve serbest döndürme)
   private onWheel = (e: WheelEvent) => {
     e.preventDefault();
-    const target = this.selectedLayer || this.getLayers().find((l) => l.type === 'media' && l.visible && !l.locked);
+    const pt = this.getCanvasPoint(e.clientX, e.clientY);
+    const hit = this.findHitLayer(pt);
+    const target = (hit && hit.type !== 'media')
+      ? hit
+      : (this.selectedLayer || this.getLayers().find((l) => l.type === 'media' && l.visible && !l.locked));
+
     if (!target || target.locked) return;
+
+    if (hit && hit.type !== 'media' && hit !== this.selectedLayer) {
+      this.setSelectedLayer(hit);
+    }
 
     if (e.ctrlKey) {
       // Ctrl + Wheel ➔ Zoom
       const factor = e.deltaY > 0 ? 0.95 : 1.05;
-      target.transform.scale = Math.max(0.2, Math.min(5.0, target.transform.scale * factor));
+      target.transform.scale = Math.max(0.15, Math.min(6.0, target.transform.scale * factor));
     } else {
-      // Normal Wheel ➔ Rotate
-      const step = e.shiftKey ? 1 : 5;
+      // Normal Wheel ➔ Sağa veya sola serbest döndürme
+      const step = e.shiftKey ? 1 : 4;
       const delta = e.deltaY > 0 ? step : -step;
       let newRot = (target.transform.rotation + delta) % 360;
       if (newRot < 0) newRot += 360;
@@ -492,5 +556,38 @@ export class InteractionManager {
     }
 
     this.onStateChange();
+  };
+
+  // Klavye ok tuşlarıyla serbest ve hassas döndürme (Left / Right Arrow)
+  private onKeyDown = (e: KeyboardEvent) => {
+    const activeEl = document.activeElement as HTMLElement | null;
+    const tag = activeEl?.tagName?.toLowerCase();
+    if (tag === 'input' || tag === 'textarea' || activeEl?.isContentEditable) {
+      return;
+    }
+
+    const target = this.selectedLayer;
+    if (!target || target.locked) return;
+
+    if (e.key === 'ArrowLeft') {
+      e.preventDefault();
+      const step = e.shiftKey ? 1 : 4;
+      let newRot = (target.transform.rotation - step) % 360;
+      if (newRot < 0) newRot += 360;
+      target.transform.rotation = Math.round(newRot);
+      this.onStateChange();
+    } else if (e.key === 'ArrowRight') {
+      e.preventDefault();
+      const step = e.shiftKey ? 1 : 4;
+      let newRot = (target.transform.rotation + step) % 360;
+      if (newRot < 0) newRot += 360;
+      target.transform.rotation = Math.round(newRot);
+      this.onStateChange();
+    } else if (e.key === '0' || e.key === 'Escape') {
+      if (target.transform.rotation !== 0) {
+        target.transform.rotation = 0;
+        this.onStateChange();
+      }
+    }
   };
 }

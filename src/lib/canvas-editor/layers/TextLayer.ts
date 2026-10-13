@@ -268,6 +268,7 @@ export class TextLayer extends BaseLayer {
     ctx.filter = 'none';
 
     ctx.translate(center.x, center.y);
+    ctx.rotate((this.transform.rotation * Math.PI) / 180);
     const interactionScale = this.isInteracting ? 1.015 : 1.0;
     const finalScale = this.transform.scale * interactionScale * this.pulseScale;
     ctx.scale(finalScale, finalScale);
@@ -277,7 +278,7 @@ export class TextLayer extends BaseLayer {
       ctx.fillStyle = this.style.backgroundColor;
       const baseRadius = (this.style.borderRadius !== undefined && this.style.borderRadius !== 9999)
         ? this.style.borderRadius
-        : 14;
+        : 12;
       const scaledRadius = Math.round(baseRadius * (canvasWidth / 414));
       const maxRadius = Math.min(bounds.width / 2, bounds.height / 2);
       const radius = Math.min(maxRadius, scaledRadius);

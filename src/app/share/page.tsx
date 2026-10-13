@@ -114,6 +114,8 @@ const TRENDING_MUSIC: StoryAudioMeta[] = [
 
 type ActiveDrawer = "none" | "sticker_sheet" | "music" | "tag";
 
+let hasHandledShareReload = false;
+
 export default function ShareStoryPage() {
   const [mounted, setMounted] = useState(false);
   const router = useRouter();
@@ -153,17 +155,126 @@ export default function ShareStoryPage() {
 
   // İşlem Durumları
   const [isPublishing, setIsPublishing] = useState(false);
+  const [showExitConfirm, setShowExitConfirm] = useState(false);
 
   const openTextEditorRef = useRef<(layer?: TextLayer) => void>(() => {});
 
+  // 0. SAYFA YENİLENİRSE DOĞRUDAN ANA SAYFAYA YÖNLENDİR (RELOAD KORUMASI)
+  // & EDİTÖRE HER GİRİŞTE HER ŞEYİ BAŞTAN BAŞLAT
   useEffect(() => {
+    if (typeof window !== "undefined") {
+      // Eski hatalı sessionStorage bayraklarını tamamen temizle
+      sessionStorage.removeItem("sigal_editor_reloaded");
+      sessionStorage.removeItem("sigal_editor_active");
+
+      // Yalnızca /share üzerinde tarayıcı yenilemesi (F5 / Reload) yapılmışsa ana sayfaya yönlendir
+      if (!hasHandledShareReload) {
+        hasHandledShareReload = true;
+        const navEntries = performance.getEntriesByType("navigation") as PerformanceNavigationTiming[];
+        const isReload = navEntries.length > 0 && navEntries[0].type === "reload";
+        const wasOnShare = navEntries.length > 0 && (navEntries[0].name.endsWith("/share") || navEntries[0].name.includes("/share?"));
+
+        if (isReload && wasOnShare) {
+          router.replace("/");
+          return;
+        }
+      }
+    }
+
     setMounted(true);
+    guardTriggeredRef.current = false;
+    if (baseFileInputRef.current) baseFileInputRef.current.value = "";
+    if (overlayFileInputRef.current) overlayFileInputRef.current.value = "";
+
     if (typeof document !== "undefined" && document.fonts) {
       document.fonts.ready.then(() => {
         engineRef.current?.requestRender();
       });
     }
+
+    return () => {
+      if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
+      if (engineRef.current) {
+        engineRef.current.destroy();
+        engineRef.current = null;
+      }
+    };
+  }, [router]);
+
+  // Editörü Tamamen Temizleme Fonksiyonu
+  const resetEditor = useCallback(() => {
+    if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
+    if (engineRef.current) {
+      engineRef.current.destroy();
+      engineRef.current = null;
+    }
+    if (baseFileInputRef.current) baseFileInputRef.current.value = "";
+    if (overlayFileInputRef.current) overlayFileInputRef.current.value = "";
+
+    setHasMedia(false);
+    setSelectedLayer(null);
+    setFilterToast(null);
+    setActiveFilterGradient("#000000");
+    setActiveDrawer("none");
+    setSelectedMusic(null);
+    setIsDraggingObject(false);
+    setIsTrashHot(false);
+    setIsTextEditing(false);
+    setEditingText("");
+    setActiveFontPreset("modern");
+    setActiveBgPreset("solid");
+    setActiveTextColor("#FFFFFF");
+    setActiveTextAlign("center");
+    setShowExitConfirm(false);
+    guardTriggeredRef.current = false;
   }, []);
+
+  // Geri Butonu Tıklaması
+  const handleBackClick = () => {
+    if (hasMedia) {
+      setShowExitConfirm(true);
+    } else {
+      router.back();
+    }
+  };
+
+  // Çıkışı Onaylama: Editörü Temizle ve Ana Sayfaya Dön
+  const handleConfirmExit = () => {
+    resetEditor();
+    router.replace("/");
+  };
+
+  // Tarayıcı / Mobil Geri Tuşunda Onay Modalı Çıkarma
+  useEffect(() => {
+    if (!hasMedia) return;
+
+    window.history.pushState({ inEditor: true }, "");
+
+    const handlePopState = () => {
+      setShowExitConfirm(true);
+      window.history.pushState({ inEditor: true }, "");
+    };
+
+    window.addEventListener("popstate", handlePopState);
+    return () => {
+      window.removeEventListener("popstate", handlePopState);
+    };
+  }, [hasMedia]);
+
+  // Sayfa Kapatma / Yenileme Öncesi Tarayıcı Güvenlik Uyarısı
+  useEffect(() => {
+    const handleBeforeUnload = (e: BeforeUnloadEvent) => {
+      if (hasMedia) {
+        e.preventDefault();
+        e.returnValue = "";
+      }
+    };
+
+    window.addEventListener("beforeunload", handleBeforeUnload);
+    return () => {
+      window.removeEventListener("beforeunload", handleBeforeUnload);
+    };
+  }, [hasMedia]);
 
   // Tuval Motorunu Başlatma (Instagram 9:16 Dikey Çözünürlük, Olay Tetiklemeli Çizim)
   const getOrCreateEngine = useCallback(() => {
@@ -275,30 +386,9 @@ export default function ShareStoryPage() {
     }
   }, [mounted, hasMedia]);
 
-  useEffect(() => {
-    const input = baseFileInputRef.current;
-    if (!input) return;
-
-    const onCancel = () => {
-      if (!hasMedia) {
-        router.back();
-      }
-    };
-
-    input.addEventListener("cancel", onCancel);
-    return () => {
-      input.removeEventListener("cancel", onCancel);
-    };
-  }, [hasMedia, router]);
-
   const handleBaseFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
-    if (!file) {
-      if (!hasMedia) {
-        router.back();
-      }
-      return;
-    }
+    if (!file) return;
 
     try {
       const engine = getOrCreateEngine();
@@ -335,15 +425,7 @@ export default function ShareStoryPage() {
     }
   };
 
-  useEffect(() => {
-    return () => {
-      if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
-      if (engineRef.current) {
-        engineRef.current.destroy();
-        engineRef.current = null;
-      }
-    };
-  }, []);
+
 
   // ─────────────────────────────────────────────────────────────
   // 3. TİPOGRAFİ VE CANLI METİN DÜZENLEME AKIŞI (ODAK MODU)
@@ -627,24 +709,40 @@ export default function ShareStoryPage() {
       )}
 
       {/* 5. SOL ÜST: GERİ VE İNDİRME BUTONLARI */}
-      {!isTextEditing && hasMedia && (
+      {!isTextEditing && (
         <div className="fixed left-4 top-6 z-40 flex items-center gap-2 pointer-events-auto">
           <button
             type="button"
-            onClick={() => router.back()}
+            onClick={handleBackClick}
             disabled={isPublishing}
             className="w-10 h-10 rounded-full bg-black/50 backdrop-blur-md border border-white/15 text-white hover:bg-black/70 active:scale-90 transition-all shadow-xl flex items-center justify-center"
           >
             <ChevronLeft className="w-5 h-5" />
           </button>
 
+          {hasMedia && (
+            <button
+              type="button"
+              onClick={handleDownloadImage}
+              disabled={isPublishing}
+              className="w-10 h-10 rounded-full bg-black/50 backdrop-blur-md border border-white/15 text-white hover:bg-black/70 active:scale-90 transition-all shadow-xl flex items-center justify-center"
+            >
+              <Download className="w-4 h-4 text-zinc-300" />
+            </button>
+          )}
+        </div>
+      )}
+
+      {/* Taban Medya Henüz Seçilmediyse: Ortada Minimal Medya Seç Butonu */}
+      {!hasMedia && (
+        <div className="fixed inset-0 flex flex-col items-center justify-center pointer-events-none z-30">
           <button
             type="button"
-            onClick={handleDownloadImage}
-            disabled={isPublishing}
-            className="w-10 h-10 rounded-full bg-black/50 backdrop-blur-md border border-white/15 text-white hover:bg-black/70 active:scale-90 transition-all shadow-xl flex items-center justify-center"
+            onClick={() => baseFileInputRef.current?.click()}
+            className="pointer-events-auto flex items-center gap-2.5 px-6 py-3.5 rounded-2xl bg-white/10 hover:bg-white/15 active:scale-95 backdrop-blur-xl border border-white/20 text-white font-semibold text-sm shadow-2xl transition-all"
           >
-            <Download className="w-4 h-4 text-zinc-300" />
+            <ImageIcon className="w-5 h-5 text-emerald-400" />
+            <span>Fotoğraf veya Video Seç</span>
           </button>
         </div>
       )}
@@ -1009,6 +1107,36 @@ export default function ShareStoryPage() {
                   }`}
                 />
               ))}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 14. ÇIKIŞ VE DEĞİŞİKLİKLERİ SİLME ONAY MODALI */}
+      {showExitConfirm && (
+        <div className="fixed inset-0 z-50 bg-black/75 backdrop-blur-md flex items-center justify-center p-6 animate-in fade-in duration-150 pointer-events-auto">
+          <div className="w-full max-w-xs rounded-3xl bg-neutral-900/95 border border-white/10 p-5 text-center shadow-2xl animate-in zoom-in-95 duration-150">
+            <h3 className="text-white font-bold text-base mb-1.5">
+              Değişiklikler silinsin mi?
+            </h3>
+            <p className="text-zinc-400 text-xs mb-5">
+              Şimdi çıkarsanız yaptığınız tüm değişiklikler kaybolacak.
+            </p>
+            <div className="flex flex-col gap-2">
+              <button
+                type="button"
+                onClick={handleConfirmExit}
+                className="w-full py-2.5 rounded-xl bg-red-600 hover:bg-red-500 active:scale-95 transition-all text-white text-xs font-bold shadow-lg shadow-red-600/30"
+              >
+                Değişiklikleri Sil
+              </button>
+              <button
+                type="button"
+                onClick={() => setShowExitConfirm(false)}
+                className="w-full py-2.5 rounded-xl bg-white/10 hover:bg-white/15 active:scale-95 transition-all text-white text-xs font-semibold"
+              >
+                Düzenlemeye Devam Et
+              </button>
             </div>
           </div>
         </div>
