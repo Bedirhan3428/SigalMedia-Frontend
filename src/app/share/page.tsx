@@ -131,7 +131,7 @@ export default function ShareStoryPage() {
   const guardTriggeredRef = useRef(false);
 
   // Editör Durumları
-  const [canvasKey, setCanvasKey] = useState<number>(() => Date.now());
+  const [canvasKey, setCanvasKey] = useState<number>(0);
   const [hasMedia, setHasMedia] = useState(false);
   const [selectedLayer, setSelectedLayer] = useState<BaseLayer | null>(null);
   const [filterToast, setFilterToast] = useState<string | null>(null);
@@ -189,7 +189,7 @@ export default function ShareStoryPage() {
         ctx.clearRect(0, 0, canvasRef.current.width, canvasRef.current.height);
       }
     }
-    setCanvasKey(Date.now());
+    setCanvasKey((prev) => prev + 1);
     setMounted(true);
     guardTriggeredRef.current = false;
     if (baseFileInputRef.current) baseFileInputRef.current.value = "";
@@ -229,7 +229,7 @@ export default function ShareStoryPage() {
         ctx.clearRect(0, 0, canvasRef.current.width, canvasRef.current.height);
       }
     }
-    setCanvasKey(Date.now());
+    setCanvasKey((prev) => prev + 1);
     if (baseFileInputRef.current) baseFileInputRef.current.value = "";
     if (overlayFileInputRef.current) overlayFileInputRef.current.value = "";
 
