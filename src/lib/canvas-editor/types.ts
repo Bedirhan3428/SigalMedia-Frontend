@@ -35,7 +35,7 @@ export interface Rect {
   height: number;
 }
 
-export type OverlayShapeMode = 'rounded' | 'circle' | 'polaroid' | 'heart' | 'star';
+export type OverlayShapeMode = 'original' | 'rounded' | 'circle' | 'polaroid' | 'heart' | 'star';
 export type FontPreset = 'modern' | 'classic' | 'neon' | 'typewriter' | 'heavy';
 export type TextBgPreset = 'none' | 'solid' | 'translucent' | 'neon';
 

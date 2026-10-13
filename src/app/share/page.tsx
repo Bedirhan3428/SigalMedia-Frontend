@@ -131,6 +131,7 @@ export default function ShareStoryPage() {
   const guardTriggeredRef = useRef(false);
 
   // Editör Durumları
+  const [canvasKey, setCanvasKey] = useState<number>(() => Date.now());
   const [hasMedia, setHasMedia] = useState(false);
   const [selectedLayer, setSelectedLayer] = useState<BaseLayer | null>(null);
   const [filterToast, setFilterToast] = useState<string | null>(null);
@@ -181,6 +182,14 @@ export default function ShareStoryPage() {
       }
     }
 
+    // Tuvali ve arkaplanı kesin olarak sıfırla, yeni bir tuval anahtarı üret
+    if (canvasRef.current) {
+      const ctx = canvasRef.current.getContext("2d");
+      if (ctx) {
+        ctx.clearRect(0, 0, canvasRef.current.width, canvasRef.current.height);
+      }
+    }
+    setCanvasKey(Date.now());
     setMounted(true);
     guardTriggeredRef.current = false;
     if (baseFileInputRef.current) baseFileInputRef.current.value = "";
@@ -198,6 +207,12 @@ export default function ShareStoryPage() {
         engineRef.current.destroy();
         engineRef.current = null;
       }
+      if (canvasRef.current) {
+        const ctx = canvasRef.current.getContext("2d");
+        if (ctx) {
+          ctx.clearRect(0, 0, canvasRef.current.width, canvasRef.current.height);
+        }
+      }
     };
   }, [router]);
 
@@ -208,6 +223,13 @@ export default function ShareStoryPage() {
       engineRef.current.destroy();
       engineRef.current = null;
     }
+    if (canvasRef.current) {
+      const ctx = canvasRef.current.getContext("2d");
+      if (ctx) {
+        ctx.clearRect(0, 0, canvasRef.current.width, canvasRef.current.height);
+      }
+    }
+    setCanvasKey(Date.now());
     if (baseFileInputRef.current) baseFileInputRef.current.value = "";
     if (overlayFileInputRef.current) overlayFileInputRef.current.value = "";
 
@@ -276,15 +298,21 @@ export default function ShareStoryPage() {
     };
   }, [hasMedia]);
 
-  // Tuval Motorunu Başlatma (Instagram 9:16 Dikey Çözünürlük, Olay Tetiklemeli Çizim)
+  // Tuval Motorunu Başlatma (Tam Ekran Uygulama Boyutları)
   const getOrCreateEngine = useCallback(() => {
     if (engineRef.current) return engineRef.current;
     if (!canvasRef.current) return null;
 
+    const vw = typeof window !== "undefined" ? window.innerWidth : 1080;
+    const vh = typeof window !== "undefined" ? window.innerHeight : 1920;
+    const aspect = vh / (vw || 1);
+    const canvasWidth = 1080;
+    const canvasHeight = Math.round(1080 * aspect);
+
     const engine = new CanvasEngine({
       canvas: canvasRef.current,
-      width: 1080,
-      height: 1920,
+      width: canvasWidth,
+      height: canvasHeight,
       fitMode: "contain",
     });
 
@@ -372,6 +400,23 @@ export default function ShareStoryPage() {
 
     engineRef.current = engine;
     return engine;
+  }, []);
+
+  // Pencere boyutu değiştiğinde tuval çözünürlüğünü dinamik olarak güncelle
+  useEffect(() => {
+    const handleResize = () => {
+      if (engineRef.current && canvasRef.current) {
+        const vw = window.innerWidth || 1080;
+        const vh = window.innerHeight || 1920;
+        const aspect = vh / (vw || 1);
+        const w = 1080;
+        const h = Math.round(1080 * aspect);
+        engineRef.current.updateCanvasResolution(w, h);
+      }
+    };
+
+    window.addEventListener("resize", handleResize);
+    return () => window.removeEventListener("resize", handleResize);
   }, []);
 
   // ─────────────────────────────────────────────────────────────
@@ -678,7 +723,7 @@ export default function ShareStoryPage() {
         className="hidden"
       />
 
-      {/* 3. TAM EKRAN ÇERÇEVESİZ TUVAL (BORDERLESS CANVAS STAGE - KATMAN 0 & KATMAN 1) */}
+      {/* 3. TAM EKRAN ÇERÇEVESİZ TUVAL (BORDERLESS CANVAS STAGE - TÜM EKRANI KAPLAR) */}
       <div
         className="fixed inset-0 w-full h-full flex items-center justify-center overflow-hidden select-none"
         style={{
@@ -688,16 +733,14 @@ export default function ShareStoryPage() {
         }}
       >
         <canvas
+          key={canvasKey}
           ref={canvasRef}
           style={{
-            aspectRatio: "9 / 16",
-            maxWidth: "100%",
-            maxHeight: "100%",
-            width: "auto",
-            height: "auto",
+            width: "100%",
+            height: "100%",
             touchAction: "none",
           }}
-          className="shadow-2xl cursor-default"
+          className="w-full h-full block cursor-default select-none touch-none"
         />
       </div>
 

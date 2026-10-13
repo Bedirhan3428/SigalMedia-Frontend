@@ -6,7 +6,7 @@ export class OverlayImageLayer extends BaseLayer {
   public image: HTMLImageElement;
   public naturalWidth: number;
   public naturalHeight: number;
-  public shapeMode: OverlayShapeMode = 'rounded';
+  public shapeMode: OverlayShapeMode = 'original';
 
   constructor(options: {
     image: HTMLImageElement;
@@ -34,11 +34,11 @@ export class OverlayImageLayer extends BaseLayer {
   }
 
   /**
-   * Tek tıkla 5'li Şekil Döngüsü:
-   * Mod 1 (rounded) -> Mod 2 (circle) -> Mod 3 (polaroid) -> Mod 4 (heart) -> Mod 5 (star)
+   * Tek tıkla 6'lı Şekil Döngüsü:
+   * Mod 1 (original) -> Mod 2 (rounded) -> Mod 3 (circle) -> Mod 4 (polaroid) -> Mod 5 (heart) -> Mod 6 (star)
    */
   public cycleShapeMode(): OverlayShapeMode {
-    const sequence: OverlayShapeMode[] = ['rounded', 'circle', 'polaroid', 'heart', 'star'];
+    const sequence: OverlayShapeMode[] = ['original', 'rounded', 'circle', 'polaroid', 'heart', 'star'];
     const currentIndex = sequence.indexOf(this.shapeMode);
     const nextIndex = (currentIndex + 1) % sequence.length;
     this.shapeMode = sequence[nextIndex];
@@ -46,10 +46,27 @@ export class OverlayImageLayer extends BaseLayer {
   }
 
   /**
-   * İkincil fotoğraf tuval genişliğinin %40'ı boyutunda açılır.
+   * İkincil fotoğraf boyutları:
+   * 'original' modunda görselin gerçek en-boy oranı korunarak açılır.
    */
   public getBaseDimensions(canvasWidth: number): { width: number; height: number } {
     const size = canvasWidth * 0.40;
+
+    if (this.shapeMode === 'original') {
+      const nw = this.naturalWidth || 300;
+      const nh = this.naturalHeight || 300;
+      const aspect = nw / nh;
+      if (aspect >= 1) {
+        const w = canvasWidth * 0.48;
+        const h = w / aspect;
+        return { width: w, height: h };
+      } else {
+        const h = canvasWidth * 0.54;
+        const w = h * aspect;
+        return { width: Math.max(canvasWidth * 0.28, w), height: h };
+      }
+    }
+
     if (this.shapeMode === 'polaroid') {
       return {
         width: size,
@@ -130,7 +147,56 @@ export class OverlayImageLayer extends BaseLayer {
     const cornerRadius = Math.round(20 * (canvasWidth / 414));
 
     // ─────────────────────────────────────────────────────────────
-    // MOD 3: BEYAZ ÇERÇEVELİ POLAROID
+    // MOD 1: ORİJİNAL EN-BOY ORANI (ORİJİNAL BOYUT & ZARİF KÖŞELER)
+    // ─────────────────────────────────────────────────────────────
+    if (this.shapeMode === 'original') {
+      const origW = dims.width;
+      const origH = dims.height;
+      const origRadius = Math.max(8, Math.round(14 * (canvasWidth / 414)));
+
+      ctx.shadowColor = 'rgba(0, 0, 0, 0.38)';
+      ctx.shadowBlur = this.isInteracting ? 26 : 16;
+      ctx.shadowOffsetX = 0;
+      ctx.shadowOffsetY = this.isInteracting ? 8 : 4;
+
+      ctx.beginPath();
+      if (typeof ctx.roundRect === 'function') {
+        ctx.roundRect(-origW / 2, -origH / 2, origW, origH, origRadius);
+      } else {
+        ctx.rect(-origW / 2, -origH / 2, origW, origH);
+      }
+      ctx.closePath();
+
+      ctx.fillStyle = '#000000';
+      ctx.fill();
+
+      ctx.save();
+      ctx.shadowColor = 'transparent';
+      ctx.shadowBlur = 0;
+      ctx.beginPath();
+      if (typeof ctx.roundRect === 'function') {
+        ctx.roundRect(-origW / 2, -origH / 2, origW, origH, origRadius);
+      } else {
+        ctx.rect(-origW / 2, -origH / 2, origW, origH);
+      }
+      ctx.closePath();
+      ctx.clip();
+
+      ctx.drawImage(
+        this.image,
+        -origW / 2,
+        -origH / 2,
+        origW,
+        origH
+      );
+      ctx.restore();
+
+      ctx.restore();
+      return;
+    }
+
+    // ─────────────────────────────────────────────────────────────
+    // MOD 4: BEYAZ ÇERÇEVELİ POLAROID
     // ─────────────────────────────────────────────────────────────
     if (this.shapeMode === 'polaroid') {
       const cardW = dims.width;

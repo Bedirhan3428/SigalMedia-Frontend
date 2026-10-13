@@ -518,5 +518,10 @@ export class CanvasEngine {
   public destroy() {
     this.interactionManager.destroy();
     this.listeners.clear();
+    this.mediaLayer = null;
+    this.overlayLayers = [];
+    try {
+      this.ctx.clearRect(0, 0, this.width, this.height);
+    } catch {}
   }
 }
