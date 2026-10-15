@@ -43,10 +43,13 @@ export interface StoryAudioMeta {
   id: string;
   title: string;
   artist: string;
-  url: string;
-  duration: number; // e.g. 15s
+  album?: string;
+  thumbnail?: string;
+  streamUrl: string;
   startTime: number;
-  coverUrl?: string;
+  duration: number;
+  totalDuration: number;
+  lyricsSnippet?: string;
 }
 
 export interface SnapGuideState {

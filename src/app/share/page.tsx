@@ -11,12 +11,13 @@ import {
   BaseLayer,
   TextLayer,
   OverlayImageLayer,
-  MusicStickerLayer,
   FontPreset,
   TextBgPreset,
   FONT_PRESET_CONFIGS,
   StoryAudioMeta,
 } from "@/lib/canvas-editor";
+import MusicPickerDrawer from "@/components/share/MusicPickerDrawer";
+import { commitAudioClip } from "@/services/soundService";
 import {
   ChevronLeft,
   Image as ImageIcon,
@@ -29,18 +30,15 @@ import {
   AlignRight,
   CaseSensitive,
   Sticker,
-  Music,
   CircleChevronRight,
   X,
   Search,
   Sparkles,
   Play,
   Pause,
-  Flame,
   Check,
+  Music,
 } from "lucide-react";
-import { getSongHeatmapAndHotspot, processSongShareAndGetUrl } from "@/services/audioTracker";
-import { ChunkSlice } from "@/utils/audioChunkMath";
 
 // 18 Canlı Instagram Hikaye Renk Paleti
 const STORY_COLORS = [
@@ -64,7 +62,7 @@ const STORY_COLORS = [
   "#F43F5E", // Gül
 ];
 
-type ActiveDrawer = "none" | "sticker_sheet" | "music" | "tag";
+type ActiveDrawer = "none" | "sticker_sheet" | "tag";
 
 let hasHandledShareReload = false;
 
@@ -89,7 +87,6 @@ export default function ShareStoryPage() {
   const [filterToast, setFilterToast] = useState<string | null>(null);
   const [activeFilterGradient, setActiveFilterGradient] = useState<string>("#000000");
   const [activeDrawer, setActiveDrawer] = useState<ActiveDrawer>("none");
-  const [selectedMusic, setSelectedMusic] = useState<StoryAudioMeta | null>(null);
 
   // Mıknatıslı Çöp Kutusu Durumu
   const [isDraggingObject, setIsDraggingObject] = useState(false);
@@ -103,17 +100,9 @@ export default function ShareStoryPage() {
   const [activeTextColor, setActiveTextColor] = useState("#FFFFFF");
   const [activeTextAlign, setActiveTextAlign] = useState<"left" | "center" | "right">("center");
 
-  // Müzik Durumları & HTML5 Ses Oynatıcı
-  const audioRef = useRef<HTMLAudioElement | null>(null);
-  const [isPlayingAudio, setIsPlayingAudio] = useState(false);
-  const [audioLoading, setAudioLoading] = useState(false);
-  const [previewTrack, setPreviewTrack] = useState<any | null>(null);
-  const [musicResults, setMusicResults] = useState<any[]>([]);
-  const [isSearchingMusic, setIsSearchingMusic] = useState(false);
-  const [selectedStartSec, setSelectedStartSec] = useState<number>(0);
-  const [hotspot, setHotspot] = useState<ChunkSlice | null>(null);
-  const [heatmapChunks, setHeatmapChunks] = useState<ChunkSlice[]>([]);
-  const [searchMusicQuery, setSearchMusicQuery] = useState("");
+  // Müzik Durumları
+  const [isMusicDrawerOpen, setIsMusicDrawerOpen] = useState(false);
+  const [selectedMusic, setSelectedMusic] = useState<StoryAudioMeta | null>(null);
 
   // İşlem Durumları
   const [isPublishing, setIsPublishing] = useState(false);
@@ -199,13 +188,6 @@ export default function ShareStoryPage() {
     setFilterToast(null);
     setActiveFilterGradient("#000000");
     setActiveDrawer("none");
-    setSelectedMusic(null);
-    setPreviewTrack(null);
-    if (audioRef.current) {
-      audioRef.current.pause();
-      audioRef.current.src = "";
-    }
-    setIsPlayingAudio(false);
     setIsDraggingObject(false);
     setIsTrashHot(false);
     setIsTextEditing(false);
@@ -214,6 +196,8 @@ export default function ShareStoryPage() {
     setActiveBgPreset("solid");
     setActiveTextColor("#FFFFFF");
     setActiveTextAlign("center");
+    setSelectedMusic(null);
+    setIsMusicDrawerOpen(false);
     setShowExitConfirm(false);
     guardTriggeredRef.current = false;
   }, []);
@@ -221,60 +205,9 @@ export default function ShareStoryPage() {
   // Sayfadan çıkışta sesi tamamen durdur
   useEffect(() => {
     return () => {
-      if (audioRef.current) {
-        audioRef.current.pause();
-        audioRef.current.src = "";
-      }
     };
   }, []);
-
-  // 15 Saniyelik Kesintisiz Döngü (Instagram Reels & Stories Loop)
-  useEffect(() => {
-    const audio = audioRef.current;
-    if (!audio) return;
-
-    const handleTimeUpdate = () => {
-      if (audio.currentTime >= selectedStartSec + 15 || audio.currentTime < selectedStartSec) {
-        audio.currentTime = selectedStartSec;
-      }
-    };
-
-    const handleEnded = () => {
-      audio.currentTime = selectedStartSec;
-      audio.play().catch(() => {});
-    };
-
-    audio.addEventListener("timeupdate", handleTimeUpdate);
-    audio.addEventListener("ended", handleEnded);
-    return () => {
-      audio.removeEventListener("timeupdate", handleTimeUpdate);
-      audio.removeEventListener("ended", handleEnded);
-    };
-  }, [selectedStartSec]);
-
-  // Canlı Müzik Arama (YouTube Music Arama Motoru Debounced)
-  useEffect(() => {
-    if (activeDrawer !== "music") return;
-
-    const trimmed = searchMusicQuery.trim();
-    const q = trimmed || "popüler türkçe";
-    setIsSearchingMusic(true);
-
-    const timer = setTimeout(async () => {
-      try {
-        const res = await fetch(`/api/music/proxy?type=search&q=${encodeURIComponent(q)}&limit=20`);
-        const json = await res.json();
-        const items = json?.data || json?.results || (Array.isArray(json) ? json : []);
-        setMusicResults(items);
-      } catch (err) {
-        console.error("Music search error:", err);
-      } finally {
-        setIsSearchingMusic(false);
-      }
-    }, 280);
-
-    return () => clearTimeout(timer);
-  }, [searchMusicQuery, activeDrawer]);
+  
 
   // Geri Butonu Tıklaması
   const handleBackClick = () => {
@@ -409,13 +342,8 @@ export default function ShareStoryPage() {
         const dist = Math.hypot(info.clientX - trashCenterX, info.clientY - trashCenterY);
 
         if (dist < 75) {
-          if (info.layer instanceof MusicStickerLayer) {
+          if (info.layer.type === "music_sticker") {
             setSelectedMusic(null);
-            setPreviewTrack(null);
-            if (audioRef.current) {
-              audioRef.current.pause();
-            }
-            setIsPlayingAudio(false);
           }
           engine.removeLayer(info.layer.id);
           setSelectedLayer(null);
@@ -624,131 +552,12 @@ export default function ShareStoryPage() {
     setSelectedLayer(layer);
   };
 
-  // Şarkıyı Seç ve Önizleme Çal (Isı Haritası ve Popüler Kısım ile Sıfır Bekleme)
-  const handlePreviewTrack = async (track: any) => {
-    // 1. Aynı şarkıya tıklandıysa: Oynat / Durdur (Toggle)
-    if (previewTrack?.id === track.id && audioRef.current) {
-      if (isPlayingAudio) {
-        audioRef.current.pause();
-        setIsPlayingAudio(false);
-      } else {
-        audioRef.current.play().then(() => setIsPlayingAudio(true)).catch(() => {});
-      }
-      return;
-    }
-
-    try {
-      setAudioLoading(true);
-      setPreviewTrack(track);
-
-      if (!audioRef.current) {
-        audioRef.current = new Audio();
-      }
-      const audio = audioRef.current;
-      audio.pause();
-      audio.src = `/api/music/stream?id=${track.id}`;
-      audio.currentTime = 0;
-      setSelectedStartSec(0);
-
-      audio.oncanplay = () => {
-        setAudioLoading(false);
-      };
-      audio.onerror = () => {
-        setAudioLoading(false);
-        setIsPlayingAudio(false);
-      };
-
-      // Anında oynatmayı başlat (Kullanıcı jesti bağlamında beklemesiz)
-      audio.play().then(() => {
-        setIsPlayingAudio(true);
-        setAudioLoading(false);
-      }).catch((playErr) => {
-        console.warn("Audio play warning:", playErr);
-        setIsPlayingAudio(false);
-        setAudioLoading(false);
-      });
-
-      // Isı haritası ve patlayan yeri arka planda asenkron al (Oynatmayı engellemez)
-      const dur = track.duration || 180;
-      getSongHeatmapAndHotspot(db, track.id, dur).then(({ slices, hotspot: hot }) => {
-        setHeatmapChunks(slices);
-        setHotspot(hot);
-        const startSec = hot?.start || 0;
-        if (startSec > 0) {
-          setSelectedStartSec(startSec);
-          if (audioRef.current && audioRef.current.currentTime < 2) {
-            audioRef.current.currentTime = startSec;
-          }
-        }
-      }).catch((hmErr) => {
-        console.warn("Heatmap fetch skipped:", hmErr);
-      });
-
-    } catch (err) {
-      console.error("Audio preview error:", err);
-      setIsPlayingAudio(false);
-      setAudioLoading(false);
-    }
-  };
-
-  // Slider İle 15 Saniyelik Dilimi Değiştirme
-  const handleSeekChunk = (sec: number) => {
-    setSelectedStartSec(sec);
-    if (audioRef.current) {
-      audioRef.current.currentTime = sec;
-      if (audioRef.current.paused) {
-        audioRef.current.play().then(() => setIsPlayingAudio(true)).catch(() => {});
-      }
-    }
-  };
-
-  // Seçilen Müziği Hikayeye Ekle
-  const handleConfirmAddMusic = () => {
-    if (!previewTrack) return;
-    const engine = getOrCreateEngine();
-    if (!engine) return;
-
-    const meta: StoryAudioMeta = {
-      id: previewTrack.id,
-      title: previewTrack.title,
-      artist: previewTrack.artist,
-      url: `/api/music/stream?id=${previewTrack.id}`,
-      duration: 15,
-      startTime: selectedStartSec,
-      coverUrl: previewTrack.thumbnail,
-    };
-
+  // Şarkıyı Seç ve Tuvale Çıkartma Olarak Ekle
+  const handleSelectMusic = (meta: StoryAudioMeta) => {
     setSelectedMusic(meta);
-    engine.addMusicSticker(meta, 0.5, 0.68);
-    setActiveDrawer("none");
-  };
-
-  // Çalan Müziği Duraklat / Devam Ettir
-  const handleTogglePlayAudio = () => {
-    if (!audioRef.current) return;
-    if (isPlayingAudio) {
-      audioRef.current.pause();
-      setIsPlayingAudio(false);
-    } else {
-      audioRef.current.play().then(() => setIsPlayingAudio(true)).catch(() => {});
-    }
-  };
-
-  // Müziği Hikayeden Kaldır
-  const handleRemoveMusic = () => {
-    if (audioRef.current) {
-      audioRef.current.pause();
-      audioRef.current.src = "";
-    }
-    setIsPlayingAudio(false);
-    setSelectedMusic(null);
-    setPreviewTrack(null);
-    const engine = engineRef.current;
+    const engine = getOrCreateEngine();
     if (engine) {
-      const sticker = engine.getMusicSticker();
-      if (sticker) {
-        engine.removeLayer(sticker.id);
-      }
+      engine.addMusicSticker(meta, 0.5, 0.65);
     }
   };
 
@@ -806,41 +615,26 @@ export default function ShareStoryPage() {
         createdAt: serverTimestamp(),
       };
 
-      // Müzik seçildiyse akıllı 5. kullanım R2 şutlama ve sayaç takibi
+      // Müzik seçildiyse metaveriyi gönderiye ekle ve R2 commit'i tetikle
       if (selectedMusic) {
-        try {
-          const shareResult = await processSongShareAndGetUrl(
-            db,
-            {
-              id: selectedMusic.id,
-              title: selectedMusic.title,
-              artist: selectedMusic.artist,
-              duration: selectedMusic.duration || 180,
-            },
-            selectedMusic.startTime || 0
-          );
-          postData.audioMeta = {
-            id: selectedMusic.id,
-            title: selectedMusic.title,
-            artist: selectedMusic.artist,
-            url: shareResult.audioUrl,
-            chunkKey: shareResult.chunkKey,
-            startTime: shareResult.start,
-            duration: 15,
-            isShuttled: shareResult.isShuttled,
-            coverUrl: selectedMusic.coverUrl,
-          };
-        } catch (e) {
-          postData.audioMeta = {
-            id: selectedMusic.id,
-            title: selectedMusic.title,
-            artist: selectedMusic.artist,
-            url: selectedMusic.url,
-            startTime: selectedMusic.startTime || 0,
-            duration: 15,
-            coverUrl: selectedMusic.coverUrl,
-          };
-        }
+        postData.audio = {
+          id: selectedMusic.id,
+          title: selectedMusic.title,
+          artist: selectedMusic.artist,
+          album: selectedMusic.album || "",
+          thumbnail: selectedMusic.thumbnail || "",
+          streamUrl: selectedMusic.streamUrl,
+          startTime: selectedMusic.startTime,
+          duration: selectedMusic.duration,
+          totalDuration: selectedMusic.totalDuration,
+          lyricsSnippet: selectedMusic.lyricsSnippet || "",
+        };
+
+        commitAudioClip({
+          videoId: selectedMusic.id,
+          startTime: selectedMusic.startTime,
+          duration: selectedMusic.duration,
+        }).catch((e) => console.warn("Background commit error:", e));
       }
 
       await addDoc(collection(db, "posts"), postData);
@@ -942,33 +736,7 @@ export default function ShareStoryPage() {
             </button>
           )}
 
-          {hasMedia && selectedMusic && (
-            <div className="flex items-center gap-2 pl-3 pr-1.5 py-1.5 rounded-full bg-black/60 backdrop-blur-md border border-pink-500/30 text-white shadow-xl animate-in fade-in duration-150">
-              <button
-                type="button"
-                onClick={handleTogglePlayAudio}
-                className="text-pink-400 hover:text-pink-300 transition-colors flex items-center justify-center"
-                title={isPlayingAudio ? "Duraklat" : "Oynat"}
-              >
-                {isPlayingAudio ? (
-                  <Pause className="w-3.5 h-3.5 fill-current" />
-                ) : (
-                  <Play className="w-3.5 h-3.5 fill-current" />
-                )}
-              </button>
-              <span className="text-xs font-medium max-w-[110px] truncate text-zinc-200">
-                {selectedMusic.title}
-              </span>
-              <button
-                type="button"
-                onClick={handleRemoveMusic}
-                className="p-1 rounded-full text-zinc-400 hover:text-white transition-colors"
-                title="Müziği Kaldır"
-              >
-                <X className="w-3.5 h-3.5" />
-              </button>
-            </div>
-          )}
+          
         </div>
       )}
 
@@ -1014,14 +782,14 @@ export default function ShareStoryPage() {
           {/* #3: Müzik Aracı (Music) */}
           <button
             type="button"
-            onClick={() => setActiveDrawer("music")}
+            onClick={() => setIsMusicDrawerOpen(true)}
             className={`w-10 h-10 rounded-full backdrop-blur-md border transition-all shadow-xl flex items-center justify-center active:scale-90 ${
-              activeDrawer === "music"
-                ? "bg-white text-black border-white"
+              selectedMusic
+                ? "bg-pink-500 text-white border-pink-400 shadow-lg shadow-pink-500/30"
                 : "bg-black/50 border-white/15 text-white hover:bg-black/70"
             }`}
           >
-            <Music className="w-5 h-5 text-pink-400" />
+            <Music className={`w-5 h-5 ${selectedMusic ? "text-white" : "text-pink-400"}`} />
           </button>
 
           {/* #4: @Etiketleme Aracı (AtSign) */}
@@ -1139,7 +907,10 @@ export default function ShareStoryPage() {
             {/* Müzik Kartı */}
             <button
               type="button"
-              onClick={() => setActiveDrawer("music")}
+              onClick={() => {
+                setActiveDrawer("none");
+                setIsMusicDrawerOpen(true);
+              }}
               className="flex flex-col items-center justify-center gap-2 p-3.5 rounded-2xl bg-white/5 hover:bg-white/10 border border-white/10 active:scale-95 transition-all text-white group"
             >
               <div className="w-11 h-11 rounded-full bg-pink-500/20 text-pink-400 flex items-center justify-center group-hover:scale-105 transition-transform">
@@ -1151,157 +922,13 @@ export default function ShareStoryPage() {
         </div>
       )}
 
-      {/* 11. ALTTAN AÇILAN MÜZİK PANELİ */}
-      {activeDrawer === "music" && (
-        <div className="fixed inset-x-0 bottom-0 z-50 rounded-t-3xl backdrop-blur-2xl bg-neutral-900/95 border-t border-white/10 p-5 pb-8 flex flex-col max-h-[72vh] animate-in slide-in-from-bottom duration-200 shadow-2xl">
-          <div className="w-10 h-1 rounded-full bg-white/20 mx-auto mb-3" />
-          <div className="flex items-center justify-between mb-3 px-1">
-            <div className="flex items-center gap-2">
-              <Music className="w-5 h-5 text-pink-400" />
-              <h3 className="text-white font-semibold text-base">Müzik Ekle</h3>
-            </div>
-            <button
-              type="button"
-              onClick={() => setActiveDrawer("none")}
-              className="p-1.5 rounded-full text-zinc-400 hover:text-white transition-colors"
-            >
-              <X className="w-5 h-5" />
-            </button>
-          </div>
-
-          <div className="flex items-center gap-2.5 px-3.5 py-2.5 rounded-xl bg-white/5 border border-white/10 text-zinc-400 mb-3">
-            <Search className="w-4 h-4 text-zinc-400 shrink-0" />
-            <input
-              type="text"
-              value={searchMusicQuery}
-              onChange={(e) => setSearchMusicQuery(e.target.value)}
-              placeholder="Şarkı veya sanatçı ara..."
-              className="bg-transparent text-sm text-white placeholder:text-zinc-500 outline-none w-full"
-            />
-            {isSearchingMusic && <Loader2 className="w-4 h-4 text-pink-400 animate-spin shrink-0" />}
-          </div>
-
-          <div className="space-y-2 overflow-y-auto no-scrollbar flex-1 max-h-[35vh]">
-            {musicResults.map((track) => {
-              const isSelected = selectedMusic?.id === track.id;
-              const isPreviewing = previewTrack?.id === track.id;
-              return (
-                <button
-                  key={track.id}
-                  type="button"
-                  onClick={() => handlePreviewTrack(track)}
-                  className={`w-full flex items-center justify-between p-2.5 rounded-xl border text-left transition-all active:scale-[0.98] ${
-                    isPreviewing
-                      ? "bg-pink-500/15 border-pink-500/40 text-white shadow-lg"
-                      : "bg-white/5 hover:bg-white/10 border-white/5 text-white"
-                  }`}
-                >
-                  <div className="flex items-center gap-3 min-w-0">
-                    <div className="w-11 h-11 rounded-lg bg-zinc-800 overflow-hidden relative shrink-0 flex items-center justify-center">
-                      {track.thumbnail ? (
-                        <img
-                          src={track.thumbnail}
-                          alt={track.title}
-                          className="w-full h-full object-cover"
-                          crossOrigin="anonymous"
-                        />
-                      ) : (
-                        <Music className="w-5 h-5 text-pink-400" />
-                      )}
-                      {isPreviewing && isPlayingAudio && (
-                        <div className="absolute inset-0 bg-black/40 flex items-center justify-center">
-                          <Pause className="w-4 h-4 text-pink-400 fill-current" />
-                        </div>
-                      )}
-                    </div>
-                    <div className="min-w-0">
-                      <p className="text-xs font-bold text-white truncate">{track.title}</p>
-                      <p className="text-[11px] text-zinc-400 truncate">{track.artist}</p>
-                    </div>
-                  </div>
-                  <div className="shrink-0 flex items-center gap-2 text-xs text-zinc-400 pl-2">
-                    <span>{track.durationFormatted || "15s"}</span>
-                    {isPreviewing && isPlayingAudio ? (
-                      <div className="w-4 h-4 flex items-center justify-center">
-                        <span className="w-1.5 h-3 bg-pink-400 rounded-full animate-pulse" />
-                      </div>
-                    ) : (
-                      <Play className="w-3.5 h-3.5 text-zinc-400" />
-                    )}
-                  </div>
-                </button>
-              );
-            })}
-            {musicResults.length === 0 && !isSearchingMusic && (
-              <div className="py-8 text-center text-xs text-zinc-500">
-                Şarkı bulunamadı
-              </div>
-            )}
-          </div>
-
-          {/* Aktif Seçilen Parçanın 15 Saniyelik Snippet / Isı Haritası Barı & Onay Butonu */}
-          {previewTrack && (
-            <div className="mt-3 pt-3 border-t border-white/10 flex flex-col gap-2.5 animate-in fade-in duration-150">
-              <div className="flex items-center justify-between px-1">
-                <span className="text-[11px] font-medium text-zinc-300">
-                  {Math.floor(selectedStartSec / 60)}:{String(Math.floor(selectedStartSec % 60)).padStart(2, "0")} - {Math.floor((selectedStartSec + 15) / 60)}:{String(Math.floor((selectedStartSec + 15) % 60)).padStart(2, "0")} (15s)
-                </span>
-                {hotspot && (
-                  <button
-                    type="button"
-                    onClick={() => handleSeekChunk(hotspot.start)}
-                    className="flex items-center gap-1 px-2 py-0.5 rounded-full bg-amber-500/20 text-amber-300 text-[10px] font-semibold hover:bg-amber-500/30 transition-colors"
-                  >
-                    <Flame className="w-3 h-3 fill-amber-400" />
-                    <span>Popüler Kısım ({hotspot.start}s)</span>
-                  </button>
-                )}
-              </div>
-
-              {/* Isı Haritası Barı & Slider */}
-              <div className="relative w-full h-7 flex items-center">
-                {/* Isı Haritası Blokları */}
-                <div className="absolute inset-x-0 h-4 rounded-md bg-white/5 overflow-hidden flex items-end px-1 gap-0.5">
-                  {(heatmapChunks.length > 0 ? heatmapChunks : Array.from({ length: 12 })).map((c: any, idx: number) => {
-                    const isHot = c?.isHotspot;
-                    const h = isHot ? 100 : Math.min(100, Math.max(25, (c?.intensity || 0.3) * 100));
-                    return (
-                      <div
-                        key={idx}
-                        className={`flex-1 rounded-sm transition-all ${
-                          isHot
-                            ? "bg-amber-400/80 shadow-[0_0_8px_rgba(251,191,36,0.6)]"
-                            : "bg-white/20"
-                        }`}
-                        style={{ height: `${h}%` }}
-                      />
-                    );
-                  })}
-                </div>
-                <input
-                  type="range"
-                  min={0}
-                  max={Math.max(0, (previewTrack.duration || 180) - 15)}
-                  step={1}
-                  value={selectedStartSec}
-                  onChange={(e) => handleSeekChunk(Number(e.target.value))}
-                  className="w-full relative z-10 appearance-none bg-transparent cursor-pointer accent-pink-500 h-7"
-                />
-              </div>
-
-              <button
-                type="button"
-                onClick={handleConfirmAddMusic}
-                className="w-full py-2.5 rounded-xl bg-gradient-to-r from-pink-500 to-rose-500 text-white font-semibold text-xs shadow-lg active:scale-98 transition-all flex items-center justify-center gap-1.5"
-              >
-                <span>Hikayeye Ekle</span>
-                <Check className="w-4 h-4" />
-              </button>
-            </div>
-          )}
-        </div>
-      )}
-
+      {/* 11. ALTTAN AÇILAN MÜZİK ÇEKMECESİ (TAM EKRAN EN ÜSTE KADAR) */}
+      <MusicPickerDrawer
+        isOpen={isMusicDrawerOpen}
+        onClose={() => setIsMusicDrawerOpen(false)}
+        onSelectMusic={handleSelectMusic}
+        currentMusic={selectedMusic}
+      />
       {/* 12. ALTTAN AÇILAN ETİKETLEME PANELİ */}
       {activeDrawer === "tag" && (
         <div className="fixed inset-x-0 bottom-0 z-50 rounded-t-3xl backdrop-blur-2xl bg-neutral-900/95 border-t border-white/10 p-5 pb-8 flex flex-col max-h-[52vh] animate-in slide-in-from-bottom duration-200 shadow-2xl">

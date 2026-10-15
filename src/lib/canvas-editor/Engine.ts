@@ -308,9 +308,14 @@ export class CanvasEngine {
   }
 
   public addMusicSticker(audioMeta: StoryAudioMeta, x = 0.5, y = 0.65): MusicStickerLayer {
-    // Önceki müzik çıkartması varsa güncelle/temizle
+    // Önceki müzik çıkartması varsa kaldır
     this.overlayLayers = this.overlayLayers.filter((l) => !(l instanceof MusicStickerLayer));
-    const layer = new MusicStickerLayer({ audioMeta, x, y });
+    const layer = new MusicStickerLayer({
+      audioMeta,
+      x,
+      y,
+      onUpdate: () => this.requestRender(),
+    });
     this.overlayLayers.push(layer);
     this.interactionManager.setSelectedLayer(layer);
     this.requestRender();
