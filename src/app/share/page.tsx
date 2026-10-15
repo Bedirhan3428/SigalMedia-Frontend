@@ -256,7 +256,8 @@ export default function ShareStoryPage() {
   useEffect(() => {
     if (activeDrawer !== "music") return;
 
-    const q = searchMusicQuery.trim() || "Ezhel";
+    const trimmed = searchMusicQuery.trim();
+    const q = trimmed || "popüler türkçe";
     setIsSearchingMusic(true);
 
     const timer = setTimeout(async () => {
@@ -623,32 +624,69 @@ export default function ShareStoryPage() {
     setSelectedLayer(layer);
   };
 
-  // Şarkıyı Seç ve Önizleme Çal (Isı Haritası ve Popüler Kısım ile)
+  // Şarkıyı Seç ve Önizleme Çal (Isı Haritası ve Popüler Kısım ile Sıfır Bekleme)
   const handlePreviewTrack = async (track: any) => {
+    // 1. Aynı şarkıya tıklandıysa: Oynat / Durdur (Toggle)
+    if (previewTrack?.id === track.id && audioRef.current) {
+      if (isPlayingAudio) {
+        audioRef.current.pause();
+        setIsPlayingAudio(false);
+      } else {
+        audioRef.current.play().then(() => setIsPlayingAudio(true)).catch(() => {});
+      }
+      return;
+    }
+
     try {
       setAudioLoading(true);
       setPreviewTrack(track);
-
-      // Isı haritası ve hotspot al
-      const dur = track.duration || 180;
-      const { slices, hotspot: hot } = await getSongHeatmapAndHotspot(db, track.id, dur);
-      setHeatmapChunks(slices);
-      setHotspot(hot);
-      const startSec = hot?.start || 0;
-      setSelectedStartSec(startSec);
 
       if (!audioRef.current) {
         audioRef.current = new Audio();
       }
       const audio = audioRef.current;
+      audio.pause();
       audio.src = `/api/music/stream?id=${track.id}`;
-      audio.currentTime = startSec;
-      await audio.play();
-      setIsPlayingAudio(true);
+      audio.currentTime = 0;
+      setSelectedStartSec(0);
+
+      audio.oncanplay = () => {
+        setAudioLoading(false);
+      };
+      audio.onerror = () => {
+        setAudioLoading(false);
+        setIsPlayingAudio(false);
+      };
+
+      // Anında oynatmayı başlat (Kullanıcı jesti bağlamında beklemesiz)
+      audio.play().then(() => {
+        setIsPlayingAudio(true);
+        setAudioLoading(false);
+      }).catch((playErr) => {
+        console.warn("Audio play warning:", playErr);
+        setIsPlayingAudio(false);
+        setAudioLoading(false);
+      });
+
+      // Isı haritası ve patlayan yeri arka planda asenkron al (Oynatmayı engellemez)
+      const dur = track.duration || 180;
+      getSongHeatmapAndHotspot(db, track.id, dur).then(({ slices, hotspot: hot }) => {
+        setHeatmapChunks(slices);
+        setHotspot(hot);
+        const startSec = hot?.start || 0;
+        if (startSec > 0) {
+          setSelectedStartSec(startSec);
+          if (audioRef.current && audioRef.current.currentTime < 2) {
+            audioRef.current.currentTime = startSec;
+          }
+        }
+      }).catch((hmErr) => {
+        console.warn("Heatmap fetch skipped:", hmErr);
+      });
+
     } catch (err) {
       console.error("Audio preview error:", err);
       setIsPlayingAudio(false);
-    } finally {
       setAudioLoading(false);
     }
   };

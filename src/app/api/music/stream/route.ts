@@ -23,6 +23,12 @@ export async function GET(req: NextRequest) {
       if (val) headers.set(h, val);
     });
 
+    if (!headers.get('content-type')) {
+      headers.set('content-type', 'audio/mp4');
+    }
+    headers.set('accept-ranges', 'bytes');
+    headers.set('access-control-allow-origin', '*');
+
     return new Response(upstream.body, {
       status: upstream.status,
       headers,
