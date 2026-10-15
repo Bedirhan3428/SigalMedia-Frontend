@@ -16,6 +16,7 @@ const googleSans = localFont({
   ],
   variable: "--font-google-sans",
   display: "swap",
+  preload: false,
 });
 
 export const metadata: Metadata = {
