@@ -282,8 +282,14 @@ export default function MusicPickerDrawer({
   };
 
   // 5. Başlangıç Saniyesi Değişimi
-  const getMaxStart = () =>
-    Math.max(0, (selectedTrack?.duration || 0) - FIXED_DURATION);
+  const getMaxStart = () => {
+    const audioDur = audioRef.current?.duration;
+    const effectiveDuration =
+      audioDur && !isNaN(audioDur) && isFinite(audioDur) && audioDur > 0
+        ? Math.floor(audioDur)
+        : (selectedTrack?.duration || 0);
+    return Math.max(0, effectiveDuration - FIXED_DURATION);
+  };
   const clampStart = (sec: number) =>
     Math.round(Math.min(getMaxStart(), Math.max(0, sec)) * 10) / 10;
   const getPxPerSec = () =>
@@ -472,6 +478,7 @@ export default function MusicPickerDrawer({
       {/* Görünmez Canlı Ses Akışı Oynatıcısı */}
       <audio
         ref={audioRef}
+        crossOrigin="anonymous"
         onCanPlay={() => {
           setIsAudioLoading(false);
           setAudioErrorTrackId(null);
@@ -487,21 +494,31 @@ export default function MusicPickerDrawer({
             const cur = audioRef.current.currentTime;
             const endSec = selectedStartSec + FIXED_DURATION;
             if (cur >= endSec) {
-              audioRef.current.currentTime = selectedStartSec;
+              try {
+                audioRef.current.currentTime = selectedStartSec;
+              } catch {}
             }
           }
         }}
         onError={() => {
           setIsPlaying(false);
           setIsAudioLoading(false);
+          // Eğer 30s alanının sonuna gelindiyse veya dosya sonu hatasıysa başa al
+          if (audioRef.current) {
+            try {
+              audioRef.current.currentTime = selectedStartSec;
+            } catch {}
+          }
           if (selectedTrack) {
             setAudioErrorTrackId(selectedTrack.id);
           }
         }}
         onEnded={() => {
           if (audioRef.current) {
-            audioRef.current.currentTime = selectedStartSec;
-            audioRef.current.play().catch(() => {});
+            try {
+              audioRef.current.currentTime = selectedStartSec;
+              audioRef.current.play().catch(() => {});
+            } catch {}
           }
         }}
         preload="auto"

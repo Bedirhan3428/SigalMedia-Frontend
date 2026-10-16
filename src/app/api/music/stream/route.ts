@@ -45,6 +45,14 @@ export async function GET(req: NextRequest) {
         headers.set('accept-ranges', 'bytes');
         headers.set('access-control-allow-origin', '*');
 
+        if (upstream.status === 416) {
+          headers.set('content-length', '0');
+          return new Response(null, {
+            status: 416,
+            headers,
+          });
+        }
+
         return new Response(upstream.body, {
           status: upstream.status,
           headers,
