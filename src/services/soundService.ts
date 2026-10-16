@@ -81,7 +81,7 @@ export function parseDurationToSeconds(val: unknown): number {
 /**
  * Ses mikroservisinde şarkı arama
  */
-export async function searchTracks(query: string, limit = 20): Promise<SoundTrack[]> {
+export async function searchTracks(query: string, limit = 20, signal?: AbortSignal): Promise<SoundTrack[]> {
   const trimmed = query.trim();
   const searchQ = trimmed.length > 0 ? trimmed : 'Tarkan';
 
@@ -96,6 +96,7 @@ export async function searchTracks(query: string, limit = 20): Promise<SoundTrac
     const res = await fetch(url, {
       method: 'GET',
       headers: isClient ? {} : { 'x-api-key': SOUND_API_KEY },
+      signal,
     });
 
     if (!res.ok) {
@@ -105,6 +106,7 @@ export async function searchTracks(query: string, limit = 20): Promise<SoundTrac
       )}&apiKey=${encodeURIComponent(SOUND_API_KEY)}`;
       const fallbackRes = await fetch(fallbackUrl, {
         headers: { 'x-api-key': SOUND_API_KEY },
+        signal,
       });
       if (!fallbackRes.ok) return [];
       const fallbackData = await fallbackRes.json();
@@ -142,26 +144,31 @@ export async function searchTracks(query: string, limit = 20): Promise<SoundTrac
         streamUrl: getAudioStreamUrl(item.id),
       };
     });
-  } catch (err) {
+  } catch (err: any) {
+    if (err.name === 'AbortError') {
+      return [];
+    }
     console.warn('[soundService] searchTracks error:', err);
     return [];
   }
 }
 
 /**
- * RAM ses önbelleğini ön ısıtma (Prefetch / Warmup)
+ * RAM ses önbelleğini ön ısıtma ve R2 kalıcı havuzuna alma (Prefetch / Warmup)
  */
 export function warmTrackAudio(videoId: string): void {
   if (!videoId) return;
-  fetch(
-    `${SOUND_SERVICE_URL}/api/audio/warm?id=${encodeURIComponent(
-      videoId
-    )}&apiKey=${encodeURIComponent(SOUND_API_KEY)}`,
-    {
-      method: 'GET',
-      headers: { 'x-api-key': SOUND_API_KEY },
-    }
-  ).catch(() => {});
+  const isClient = typeof window !== 'undefined';
+  const url = isClient
+    ? `/api/music/proxy?type=warm&id=${encodeURIComponent(videoId)}`
+    : `${SOUND_SERVICE_URL}/api/audio/warm?id=${encodeURIComponent(
+        videoId
+      )}&apiKey=${encodeURIComponent(SOUND_API_KEY)}`;
+
+  fetch(url, {
+    method: 'GET',
+    headers: isClient ? {} : { 'x-api-key': SOUND_API_KEY },
+  }).catch(() => {});
 }
 
 /**

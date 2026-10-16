@@ -27,6 +27,9 @@ export async function GET(req: NextRequest) {
   } else if (type === 'hot-chunks') {
     const id = searchParams.get('id') || '';
     pathAndQuery = `/api/audio/hot-chunks?id=${encodeURIComponent(id)}`;
+  } else if (type === 'warm') {
+    const id = searchParams.get('id') || '';
+    pathAndQuery = `/api/audio/warm?id=${encodeURIComponent(id)}`;
   } else {
     return NextResponse.json({ error: 'Geçersiz istek tipi' }, { status: 400 });
   }

@@ -18,6 +18,7 @@ import {
   getAudioStreamUrl,
   getTrackHotChunks,
   getTrackLyrics,
+  warmTrackAudio,
   formatSeconds,
   LyricLine,
   HotChunk,
@@ -83,6 +84,7 @@ export default function MusicPickerDrawer({
 
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const searchTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const searchAbortControllerRef = useRef<AbortController | null>(null);
   const animFrameRef = useRef<number | null>(null);
   const pendingSeekRef = useRef<number | null>(null);
   const dragRef = useRef<{ x: number; startSec: number; lastSec: number } | null>(null);
@@ -159,20 +161,45 @@ export default function MusicPickerDrawer({
 
     return () => {
       isMounted = false;
+      if (searchTimeoutRef.current) clearTimeout(searchTimeoutRef.current);
+      if (searchAbortControllerRef.current) searchAbortControllerRef.current.abort();
     };
   }, [isOpen]);
 
-  // 2. Arama Sorgusu Debounce
+  // 2. Arama Sorgusu (400ms İdeal Eşik + Karakter Kotası + AbortController)
   const handleSearchChange = (val: string) => {
     setSearchQuery(val);
     if (searchTimeoutRef.current) clearTimeout(searchTimeoutRef.current);
 
-    searchTimeoutRef.current = setTimeout(async () => {
-      setIsSearching(true);
-      const results = await searchTracks(val, 20);
-      setTracks(results);
+    // Önceki uçuşta olan HTTP isteğini tarayıcı seviyesinde hemen sonlandır
+    if (searchAbortControllerRef.current) {
+      searchAbortControllerRef.current.abort();
+      searchAbortControllerRef.current = null;
+    }
+
+    const trimmed = val.trim();
+
+    // Karakter Kotası: 1 harfli aramalar YouTube backend'ini anlamsızca yormaması için tetiklenmez
+    if (trimmed.length === 1) {
       setIsSearching(false);
-    }, 350);
+      return;
+    }
+
+    // 400ms İdeal Eşik: Kullanıcı yazmayı bitirdiğinde gecikme hissettirmeden tetiklenir
+    searchTimeoutRef.current = setTimeout(async () => {
+      const abortController = new AbortController();
+      searchAbortControllerRef.current = abortController;
+      setIsSearching(true);
+
+      const queryToSearch = trimmed.length === 0 ? "trend" : trimmed;
+      const results = await searchTracks(queryToSearch, 20, abortController.signal);
+
+      // Sadece istek iptal edilmediyse sonuçları ekrana bas (eski yanıtlar yenilerin üstüne yazılamaz)
+      if (!abortController.signal.aborted) {
+        setTracks(results);
+        setIsSearching(false);
+      }
+    }, 400);
   };
 
   // 3. Şarkı Seçimi & Ses Yükleme
@@ -180,6 +207,8 @@ export default function MusicPickerDrawer({
     setSelectedTrack(track);
     setAudioErrorTrackId(null);
     setIsAudioLoading(true);
+
+    warmTrackAudio(track.id);
 
     const maxStart = Math.max(0, track.duration - FIXED_DURATION);
     const defaultStart = Math.min(30, Math.floor(maxStart * 0.2));
@@ -205,6 +234,23 @@ export default function MusicPickerDrawer({
           setIsPlaying(false);
           setIsAudioLoading(false);
         });
+    }
+  }, []);
+
+  // Hover Debounce Ön-Isıtma (Kullanıcı fareyle şarkının üzerinde 800ms durursa sessizce ön-yükle)
+  const hoverWarmupTimerRef = useRef<{ [trackId: string]: NodeJS.Timeout }>({});
+  const handleTrackHover = useCallback((trackId: string) => {
+    if (hoverWarmupTimerRef.current[trackId]) return;
+    hoverWarmupTimerRef.current[trackId] = setTimeout(() => {
+      warmTrackAudio(trackId);
+      delete hoverWarmupTimerRef.current[trackId];
+    }, 800);
+  }, []);
+
+  const handleTrackLeave = useCallback((trackId: string) => {
+    if (hoverWarmupTimerRef.current[trackId]) {
+      clearTimeout(hoverWarmupTimerRef.current[trackId]);
+      delete hoverWarmupTimerRef.current[trackId];
     }
   }, []);
 
@@ -527,6 +573,8 @@ export default function MusicPickerDrawer({
             <div
               key={track.id}
               onClick={() => handleSelectTrack(track)}
+              onMouseEnter={() => handleTrackHover(track.id)}
+              onMouseLeave={() => handleTrackLeave(track.id)}
               className={`w-full flex items-center justify-between p-2.5 rounded-2xl border cursor-pointer transition-all active:scale-[0.99] ${
                 isSelected
                   ? "bg-pink-500/15 border-pink-500/40 text-white shadow-xl shadow-pink-500/10"
