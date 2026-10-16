@@ -24,6 +24,7 @@ import {
   HotChunk,
 } from "@/services/soundService";
 import { StoryAudioMeta } from "@/lib/canvas-editor";
+import { getCachedAudioUrl, loadFullAudioUrl } from "@/lib/audio/fullAudioBuffer";
 
 interface MusicPickerDrawerProps {
   isOpen: boolean;
@@ -87,6 +88,10 @@ export default function MusicPickerDrawer({
   const searchAbortControllerRef = useRef<AbortController | null>(null);
   const animFrameRef = useRef<number | null>(null);
   const pendingSeekRef = useRef<number | null>(null);
+  const fullAudioAbortRef = useRef<AbortController | null>(null);
+  const activeTrackIdRef = useRef<string | null>(null);
+  const resumeAfterSwapRef = useRef(false);
+  const playIntentRef = useRef(false);
   const dragRef = useRef<{ x: number; startSec: number; lastSec: number } | null>(null);
   const wheelSecRef = useRef<number | null>(null);
   const wheelTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -99,6 +104,11 @@ export default function MusicPickerDrawer({
   const lyricRef = useRef("");
   startRef.current = selectedStartSec;
   ppsRef.current = viewportWidth > 0 ? viewportWidth / VIEW_WINDOW_SEC : 0;
+
+  // Bileşen kaldırılırken süren tam indirmeyi iptal et
+  useEffect(() => {
+    return () => fullAudioAbortRef.current?.abort();
+  }, []);
 
   // Yükleme durumu için emniyet zaman aşımı (maksimum 2 saniye sonra yükleniyor zorla kapanır)
   useEffect(() => {
@@ -132,6 +142,9 @@ export default function MusicPickerDrawer({
   // 1. Çekmece açıldığında şarkıları getir
   useEffect(() => {
     if (!isOpen) {
+      fullAudioAbortRef.current?.abort();
+      fullAudioAbortRef.current = null;
+      playIntentRef.current = false;
       if (audioRef.current) {
         audioRef.current.pause();
         audioRef.current.currentTime = 0;
@@ -228,13 +241,45 @@ export default function MusicPickerDrawer({
     getTrackHotChunks(track.id).then((chunks) => setHotChunks(chunks));
     getTrackLyrics(track.id, track.title, track.artist).then((lyr) => setLyrics(lyr));
 
+    // Önceki şarkının tam indirmesini iptal et
+    fullAudioAbortRef.current?.abort();
+    fullAudioAbortRef.current = null;
+    activeTrackIdRef.current = track.id;
+    resumeAfterSwapRef.current = false;
+    playIntentRef.current = true;
+
+    const streamUrl = getAudioStreamUrl(track.id);
+    const cachedUrl = getCachedAudioUrl(track.id);
+
+    if (!cachedUrl) {
+      const controller = new AbortController();
+      fullAudioAbortRef.current = controller;
+      loadFullAudioUrl(track.id, streamUrl, controller.signal)
+        .then((blobUrl) => {
+          const audio = audioRef.current;
+          if (!audio || controller.signal.aborted || activeTrackIdRef.current !== track.id) return;
+          if (audio.src === blobUrl) return;
+          // Akıştan yerel kopyaya kesintisiz geçiş: konum ve oynatma durumu korunur
+          const wasPlaying = !audio.paused || playIntentRef.current;
+          const resumeAt =
+            pendingSeekRef.current ?? (audio.readyState > 0 ? audio.currentTime : startRef.current);
+          pendingSeekRef.current = resumeAt;
+          resumeAfterSwapRef.current = wasPlaying;
+          audio.src = blobUrl;
+          audio.load();
+        })
+        .catch(() => {
+          // Tam indirme başarısızsa akıştan çalmaya devam edilir
+        });
+    }
+
     if (audioRef.current) {
       try {
         audioRef.current.pause();
         audioRef.current.currentTime = 0;
       } catch {}
 
-      audioRef.current.src = getAudioStreamUrl(track.id);
+      audioRef.current.src = cachedUrl || streamUrl;
       audioRef.current.load();
 
       // Not: currentTime burada atanmaz; ses metadata'sı yüklendiğinde onCanPlay içinde pendingSeekRef ile atanır.
@@ -273,9 +318,11 @@ export default function MusicPickerDrawer({
   const togglePlayPause = () => {
     if (!audioRef.current || !selectedTrack) return;
     if (isPlaying) {
+      playIntentRef.current = false;
       audioRef.current.pause();
       setIsPlaying(false);
     } else {
+      playIntentRef.current = true;
       setIsAudioLoading(true);
       setAudioErrorTrackId(null);
       const cur = audioRef.current.currentTime;
@@ -319,6 +366,7 @@ export default function MusicPickerDrawer({
         audioRef.current.currentTime = newSec;
       } catch {}
       setIsAudioLoading(true);
+      playIntentRef.current = true;
       audioRef.current
         .play()
         .then(() => {
@@ -509,6 +557,13 @@ export default function MusicPickerDrawer({
               audioRef.current.currentTime = pendingSeekRef.current;
             } catch {}
             pendingSeekRef.current = null;
+          }
+          if (audioRef.current && resumeAfterSwapRef.current) {
+            resumeAfterSwapRef.current = false;
+            audioRef.current
+              .play()
+              .then(() => setIsPlaying(true))
+              .catch(() => {});
           }
         }}
         onPlaying={() => {

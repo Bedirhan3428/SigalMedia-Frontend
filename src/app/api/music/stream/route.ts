@@ -63,7 +63,12 @@ export async function GET(req: NextRequest) {
     }
   }
 
-  return new Response(JSON.stringify({ error: 'Ses akışı başlatılamadı' }), {
+  return new Response(
+    JSON.stringify({
+      success: false,
+      error: { code: 'STREAM_UNAVAILABLE', message: 'Ses akışı başlatılamadı' },
+    }),
+    {
     status: 502,
     headers: { 'content-type': 'application/json' },
   });
