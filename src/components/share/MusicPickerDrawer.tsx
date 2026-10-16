@@ -220,10 +220,15 @@ export default function MusicPickerDrawer({
     getTrackLyrics(track.id, track.title, track.artist).then((lyr) => setLyrics(lyr));
 
     if (audioRef.current) {
-      audioRef.current.src = getAudioStreamUrl(track.id);
       try {
-        audioRef.current.currentTime = defaultStart;
+        audioRef.current.pause();
+        audioRef.current.currentTime = 0;
       } catch {}
+
+      audioRef.current.src = getAudioStreamUrl(track.id);
+      audioRef.current.load();
+
+      // Not: currentTime burada atanmaz; ses metadata'sı yüklendiğinde onCanPlay içinde pendingSeekRef ile atanır.
       audioRef.current
         .play()
         .then(() => {
@@ -231,6 +236,7 @@ export default function MusicPickerDrawer({
           setIsAudioLoading(false);
         })
         .catch(() => {
+          // Hızlı şarkı geçişlerinde 'play() request interrupted by new load' hatasını yut
           setIsPlaying(false);
           setIsAudioLoading(false);
         });
