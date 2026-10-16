@@ -32,24 +32,6 @@ export async function GET(req: NextRequest) {
         }
       );
 
-      // Hızlı geçişte tarayıcı geçersiz range gönderirse ve 416 dönerse, anında dosya başından kurtar
-      if (upstream.status === 416 && range !== 'bytes=0-') {
-        try {
-          const fallbackRes = await fetch(
-            `${baseUrl}/api/audio/stream?id=${encodeURIComponent(id)}&apiKey=${encodeURIComponent(apiKey)}`,
-            {
-              headers: {
-                'x-api-key': apiKey,
-                Range: 'bytes=0-',
-              },
-            }
-          );
-          if (fallbackRes.ok || fallbackRes.status === 206) {
-            upstream = fallbackRes;
-          }
-        } catch {}
-      }
-
       if (upstream.status === 200 || upstream.status === 206 || upstream.status === 416) {
         const headers = new Headers();
         ['content-type', 'content-length', 'content-range', 'accept-ranges'].forEach((h) => {

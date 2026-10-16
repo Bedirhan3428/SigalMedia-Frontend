@@ -100,6 +100,15 @@ export default function MusicPickerDrawer({
   startRef.current = selectedStartSec;
   ppsRef.current = viewportWidth > 0 ? viewportWidth / VIEW_WINDOW_SEC : 0;
 
+  // Yükleme durumu için emniyet zaman aşımı (maksimum 2 saniye sonra yükleniyor zorla kapanır)
+  useEffect(() => {
+    if (!isAudioLoading) return;
+    const timer = setTimeout(() => {
+      setIsAudioLoading(false);
+    }, 2000);
+    return () => clearTimeout(timer);
+  }, [isAudioLoading]);
+
   // Dalga formu görünür alan genişliğini izle
   useEffect(() => {
     if (!viewportEl) return;
@@ -287,14 +296,14 @@ export default function MusicPickerDrawer({
     }
   };
 
-  // 5. Başlangıç Saniyesi Değişimi
+  // 5. Başlangıç Saniyesi Değişimi (Şarkı sonu sınırını 0.5s pay ile korur, EOF taşmasını engeller)
   const getMaxStart = () => {
     const audioDur = audioRef.current?.duration;
-    const effectiveDuration =
+    const dur =
       audioDur && !isNaN(audioDur) && isFinite(audioDur) && audioDur > 0
-        ? Math.floor(audioDur)
+        ? audioDur
         : (selectedTrack?.duration || 0);
-    return Math.max(0, effectiveDuration - FIXED_DURATION);
+    return Math.max(0, Math.floor(dur - FIXED_DURATION - 0.5));
   };
   const clampStart = (sec: number) =>
     Math.round(Math.min(getMaxStart(), Math.max(0, sec)) * 10) / 10;
@@ -309,12 +318,16 @@ export default function MusicPickerDrawer({
       try {
         audioRef.current.currentTime = newSec;
       } catch {}
-      if (!isPlaying) {
-        audioRef.current
-          .play()
-          .then(() => setIsPlaying(true))
-          .catch(() => {});
-      }
+      setIsAudioLoading(true);
+      audioRef.current
+        .play()
+        .then(() => {
+          setIsPlaying(true);
+          setIsAudioLoading(false);
+        })
+        .catch(() => {
+          setIsAudioLoading(false);
+        });
     }
   };
 
@@ -403,7 +416,10 @@ export default function MusicPickerDrawer({
 
         const start = startRef.current;
         const endSec = start + FIXED_DURATION;
-        if (cur >= endSec) {
+        const isAtLoopEnd =
+          cur >= endSec ||
+          (audio.duration && !isNaN(audio.duration) && isFinite(audio.duration) && cur >= audio.duration - 0.4);
+        if (isAtLoopEnd) {
           audio.currentTime = start;
           lastAudioTime = start;
           lastStamp = now;
@@ -495,11 +511,24 @@ export default function MusicPickerDrawer({
             pendingSeekRef.current = null;
           }
         }}
+        onPlaying={() => {
+          setIsAudioLoading(false);
+        }}
+        onSeeked={() => {
+          setIsAudioLoading(false);
+        }}
+        onWaiting={() => {
+          setIsAudioLoading(true);
+        }}
         onTimeUpdate={() => {
           if (audioRef.current && !dragRef.current) {
             const cur = audioRef.current.currentTime;
             const endSec = selectedStartSec + FIXED_DURATION;
-            if (cur >= endSec) {
+            const dur = audioRef.current.duration;
+            const isAtLoopEnd =
+              cur >= endSec ||
+              (dur && !isNaN(dur) && isFinite(dur) && cur >= dur - 0.4);
+            if (isAtLoopEnd) {
               try {
                 audioRef.current.currentTime = selectedStartSec;
               } catch {}
@@ -520,6 +549,7 @@ export default function MusicPickerDrawer({
           }
         }}
         onEnded={() => {
+          setIsAudioLoading(false);
           if (audioRef.current) {
             try {
               audioRef.current.currentTime = selectedStartSec;
