@@ -1,5 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 
+export const maxDuration = 60;
+
 const API_KEY = process.env.AUDIO_SERVICE_API_KEY || 'sm_ss_InitpJfNvKbUsec2E9QoqlZhkYXA4071';
 
 export async function GET(req: NextRequest) {
@@ -16,7 +18,7 @@ export async function GET(req: NextRequest) {
         ? ['http://localhost:4000', primaryUrl, 'https://sound.sigalmedia.com.tr']
         : [primaryUrl, 'https://sound.sigalmedia.com.tr']
     )
-  );
+  ).filter((url) => isDev || (!url.includes('localhost') && !url.includes('127.0.0.1')));
 
   let pathAndQuery = '';
   if (type === 'search') {
@@ -44,6 +46,7 @@ export async function GET(req: NextRequest) {
       const fullUrl = `${baseUrl}${pathAndQuery}${sep}apiKey=${encodeURIComponent(API_KEY)}`;
       const res = await fetch(fullUrl, {
         headers: { 'x-api-key': API_KEY },
+        signal: AbortSignal.timeout(12000),
       });
 
       if (res.ok) {
@@ -58,6 +61,17 @@ export async function GET(req: NextRequest) {
     } catch {
       // Sonraki adaya geç
     }
+  }
+
+  // Arayüzün kırılmasını önleyen zarif kurtarma yanıtları
+  if (type === 'hot-chunks') {
+    return NextResponse.json({ success: true, data: [] }, { status: 200 });
+  }
+  if (type === 'lyrics') {
+    return NextResponse.json({ success: false, source: 'none', videoId: searchParams.get('id') || '', lyrics: [] }, { status: 200 });
+  }
+  if (type === 'warm') {
+    return NextResponse.json({ success: true }, { status: 200 });
   }
 
   return NextResponse.json({ error: 'Müzik servisine bağlanılamadı' }, { status: 502 });

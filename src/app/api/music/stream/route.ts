@@ -18,7 +18,7 @@ export async function GET(req: NextRequest) {
         ? ['http://localhost:4000', primaryUrl, 'https://sound.sigalmedia.com.tr']
         : [primaryUrl, 'https://sound.sigalmedia.com.tr']
     )
-  );
+  ).filter((url) => isDev || (!url.includes('localhost') && !url.includes('127.0.0.1')));
 
   for (const baseUrl of candidateUrls) {
     try {
@@ -29,6 +29,7 @@ export async function GET(req: NextRequest) {
             'x-api-key': apiKey,
             Range: range,
           },
+          signal: AbortSignal.timeout(30000),
         }
       );
 
