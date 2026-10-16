@@ -7,16 +7,17 @@ export async function GET(req: NextRequest) {
   if (!id) return new Response('Missing video id', { status: 400 });
 
   const range = req.headers.get('range') || 'bytes=0-';
-  const primaryUrl = process.env.AUDIO_SERVICE_URL || 'http://localhost:4000';
+  const isDev = process.env.NODE_ENV === 'development';
+  const defaultUrl = isDev ? 'http://localhost:4000' : 'https://sound.sigalmedia.com.tr';
+  const primaryUrl = process.env.AUDIO_SERVICE_URL || defaultUrl;
   const apiKey = process.env.AUDIO_SERVICE_API_KEY || 'sm_ss_InitpJfNvKbUsec2E9QoqlZhkYXA4071';
 
-  // Yerel servis ayaktaysa ilk olarak doğrudan onu kullan, ardından Cloud Run'a geç
   const candidateUrls = Array.from(
-    new Set([
-      'http://localhost:4000',
-      primaryUrl,
-      'https://sound.sigalmedia.com.tr',
-    ])
+    new Set(
+      isDev
+        ? ['http://localhost:4000', primaryUrl, 'https://sound.sigalmedia.com.tr']
+        : [primaryUrl, 'https://sound.sigalmedia.com.tr']
+    )
   );
 
   for (const baseUrl of candidateUrls) {
@@ -31,7 +32,7 @@ export async function GET(req: NextRequest) {
         }
       );
 
-      if (upstream.status === 200 || upstream.status === 206) {
+      if (upstream.status === 200 || upstream.status === 206 || upstream.status === 416) {
         const headers = new Headers();
         ['content-type', 'content-length', 'content-range', 'accept-ranges'].forEach((h) => {
           const val = upstream.headers.get(h);
