@@ -518,7 +518,6 @@ export default function MusicPickerDrawer({
       {/* Görünmez Canlı Ses Akışı Oynatıcısı */}
       <audio
         ref={audioRef}
-        crossOrigin="anonymous"
         onCanPlay={() => {
           setIsAudioLoading(false);
           setAudioErrorTrackId(null);

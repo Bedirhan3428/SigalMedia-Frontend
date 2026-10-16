@@ -1,12 +1,15 @@
-export const SOUND_SERVICE_URL =
+export const CLIENT_SOUND_SERVICE_URL =
   process.env.NEXT_PUBLIC_AUDIO_SERVICE_URL ||
   process.env.AUDIO_SERVICE_URL ||
   'https://sound.sigalmedia.com.tr';
 
-export const SOUND_API_KEY =
+export const CLIENT_SOUND_API_KEY =
   process.env.NEXT_PUBLIC_AUDIO_SERVICE_API_KEY ||
   process.env.AUDIO_SERVICE_API_KEY ||
   'sm_ss_InitpJfNvKbUsec2E9QoqlZhkYXA4071';
+
+export const SOUND_SERVICE_URL = CLIENT_SOUND_SERVICE_URL;
+export const SOUND_API_KEY = CLIENT_SOUND_API_KEY;
 
 export interface SoundTrack {
   id: string;
@@ -90,8 +93,8 @@ export async function searchTracks(query: string, limit = 20, signal?: AbortSign
     const url = isClient
       ? `/api/music/proxy?type=search&q=${encodeURIComponent(searchQ)}&limit=${limit}`
       : `${SOUND_SERVICE_URL}/api/audio/search?q=${encodeURIComponent(
-          searchQ
-        )}&limit=${limit}&apiKey=${encodeURIComponent(SOUND_API_KEY)}`;
+        searchQ
+      )}&limit=${limit}&apiKey=${encodeURIComponent(SOUND_API_KEY)}`;
 
     const res = await fetch(url, {
       method: 'GET',
@@ -162,25 +165,23 @@ export function warmTrackAudio(videoId: string): void {
   const url = isClient
     ? `/api/music/proxy?type=warm&id=${encodeURIComponent(videoId)}`
     : `${SOUND_SERVICE_URL}/api/audio/warm?id=${encodeURIComponent(
-        videoId
-      )}&apiKey=${encodeURIComponent(SOUND_API_KEY)}`;
+      videoId
+    )}&apiKey=${encodeURIComponent(SOUND_API_KEY)}`;
 
   fetch(url, {
     method: 'GET',
     headers: isClient ? {} : { 'x-api-key': SOUND_API_KEY },
-  }).catch(() => {});
+  }).catch(() => { });
 }
 
 /**
  * Doğrudan canlı ses akış adresi (HTML5 audio src)
  */
 export function getAudioStreamUrl(videoId: string): string {
-  if (typeof window !== 'undefined') {
-    return `/api/music/stream?id=${encodeURIComponent(videoId)}`;
-  }
-  return `${SOUND_SERVICE_URL}/api/audio/stream?id=${encodeURIComponent(
+  const baseUrl = CLIENT_SOUND_SERVICE_URL.replace(/\/+$/, '');
+  return `${baseUrl}/api/audio/stream?id=${encodeURIComponent(
     videoId
-  )}&apiKey=${encodeURIComponent(SOUND_API_KEY)}`;
+  )}&apiKey=${encodeURIComponent(CLIENT_SOUND_API_KEY)}`;
 }
 
 /**
@@ -192,8 +193,8 @@ export async function getTrackHotChunks(videoId: string): Promise<HotChunk[]> {
     const url = isClient
       ? `/api/music/proxy?type=hot-chunks&id=${encodeURIComponent(videoId)}`
       : `${SOUND_SERVICE_URL}/api/audio/hot-chunks?id=${encodeURIComponent(
-          videoId
-        )}&apiKey=${encodeURIComponent(SOUND_API_KEY)}`;
+        videoId
+      )}&apiKey=${encodeURIComponent(SOUND_API_KEY)}`;
 
     const res = await fetch(url, {
       headers: isClient ? {} : { 'x-api-key': SOUND_API_KEY },
@@ -220,13 +221,13 @@ export async function getTrackLyrics(
     const isClient = typeof window !== 'undefined';
     const url = isClient
       ? `/api/music/proxy?type=lyrics&id=${encodeURIComponent(videoId)}&title=${encodeURIComponent(
-          title
-        )}&artist=${encodeURIComponent(artist)}`
+        title
+      )}&artist=${encodeURIComponent(artist)}`
       : `${SOUND_SERVICE_URL}/api/audio/lyrics?id=${encodeURIComponent(
-          videoId
-        )}&title=${encodeURIComponent(title)}&artist=${encodeURIComponent(
-          artist
-        )}&apiKey=${encodeURIComponent(SOUND_API_KEY)}`;
+        videoId
+      )}&title=${encodeURIComponent(title)}&artist=${encodeURIComponent(
+        artist
+      )}&apiKey=${encodeURIComponent(SOUND_API_KEY)}`;
 
     const res = await fetch(url, {
       headers: isClient ? {} : { 'x-api-key': SOUND_API_KEY },
