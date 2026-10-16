@@ -47,9 +47,45 @@ export async function GET(req: NextRequest) {
         headers.set('access-control-allow-origin', '*');
 
         if (upstream.status === 416) {
+          const contentRange = upstream.headers.get('content-range') || '';
+          const match = contentRange.match(/\/(\d+)$/);
+          const total = match ? parseInt(match[1], 10) : 0;
+          if (total > 0) {
+            // Senaryo 4: İstemciye 416 yerine son 512 baytı 206 olarak dönerek tarayıcı oynatıcısının çökmesini engelle
+            const safeStart = Math.max(0, total - 512);
+            const safeEnd = total - 1;
+            try {
+              const tailRes = await fetch(
+                `${baseUrl}/api/audio/stream?id=${encodeURIComponent(id)}&apiKey=${encodeURIComponent(apiKey)}`,
+                {
+                  headers: {
+                    'x-api-key': apiKey,
+                    Range: `bytes=${safeStart}-${safeEnd}`,
+                  },
+                  signal: AbortSignal.timeout(10000),
+                }
+              );
+              if (tailRes.status === 206 || tailRes.ok) {
+                const tailHeaders = new Headers();
+                ['content-type', 'content-length', 'content-range', 'accept-ranges'].forEach((h) => {
+                  const val = tailRes.headers.get(h);
+                  if (val) tailHeaders.set(h, val);
+                });
+                tailHeaders.set('content-type', 'audio/mp4');
+                tailHeaders.set('accept-ranges', 'bytes');
+                tailHeaders.set('access-control-allow-origin', '*');
+                return new Response(tailRes.body, {
+                  status: 206,
+                  headers: tailHeaders,
+                });
+              }
+            } catch {}
+          }
+          // Son çare: 416 yerine boş 206 dönerek tarayıcının MEDIA_ERR almasını engelle
+          headers.set('content-range', `bytes 0-0/${total || 1}`);
           headers.set('content-length', '0');
           return new Response(null, {
-            status: 416,
+            status: 206,
             headers,
           });
         }

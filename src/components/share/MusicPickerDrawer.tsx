@@ -97,6 +97,8 @@ export default function MusicPickerDrawer({
   const startRef = useRef(0);
   const ppsRef = useRef(0);
   const lyricRef = useRef("");
+  const lastTimeUpdateRef = useRef<number>(0);
+  const emaDeltaRef = useRef<number>(0.22); // Senaryo 3: Lookahead EMA gecikme tamponu (varsayılan 0.22s)
   startRef.current = selectedStartSec;
   ppsRef.current = viewportWidth > 0 ? viewportWidth / VIEW_WINDOW_SEC : 0;
 
@@ -296,17 +298,28 @@ export default function MusicPickerDrawer({
     }
   };
 
-  // 5. Başlangıç Saniyesi Değişimi (Şarkı sonu sınırını 0.5s pay ile korur, EOF taşmasını engeller)
+  // 5. Senaryo 1 & 2: Dinamik VBR Emniyet Marjı (Δsafe) ve Tmax Hesabı
+  const calculateDeltaSafe = (effDur: number) => {
+    // Δsafe = 0.45 + 0.0065 * Deff (Senaryo 1: 29.6s -> 0.642s, Senaryo 2: 239.2s -> 2.005s)
+    return 0.45 + 0.0065 * effDur;
+  };
+
   const getMaxStart = () => {
     const audioDur = audioRef.current?.duration;
-    const dur =
+    const effDur =
       audioDur && !isNaN(audioDur) && isFinite(audioDur) && audioDur > 0
         ? audioDur
         : (selectedTrack?.duration || 0);
-    return Math.max(0, Math.floor(dur - FIXED_DURATION - 0.5));
+    const deltaSafe = calculateDeltaSafe(effDur);
+    return Math.max(0, effDur - FIXED_DURATION - deltaSafe);
   };
-  const clampStart = (sec: number) =>
-    Math.round(Math.min(getMaxStart(), Math.max(0, sec)) * 10) / 10;
+
+  const clampStart = (sec: number) => {
+    const maxVal = getMaxStart();
+    const clamped = Math.min(maxVal, Math.max(0, sec));
+    return Math.round(clamped * 1000) / 1000;
+  };
+
   const getPxPerSec = () =>
     viewportWidth > 0 ? viewportWidth / VIEW_WINDOW_SEC : 0;
 
@@ -314,6 +327,7 @@ export default function MusicPickerDrawer({
     const newSec = clampStart(rawSec);
     setSelectedStartSec(newSec);
     setCurrentPlayTime(newSec);
+    lastTimeUpdateRef.current = newSec;
     if (audioRef.current) {
       try {
         audioRef.current.currentTime = newSec;
@@ -416,13 +430,17 @@ export default function MusicPickerDrawer({
 
         const start = startRef.current;
         const endSec = start + FIXED_DURATION;
+        // Senaryo 3: Lookahead Döngü Yakalama (t_k + Delta_t_EMA >= endSec)
+        const predictedNext = cur + emaDeltaRef.current;
         const isAtLoopEnd =
+          predictedNext >= endSec ||
           cur >= endSec ||
           (audio.duration && !isNaN(audio.duration) && isFinite(audio.duration) && cur >= audio.duration - 0.4);
         if (isAtLoopEnd) {
           audio.currentTime = start;
           lastAudioTime = start;
           lastStamp = now;
+          lastTimeUpdateRef.current = start;
           paintProgress(start);
         } else {
           paintProgress(Math.min(smooth, endSec));
@@ -523,14 +541,27 @@ export default function MusicPickerDrawer({
         onTimeUpdate={() => {
           if (audioRef.current && !dragRef.current) {
             const cur = audioRef.current.currentTime;
-            const endSec = selectedStartSec + FIXED_DURATION;
             const dur = audioRef.current.duration;
+            const endSec = selectedStartSec + FIXED_DURATION;
+
+            // EMA Delta hesaplama (alfa = 0.3)
+            if (lastTimeUpdateRef.current > 0 && cur > lastTimeUpdateRef.current) {
+              const dt = Math.max(0.05, Math.min(0.4, cur - lastTimeUpdateRef.current));
+              emaDeltaRef.current = 0.3 * dt + 0.7 * emaDeltaRef.current;
+            }
+            lastTimeUpdateRef.current = cur;
+
+            // Senaryo 3: Lookahead Döngü Yakalama (t_k + Delta_t_EMA >= endSec)
+            const predictedNext = cur + emaDeltaRef.current;
             const isAtLoopEnd =
+              predictedNext >= endSec ||
               cur >= endSec ||
               (dur && !isNaN(dur) && isFinite(dur) && cur >= dur - 0.4);
+
             if (isAtLoopEnd) {
               try {
                 audioRef.current.currentTime = selectedStartSec;
+                lastTimeUpdateRef.current = selectedStartSec;
               } catch {}
             }
           }
