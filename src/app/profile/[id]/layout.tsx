@@ -1,5 +1,7 @@
 // [START] AeroCode
 import type { Metadata } from "next";
+import { Suspense } from "react";
+import { connection } from "next/server";
 import { adminDb } from "@/lib/firebase-admin";
 
 interface PublicProfilePreview {
@@ -24,7 +26,7 @@ async function fetchProfileViaRest(
   const getDocFields = async (collectionName: string, docId: string) => {
     const res = await fetch(
       `${baseUrl}/${collectionName}/${encodeURIComponent(docId)}`,
-      { next: { revalidate: 30 } }
+      { cache: "no-store" }
     );
     if (!res.ok) return null;
     const json = await res.json();
@@ -112,12 +114,15 @@ export async function generateMetadata({
 }: {
   params: Promise<{ id: string }>;
 }): Promise<Metadata> {
+  await connection();
   const { id } = await params;
   const profile = await getProfileForPreview(id);
   const appUrl = process.env.NEXT_PUBLIC_APP_URL || "https://sigalmedia.com.tr";
+  const metadataBase = new URL(appUrl);
 
   if (!profile) {
     return {
+      metadataBase,
       title: "Kullanıcı Profili | SigalMedia",
       description: "SigalMedia kullanıcı profili.",
     };
@@ -125,12 +130,17 @@ export async function generateMetadata({
 
   const title = `${profile.displayName} (@${profile.username})`;
   const description = profile.bio
-    ? `${profile.bio}`
+    ? profile.bio
     : `${profile.displayName} (@${profile.username}) SigalMedia profili`;
   const profileUrl = `${appUrl}/profile/${profile.uid}`;
-  const ogImage = profile.photoURL || `${appUrl}/icons/MainLogo.svg`;
+  const hasHttpPhoto =
+    Boolean(profile.photoURL) && /^https?:\/\//i.test(profile.photoURL);
+  const ogImage = hasHttpPhoto
+    ? profile.photoURL
+    : `${appUrl}/icons/MainLogo.svg`;
 
   return {
+    metadataBase,
     title: `${title} | SigalMedia`,
     description,
     alternates: {
@@ -163,52 +173,71 @@ export async function generateMetadata({
 // [END] AeroCode
 
 // [START] AeroCode
-export default async function ProfileIdLayout({
+async function DynamicProfileConnectionMarker({
+  params,
+}: {
+  params: Promise<{ id: string }>;
+}) {
+  await connection();
+  const { id } = await params;
+  const profile = await getProfileForPreview(id);
+
+  if (!profile) return null;
+
+  return (
+    <>
+      <script
+        type="application/ld+json"
+        dangerouslySetInnerHTML={{
+          __html: JSON.stringify({
+            "@context": "https://schema.org",
+            "@type": "ProfilePage",
+            mainEntity: {
+              "@type": "Person",
+              identifier: profile.uid,
+              name: profile.displayName,
+              alternateName: `@${profile.username}`,
+              description: profile.bio || undefined,
+              image: profile.photoURL || undefined,
+            },
+          }),
+        }}
+      />
+      <article className="sr-only" aria-hidden="true">
+        {profile.photoURL && (
+          <img
+            src={profile.photoURL}
+            alt={`${profile.displayName} (@${profile.username})`}
+          />
+        )}
+        <h1>{profile.displayName}</h1>
+        <p>@{profile.username}</p>
+        {profile.bio && <p>{profile.bio}</p>}
+      </article>
+    </>
+  );
+}
+// [END] AeroCode
+
+// [START] AeroCode
+export default function ProfileIdLayout({
   children,
   params,
 }: {
   children: React.ReactNode;
   params: Promise<{ id: string }>;
 }) {
-  const { id } = await params;
-  const profile = await getProfileForPreview(id);
-
   return (
-    <>
-      {profile && (
-        <>
-          <script
-            type="application/ld+json"
-            dangerouslySetInnerHTML={{
-              __html: JSON.stringify({
-                "@context": "https://schema.org",
-                "@type": "ProfilePage",
-                mainEntity: {
-                  "@type": "Person",
-                  identifier: profile.uid,
-                  name: profile.displayName,
-                  alternateName: `@${profile.username}`,
-                  description: profile.bio || undefined,
-                  image: profile.photoURL || undefined,
-                },
-              }),
-            }}
-          />
-          <article className="sr-only" aria-hidden="true">
-            {profile.photoURL && (
-              <img
-                src={profile.photoURL}
-                alt={`${profile.displayName} (@${profile.username})`}
-              />
-            )}
-            <h1>{profile.displayName}</h1>
-            <p>@{profile.username}</p>
-            {profile.bio && <p>{profile.bio}</p>}
-          </article>
-        </>
-      )}
+    <Suspense
+      fallback={
+        <div className="min-h-[100dvh] flex items-center justify-center bg-zinc-950 text-white pt-safe pb-safe">
+          <div className="w-8 h-8 border-2 border-emerald-500 border-t-transparent rounded-full animate-spin" />
+        </div>
+      }
+    >
+      <DynamicProfileConnectionMarker params={params} />
       {children}
-    </>
+    </Suspense>
   );
 }
 // [END] AeroCode
