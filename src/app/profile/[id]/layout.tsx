@@ -2,7 +2,6 @@
 import type { Metadata } from "next";
 import { Suspense } from "react";
 import { connection } from "next/server";
-import { adminDb } from "@/lib/firebase-admin";
 
 interface PublicProfilePreview {
   uid: string;
@@ -16,21 +15,34 @@ interface PublicProfilePreview {
 async function fetchProfileViaRest(
   rawId: string
 ): Promise<PublicProfilePreview | null> {
-  const projectId =
-    process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID || "sigalmedia-social";
-  const databaseId = process.env.NEXT_PUBLIC_FIREBASE_DATABASE_ID || "default";
-  const baseUrl = `https://firestore.googleapis.com/v1/projects/${projectId}/databases/${databaseId}/documents`;
+  const decodedId = decodeURIComponent(rawId || "").trim();
+  if (!decodedId) return null;
 
-  let resolvedUid = rawId;
+  const projectId = (
+    process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID || "sigalmedia-social"
+  ).trim();
+  const baseUrl = `https://firestore.googleapis.com/v1/projects/${projectId}/databases/default/documents`;
+
+  let resolvedUid = decodedId;
 
   const getDocFields = async (collectionName: string, docId: string) => {
-    const res = await fetch(
-      `${baseUrl}/${collectionName}/${encodeURIComponent(docId)}`,
-      { cache: "no-store" }
-    );
-    if (!res.ok) return null;
-    const json = await res.json();
-    return json?.fields || null;
+    try {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 3000);
+      const res = await fetch(
+        `${baseUrl}/${collectionName}/${encodeURIComponent(docId)}`,
+        {
+          signal: controller.signal,
+          next: { revalidate: 30 },
+        }
+      );
+      clearTimeout(timer);
+      if (!res.ok) return null;
+      const json = await res.json();
+      return json?.fields || null;
+    } catch {
+      return null;
+    }
   };
 
   let userFields = await getDocFields("users", resolvedUid);
@@ -61,63 +73,16 @@ async function fetchProfileViaRest(
 // [END] AeroCode
 
 // [START] AeroCode
-async function getProfileForPreview(
-  rawId: string
-): Promise<PublicProfilePreview | null> {
-  const decodedId = decodeURIComponent(rawId || "").trim();
-  if (!decodedId) return null;
-
-  try {
-    const restData = await fetchProfileViaRest(decodedId);
-    if (restData) return restData;
-  } catch {
-    // Fallback to adminDb below
-  }
-
-  try {
-    let resolvedUid = decodedId;
-    let userSnap = await adminDb.collection("users").doc(resolvedUid).get();
-
-    if (!userSnap.exists) {
-      const cleanUsername = resolvedUid.replace(/^@/, "").toLowerCase();
-      const usernameSnap = await adminDb
-        .collection("usernames")
-        .doc(cleanUsername)
-        .get();
-      if (usernameSnap.exists) {
-        resolvedUid = String(usernameSnap.data()?.uid || "");
-        if (resolvedUid) {
-          userSnap = await adminDb.collection("users").doc(resolvedUid).get();
-        }
-      }
-    }
-
-    if (!userSnap.exists) return null;
-    const data = userSnap.data() || {};
-
-    return {
-      uid: String(data.uid || resolvedUid),
-      username: String(data.username || "kullanici"),
-      displayName: String(data.displayName || data.username || "Kullanıcı"),
-      photoURL: String(data.photoURL || ""),
-      bio: String(data.bio || ""),
-    };
-  } catch {
-    return null;
-  }
-}
-// [END] AeroCode
-
-// [START] AeroCode
 export async function generateMetadata({
   params,
 }: {
   params: Promise<{ id: string }>;
 }): Promise<Metadata> {
-  await connection();
   const { id } = await params;
-  const profile = await getProfileForPreview(id);
-  const appUrl = process.env.NEXT_PUBLIC_APP_URL || "https://sigalmedia.com.tr";
+  const profile = await fetchProfileViaRest(id);
+  const appUrl = (
+    process.env.NEXT_PUBLIC_APP_URL || "https://sigalmedia.com.tr"
+  ).trim();
   const metadataBase = new URL(appUrl);
 
   if (!profile) {
@@ -130,8 +95,8 @@ export async function generateMetadata({
 
   const title = `${profile.displayName} (@${profile.username})`;
   const description = profile.bio
-    ? profile.bio
-    : `${profile.displayName} (@${profile.username}) SigalMedia profili`;
+    ? `${profile.displayName} (@${profile.username}) — ${profile.bio}`
+    : `${profile.displayName} (@${profile.username}) • SigalMedia`;
   const profileUrl = `${appUrl}/profile/${profile.uid}`;
   const hasHttpPhoto =
     Boolean(profile.photoURL) && /^https?:\/\//i.test(profile.photoURL);
@@ -156,8 +121,8 @@ export async function generateMetadata({
       images: [
         {
           url: ogImage,
-          width: 400,
-          height: 400,
+          width: 512,
+          height: 512,
           alt: title,
         },
       ],
@@ -173,71 +138,25 @@ export async function generateMetadata({
 // [END] AeroCode
 
 // [START] AeroCode
-async function DynamicProfileConnectionMarker({
-  params,
-}: {
-  params: Promise<{ id: string }>;
-}) {
+async function DynamicConnectionMarker() {
   await connection();
-  const { id } = await params;
-  const profile = await getProfileForPreview(id);
-
-  if (!profile) return null;
-
-  return (
-    <>
-      <script
-        type="application/ld+json"
-        dangerouslySetInnerHTML={{
-          __html: JSON.stringify({
-            "@context": "https://schema.org",
-            "@type": "ProfilePage",
-            mainEntity: {
-              "@type": "Person",
-              identifier: profile.uid,
-              name: profile.displayName,
-              alternateName: `@${profile.username}`,
-              description: profile.bio || undefined,
-              image: profile.photoURL || undefined,
-            },
-          }),
-        }}
-      />
-      <article className="sr-only" aria-hidden="true">
-        {profile.photoURL && (
-          <img
-            src={profile.photoURL}
-            alt={`${profile.displayName} (@${profile.username})`}
-          />
-        )}
-        <h1>{profile.displayName}</h1>
-        <p>@{profile.username}</p>
-        {profile.bio && <p>{profile.bio}</p>}
-      </article>
-    </>
-  );
+  return null;
 }
 // [END] AeroCode
 
 // [START] AeroCode
 export default function ProfileIdLayout({
   children,
-  params,
 }: {
   children: React.ReactNode;
-  params: Promise<{ id: string }>;
 }) {
   return (
-    <Suspense
-      fallback={
-        <div className="min-h-[100dvh] flex items-center justify-center bg-zinc-950 text-white pt-safe pb-safe">
-          <div className="w-8 h-8 border-2 border-emerald-500 border-t-transparent rounded-full animate-spin" />
-        </div>
-      }
-    >
-      <DynamicProfileConnectionMarker params={params} />
+    <>
+      <Suspense fallback={null}>
+        <DynamicConnectionMarker />
+      </Suspense>
       {children}
-    </Suspense>
+    </>
   );
 }
 // [END] AeroCode

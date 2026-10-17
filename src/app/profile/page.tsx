@@ -100,7 +100,7 @@ export default function ProfilePage() {
   }, [profile?.uid]);
 
   // [START] AeroCode
-  // Profili Paylaş
+  // Profili Paylaş (Önizlemenin çıkması için yalnızca saf profil linki paylaşılır)
   const handleShareProfile = async () => {
     if (!profile?.uid) return;
     const origin =
@@ -108,15 +108,10 @@ export default function ProfilePage() {
         ? window.location.origin
         : process.env.NEXT_PUBLIC_APP_URL || "https://sigalmedia.com.tr";
     const shareUrl = `${origin}/profile/${profile.uid}`;
-    const displayName = profile.displayName || profile.username || "Kullanıcı";
-    const username = profile.username || "kullanici";
-    const bioText = profile.bio ? ` — ${profile.bio}` : "";
 
     if (typeof navigator !== "undefined" && navigator.share) {
       try {
         await navigator.share({
-          title: `${displayName} (@${username})`,
-          text: `${displayName} (@${username})${bioText}`,
           url: shareUrl,
         });
         return;
