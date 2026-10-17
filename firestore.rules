@@ -13,7 +13,18 @@ service cloud.firestore {
     // Kullanıcı profilleri
     match /users/{userId} {
       allow read: if true;
-      allow write: if request.auth != null && request.auth.uid == userId;
+      allow create, delete: if request.auth != null && request.auth.uid == userId;
+      allow update: if request.auth != null && (
+        request.auth.uid == userId ||
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly(['stats', 'updatedAt'])
+      );
+    }
+
+    // Takip ilişkileri (Follows)
+    match /follows/{followId} {
+      allow read: if true;
+      allow create: if request.auth != null && (request.resource.data.followerId == request.auth.uid || request.resource.data.followingId == request.auth.uid);
+      allow delete: if request.auth != null && (resource.data.followerId == request.auth.uid || resource.data.followingId == request.auth.uid);
     }
 
     // Gönderiler ve Reels
@@ -27,6 +38,20 @@ service cloud.firestore {
     match /audio_heatmap/{videoId} {
       allow read: if true;
       allow write: if request.auth != null;
+    }
+
+    // Engellemeler (Blocks)
+    match /blocks/{blockId} {
+      allow read: if request.auth != null;
+      allow create: if request.auth != null && request.resource.data.blockerUid == request.auth.uid;
+      allow delete: if request.auth != null && resource.data.blockerUid == request.auth.uid;
+    }
+
+    // Takip İstekleri (Follow Requests)
+    match /follow_requests/{requestId} {
+      allow read: if request.auth != null && (resource.data.requesterUid == request.auth.uid || resource.data.targetUid == request.auth.uid);
+      allow create: if request.auth != null && request.resource.data.requesterUid == request.auth.uid;
+      allow delete: if request.auth != null && (resource.data.requesterUid == request.auth.uid || resource.data.targetUid == request.auth.uid);
     }
   }
 }

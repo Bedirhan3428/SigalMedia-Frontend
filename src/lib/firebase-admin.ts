@@ -1,5 +1,6 @@
 import { getApps, initializeApp, cert, App } from "firebase-admin/app";
 import { getAuth, Auth } from "firebase-admin/auth";
+import { getFirestore, Firestore } from "firebase-admin/firestore";
 import fs from "fs";
 import path from "path";
 
@@ -49,4 +50,7 @@ if (!getApps().length) {
   app = getApps()[0];
 }
 
+const firestoreDbId = process.env.NEXT_PUBLIC_FIREBASE_DATABASE_ID || "default";
+
 export const adminAuth: Auth = getAuth(app);
+export const adminDb: Firestore = getFirestore(app, firestoreDbId);
