@@ -107,7 +107,7 @@ export default function ProfilePage() {
       typeof window !== "undefined"
         ? window.location.origin
         : process.env.NEXT_PUBLIC_APP_URL || "https://sigalmedia.com.tr";
-    const shareUrl = `${origin}/profile/${profile.uid}`;
+    const shareUrl = `${origin}/profile/${profile.uid}?s=1`;
 
     if (typeof navigator !== "undefined" && navigator.share) {
       try {

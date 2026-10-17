@@ -33,7 +33,7 @@ async function fetchProfileViaRest(
         `${baseUrl}/${collectionName}/${encodeURIComponent(docId)}`,
         {
           signal: controller.signal,
-          next: { revalidate: 30 },
+          next: { revalidate: 60 },
         }
       );
       clearTimeout(timer);
@@ -95,13 +95,13 @@ export async function generateMetadata({
 
   const title = `${profile.displayName} (@${profile.username})`;
   const description = profile.bio
-    ? `${profile.displayName} (@${profile.username}) — ${profile.bio}`
+    ? `${profile.bio}`
     : `${profile.displayName} (@${profile.username}) • SigalMedia`;
   const profileUrl = `${appUrl}/profile/${profile.uid}`;
   const hasHttpPhoto =
     Boolean(profile.photoURL) && /^https?:\/\//i.test(profile.photoURL);
   const ogImage = hasHttpPhoto
-    ? profile.photoURL
+    ? `${appUrl}/api/users/avatar/${profile.uid}`
     : `${appUrl}/icons/MainLogo.svg`;
 
   return {
@@ -116,13 +116,14 @@ export async function generateMetadata({
       description,
       url: profileUrl,
       siteName: "SigalMedia",
-      type: "profile",
-      username: profile.username,
+      type: "website",
       images: [
         {
           url: ogImage,
-          width: 512,
-          height: 512,
+          secureUrl: ogImage,
+          type: "image/jpeg",
+          width: 400,
+          height: 400,
           alt: title,
         },
       ],
