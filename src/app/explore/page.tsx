@@ -1,5 +1,6 @@
 "use client";
 
+// [START] NexusAI
 import { useState, useEffect } from "react";
 import Link from "next/link";
 import { collection, getDocs, limit, query } from "firebase/firestore";
@@ -165,3 +166,4 @@ export default function ExplorePage() {
     </div>
   );
 }
+// [END] NexusAI

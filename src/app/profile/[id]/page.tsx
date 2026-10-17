@@ -1,5 +1,6 @@
 "use client";
 
+// [START] NexusAI
 import { useState, useEffect } from "react";
 import { useParams, useRouter } from "next/navigation";
 import {
@@ -668,3 +669,4 @@ export default function VisitedProfilePage() {
     </div>
   );
 }
+// [END] NexusAI

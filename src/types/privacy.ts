@@ -1,3 +1,4 @@
+// [START] NexusAI
 import { Timestamp } from "firebase/firestore";
 
 export interface BlockRecord {
@@ -22,3 +23,4 @@ export interface FollowRequestData {
   photoURL?: string;
   createdAt: Timestamp | string;
 }
+// [END] NexusAI

@@ -17,7 +17,9 @@ export interface UserProfile {
   birthDate: string;
   age: number;
   isVerified: boolean;
+  // [START] NexusAI
   isPrivate?: boolean;
+  // [END] NexusAI
   emailVerified?: boolean;
   role: "user" | "admin";
   onboardingCompleted: boolean;

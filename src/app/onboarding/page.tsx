@@ -150,7 +150,9 @@ export default function OnboardingPage() {
         birthDate: birthDate,
         age: calculatedAge,
         isVerified: false,
+        // [START] NexusAI
         isPrivate: false,
+        // [END] NexusAI
         emailVerified: true,
         role: "user",
         onboardingCompleted: true,
