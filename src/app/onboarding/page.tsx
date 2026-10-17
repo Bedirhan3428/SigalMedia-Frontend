@@ -150,6 +150,7 @@ export default function OnboardingPage() {
         birthDate: birthDate,
         age: calculatedAge,
         isVerified: false,
+        isPrivate: false,
         emailVerified: true,
         role: "user",
         onboardingCompleted: true,

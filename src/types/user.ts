@@ -17,6 +17,7 @@ export interface UserProfile {
   birthDate: string;
   age: number;
   isVerified: boolean;
+  isPrivate?: boolean;
   emailVerified?: boolean;
   role: "user" | "admin";
   onboardingCompleted: boolean;
