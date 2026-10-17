@@ -1,6 +1,8 @@
+// [START] AeroCode
 import { NextResponse } from "next/server";
 import { adminDb } from "@/lib/firebase-admin";
 
+// [START] AeroCode
 export async function GET(request: Request) {
   try {
     const { searchParams } = new URL(request.url);
@@ -53,3 +55,5 @@ export async function GET(request: Request) {
     return NextResponse.json({ users: [] }, { status: 500 });
   }
 }
+// [END] AeroCode
+// [END] AeroCode

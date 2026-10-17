@@ -1,3 +1,4 @@
+// [START] AeroCode
 import { Timestamp } from "firebase/firestore";
 
 export interface FollowRecord {
@@ -16,3 +17,4 @@ export interface FollowUserData {
   isFollowing: boolean;
   followersCount?: number;
 }
+// [END] AeroCode

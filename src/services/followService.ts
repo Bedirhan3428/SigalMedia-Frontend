@@ -1,3 +1,4 @@
+// [START] AeroCode
 import {
   collection,
   doc,
@@ -13,9 +14,7 @@ import { auth, db } from "@/lib/firebase";
 import { FollowUserData } from "@/types/follow";
 import { UserProfile } from "@/types/user";
 
-/**
- * Kullanıcının takip ettiği tüm kullanıcı ID'lerini Set olarak döner (O(1) kontrol için).
- */
+// [START] AeroCode
 export async function getFollowingIdSet(currentUid: string): Promise<Set<string>> {
   if (!currentUid) return new Set();
   try {
@@ -37,10 +36,9 @@ export async function getFollowingIdSet(currentUid: string): Promise<Set<string>
     return new Set();
   }
 }
+// [END] AeroCode
 
-/**
- * Belirli bir kullanıcıyı takip edip etmediğini kontrol eder.
- */
+// [START] AeroCode
 export async function checkIsFollowing(
   currentUid: string,
   targetUid: string
@@ -55,10 +53,9 @@ export async function checkIsFollowing(
     return false;
   }
 }
+// [END] AeroCode
 
-/**
- * İstemci tarafı güvenli Firestore Transaction yedeği (Admin SDK erişimi olmadığında devreye girer)
- */
+// [START] AeroCode
 async function clientSideToggleFollow(
   followerUid: string,
   targetUid: string,
@@ -161,10 +158,9 @@ async function clientSideToggleFollow(
     };
   });
 }
+// [END] AeroCode
 
-/**
- * Kullanıcıyı takip et veya takipten çık (Önce API, gerekirse Client Transaction fallback)
- */
+// [START] AeroCode
 export async function toggleFollow(
   targetUid: string,
   action: "toggle" | "follow" | "unfollow" = "toggle"
@@ -204,15 +200,14 @@ export async function toggleFollow(
       };
     }
   } catch {
-    // API erişilemezse veya Admin SDK yapılandırılmamışsa doğrudan Firestore Transaction'a düş
+    // Fallback to clientSideToggleFollow
   }
 
   return clientSideToggleFollow(currentUser.uid, targetUid, action);
 }
+// [END] AeroCode
 
-/**
- * Keşfet ekranında arama boşken gösterilecek önerilen kullanıcılar
- */
+// [START] AeroCode
 export async function getSuggestedUsers(
   currentUid: string,
   limitCount = 25
@@ -246,10 +241,9 @@ export async function getSuggestedUsers(
     return [];
   }
 }
+// [END] AeroCode
 
-/**
- * Kullanıcı adı (@username) ve görünen ad (displayName) ile eşleşen kullanıcıları arar
- */
+// [START] AeroCode
 export async function searchUsers(
   queryText: string,
   currentUid: string
@@ -304,10 +298,9 @@ export async function searchUsers(
     return [];
   }
 }
+// [END] AeroCode
 
-/**
- * Hedef kullanıcının takipçilerini profilleriyle birlikte getirir
- */
+// [START] AeroCode
 export async function getUserFollowers(
   targetUid: string,
   currentUid: string
@@ -359,10 +352,9 @@ export async function getUserFollowers(
     return [];
   }
 }
+// [END] AeroCode
 
-/**
- * Hedef kullanıcının takip ettiği kişileri profilleriyle birlikte getirir
- */
+// [START] AeroCode
 export async function getUserFollowing(
   targetUid: string,
   currentUid: string
@@ -415,3 +407,5 @@ export async function getUserFollowing(
     return [];
   }
 }
+// [END] AeroCode
+// [END] AeroCode

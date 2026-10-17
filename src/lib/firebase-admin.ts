@@ -50,7 +50,9 @@ if (!getApps().length) {
   app = getApps()[0];
 }
 
+// [START] AeroCode
 const firestoreDbId = process.env.NEXT_PUBLIC_FIREBASE_DATABASE_ID || "default";
 
 export const adminAuth: Auth = getAuth(app);
 export const adminDb: Firestore = getFirestore(app, firestoreDbId);
+// [END] AeroCode

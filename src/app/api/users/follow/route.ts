@@ -1,7 +1,9 @@
+// [START] AeroCode
 import { NextResponse } from "next/server";
 import { adminAuth, adminDb } from "@/lib/firebase-admin";
 import { FieldValue } from "firebase-admin/firestore";
 
+// [START] AeroCode
 export async function POST(request: Request) {
   try {
     const authHeader = request.headers.get("Authorization");
@@ -14,7 +16,7 @@ export async function POST(request: Request) {
 
     const idToken = authHeader.split("Bearer ")[1];
     const decodedToken = await adminAuth.verifyIdToken(idToken);
-    const followerUid = decodedToken.uid;
+    const currentUid = decodedToken.uid;
 
     const body = await request.json();
     const { targetUid, action = "toggle" } = body || {};
@@ -26,16 +28,16 @@ export async function POST(request: Request) {
       );
     }
 
-    if (followerUid === targetUid) {
+    if (currentUid === targetUid) {
       return NextResponse.json(
         { error: "Kendinizi takip edemezsiniz." },
         { status: 400 }
       );
     }
 
-    const followDocId = `${followerUid}_${targetUid}`;
+    const followDocId = `${currentUid}_${targetUid}`;
     const followRef = adminDb.collection("follows").doc(followDocId);
-    const followerUserRef = adminDb.collection("users").doc(followerUid);
+    const followerUserRef = adminDb.collection("users").doc(currentUid);
     const targetUserRef = adminDb.collection("users").doc(targetUid);
 
     const result = await adminDb.runTransaction(async (transaction) => {
@@ -69,53 +71,49 @@ export async function POST(request: Request) {
 
       if (shouldFollow && !exists) {
         transaction.set(followRef, {
-          followerId: followerUid,
+          followerId: currentUid,
           followingId: targetUid,
           createdAt: FieldValue.serverTimestamp(),
         });
 
-        const nextFollowingCount = currentFollowingCount + 1;
-        const nextFollowersCount = currentFollowersCount + 1;
-
         if (followerSnap.exists) {
           transaction.update(followerUserRef, {
-            "stats.followingCount": nextFollowingCount,
+            "stats.followingCount": FieldValue.increment(1),
             updatedAt: FieldValue.serverTimestamp(),
           });
         }
 
         transaction.update(targetUserRef, {
-          "stats.followersCount": nextFollowersCount,
+          "stats.followersCount": FieldValue.increment(1),
           updatedAt: FieldValue.serverTimestamp(),
         });
 
         return {
           isFollowing: true,
-          followingCount: nextFollowingCount,
-          followersCount: nextFollowersCount,
+          followingCount: currentFollowingCount + 1,
+          followersCount: currentFollowersCount + 1,
         };
       } else if (!shouldFollow && exists) {
         transaction.delete(followRef);
 
-        const nextFollowingCount = Math.max(0, currentFollowingCount - 1);
-        const nextFollowersCount = Math.max(0, currentFollowersCount - 1);
-
         if (followerSnap.exists) {
           transaction.update(followerUserRef, {
-            "stats.followingCount": nextFollowingCount,
+            "stats.followingCount":
+              currentFollowingCount > 0 ? FieldValue.increment(-1) : 0,
             updatedAt: FieldValue.serverTimestamp(),
           });
         }
 
         transaction.update(targetUserRef, {
-          "stats.followersCount": nextFollowersCount,
+          "stats.followersCount":
+            currentFollowersCount > 0 ? FieldValue.increment(-1) : 0,
           updatedAt: FieldValue.serverTimestamp(),
         });
 
         return {
           isFollowing: false,
-          followingCount: nextFollowingCount,
-          followersCount: nextFollowersCount,
+          followingCount: Math.max(0, currentFollowingCount - 1),
+          followersCount: Math.max(0, currentFollowersCount - 1),
         };
       }
 
@@ -144,3 +142,5 @@ export async function POST(request: Request) {
     );
   }
 }
+// [END] AeroCode
+// [END] AeroCode

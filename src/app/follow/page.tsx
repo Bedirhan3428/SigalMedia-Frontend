@@ -1,3 +1,4 @@
+// [START] AeroCode
 "use client";
 
 import { useState, useEffect, Suspense } from "react";
@@ -15,6 +16,7 @@ import {
   toggleFollow,
 } from "@/services/followService";
 
+// [START] AeroCode
 function FollowPageContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -305,7 +307,9 @@ function FollowPageContent() {
     </div>
   );
 }
+// [END] AeroCode
 
+// [START] AeroCode
 export default function FollowPage() {
   return (
     <Suspense
@@ -319,3 +323,5 @@ export default function FollowPage() {
     </Suspense>
   );
 }
+// [END] AeroCode
+// [END] AeroCode
