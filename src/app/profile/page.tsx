@@ -99,27 +99,60 @@ export default function ProfilePage() {
     }
   }, [profile?.uid]);
 
+  // [START] AeroCode
   // Profili Paylaş
   const handleShareProfile = async () => {
-    const shareUrl = typeof window !== "undefined" ? window.location.href : "";
-    if (navigator.share) {
+    if (!profile?.uid) return;
+    const origin =
+      typeof window !== "undefined"
+        ? window.location.origin
+        : process.env.NEXT_PUBLIC_APP_URL || "https://sigalmedia.com.tr";
+    const shareUrl = `${origin}/profile/${profile.uid}`;
+    const displayName = profile.displayName || profile.username || "Kullanıcı";
+    const username = profile.username || "kullanici";
+    const bioText = profile.bio ? ` — ${profile.bio}` : "";
+
+    if (typeof navigator !== "undefined" && navigator.share) {
       try {
         await navigator.share({
-          title: profile?.displayName || "SigalMedia",
-          text: `${profile?.displayName} (@${profile?.username}) profili`,
+          title: `${displayName} (@${username})`,
+          text: `${displayName} (@${username})${bioText}`,
           url: shareUrl,
         });
         return;
-      } catch {
-        // İptal edilirse sessizce kal
+      } catch (err: any) {
+        if (err?.name === "AbortError") {
+          return;
+        }
       }
     }
 
-    if (navigator.clipboard) {
-      await navigator.clipboard.writeText(shareUrl);
+    if (typeof navigator !== "undefined" && navigator.clipboard) {
+      try {
+        await navigator.clipboard.writeText(shareUrl);
+        showToast("Profil bağlantısı kopyalandı");
+        return;
+      } catch {
+        // Fallback copy below
+      }
+    }
+
+    try {
+      const textArea = document.createElement("textarea");
+      textArea.value = shareUrl;
+      textArea.style.position = "fixed";
+      textArea.style.opacity = "0";
+      document.body.appendChild(textArea);
+      textArea.focus();
+      textArea.select();
+      document.execCommand("copy");
+      document.body.removeChild(textArea);
       showToast("Profil bağlantısı kopyalandı");
+    } catch {
+      showToast("Bağlantı kopyalanamadı");
     }
   };
+  // [END] AeroCode
 
   // Gönderiyi Sil
   const handleDeletePost = async (postId: string) => {

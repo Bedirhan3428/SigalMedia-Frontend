@@ -407,11 +407,19 @@ export default function VisitedProfilePage() {
                 </span>
                 <span className="text-[12px] text-zinc-400 mt-1">Gönderi</span>
               </div>
+              {/* // [START] NexusAI */}
               <button
                 type="button"
-                disabled={isLocked}
-                onClick={() => !isLocked && router.push(`/follow?tab=followers&uid=${targetProfile.uid}`)}
-                className={`flex flex-col items-center flex-1 ${!isLocked ? "hover:opacity-80 transition-opacity cursor-pointer" : "cursor-default"}`}
+                disabled={Boolean(targetProfile.isPrivate)}
+                onClick={() =>
+                  !targetProfile.isPrivate &&
+                  router.push(`/follow?tab=followers&uid=${targetProfile.uid}`)
+                }
+                className={`flex flex-col items-center flex-1 ${
+                  !targetProfile.isPrivate
+                    ? "hover:opacity-80 transition-opacity cursor-pointer"
+                    : "cursor-default select-none"
+                }`}
               >
                 <span className="text-base font-bold text-white leading-none">
                   {targetProfile.stats?.followersCount ?? 0}
@@ -420,15 +428,23 @@ export default function VisitedProfilePage() {
               </button>
               <button
                 type="button"
-                disabled={isLocked}
-                onClick={() => !isLocked && router.push(`/follow?tab=following&uid=${targetProfile.uid}`)}
-                className={`flex flex-col items-center flex-1 ${!isLocked ? "hover:opacity-80 transition-opacity cursor-pointer" : "cursor-default"}`}
+                disabled={Boolean(targetProfile.isPrivate)}
+                onClick={() =>
+                  !targetProfile.isPrivate &&
+                  router.push(`/follow?tab=following&uid=${targetProfile.uid}`)
+                }
+                className={`flex flex-col items-center flex-1 ${
+                  !targetProfile.isPrivate
+                    ? "hover:opacity-80 transition-opacity cursor-pointer"
+                    : "cursor-default select-none"
+                }`}
               >
                 <span className="text-base font-bold text-white leading-none">
                   {targetProfile.stats?.followingCount ?? 0}
                 </span>
                 <span className="text-[12px] text-zinc-400 mt-1">Takip</span>
               </button>
+              {/* // [END] NexusAI */}
             </div>
           </div>
         </div>
