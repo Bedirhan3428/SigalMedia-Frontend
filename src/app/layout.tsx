@@ -1,4 +1,7 @@
 import type { Metadata, Viewport } from "next";
+// [START] CyberCore
+import { Suspense } from "react";
+// [END] CyberCore
 import localFont from "next/font/local";
 import { AuthProvider } from "@/context/AuthContext";
 import "./globals.css";
@@ -68,7 +71,11 @@ export default function RootLayout({
         className="min-h-full flex flex-col bg-zinc-950 text-zinc-100 selection:bg-emerald-500/20 selection:text-emerald-300"
         suppressHydrationWarning
       >
-        <AuthProvider>{children}</AuthProvider>
+        {/* [START] CyberCore */}
+        <Suspense fallback={null}>
+          <AuthProvider>{children}</AuthProvider>
+        </Suspense>
+        {/* [END] CyberCore */}
       </body>
     </html>
   );

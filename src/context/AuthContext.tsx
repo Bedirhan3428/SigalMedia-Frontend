@@ -1,6 +1,8 @@
 "use client";
 
-import React, { createContext, useContext, useEffect, useState, ReactNode } from "react";
+// [START] CyberCore
+import React, { createContext, Suspense, useContext, useEffect, useState, ReactNode } from "react";
+// [END] CyberCore
 import { User, onAuthStateChanged, signOut as firebaseSignOut } from "firebase/auth";
 import { doc, getDoc } from "firebase/firestore";
 import { usePathname, useRouter } from "next/navigation";
@@ -23,13 +25,70 @@ const AuthContext = createContext<AuthContextType>({
   signOut: async () => {},
 });
 
+// [START] CyberCore
+function AuthNavigationGuard({
+  user,
+  profile,
+  loading,
+}: {
+  user: User | null;
+  profile: UserProfile | null;
+  loading: boolean;
+}) {
+  const router = useRouter();
+  const pathname = usePathname();
+
+  useEffect(() => {
+    if (loading) return;
+
+    const isAuthRoute = pathname === "/login" || pathname.startsWith("/auth");
+    const isOnboardingRoute = pathname === "/onboarding";
+
+    if (!user) {
+      if (!isAuthRoute) {
+        router.push("/login");
+      }
+      return;
+    }
+
+    const isGoogleUser = user.providerData.some((p) => p.providerId === "google.com");
+    const isLocalVerified =
+      typeof window !== "undefined" &&
+      (localStorage.getItem(`email_verified_${user.uid}`) === "true" ||
+        (user.email && localStorage.getItem(`email_verified_${user.email}`) === "true"));
+    const isProfileVerified = Boolean(profile?.onboardingCompleted || (profile as any)?.emailVerified);
+    const isVerified = user.emailVerified || isGoogleUser || isLocalVerified || isProfileVerified;
+
+    if (!isVerified) {
+      if (pathname !== "/login" && pathname !== "/auth/verify-email") {
+        router.replace("/auth/verify-email");
+      }
+      return;
+    }
+
+    const isCompleted = profile?.onboardingCompleted;
+
+    if (!isCompleted) {
+      if (!isOnboardingRoute) {
+        router.push("/onboarding");
+      }
+    } else {
+      if (isAuthRoute || isOnboardingRoute) {
+        router.push("/");
+      }
+    }
+  }, [user, profile, loading, pathname, router]);
+
+  return null;
+}
+// [END] CyberCore
+
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [profile, setProfile] = useState<UserProfile | null>(null);
   const [loading, setLoading] = useState<boolean>(true);
 
   const router = useRouter();
-  const pathname = usePathname();
 
   const fetchProfile = async (uid: string): Promise<UserProfile | null> => {
     try {
@@ -83,53 +142,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return () => unsubscribe();
   }, []);
 
-  // Navigation guard
-  useEffect(() => {
-    if (loading) return;
-
-    const isAuthRoute = pathname === "/login" || pathname.startsWith("/auth");
-    const isOnboardingRoute = pathname === "/onboarding";
-
-    if (!user) {
-      if (!isAuthRoute) {
-        router.push("/login");
-      }
-      return;
-    }
-
-    // Google hesapları, yerel doğrulanan 4 haneli kod veya profili tamamlanmış hesaplar doğrulanmış kabul edilir
-    const isGoogleUser = user.providerData.some((p) => p.providerId === "google.com");
-    const isLocalVerified =
-      typeof window !== "undefined" &&
-      (localStorage.getItem(`email_verified_${user.uid}`) === "true" ||
-        (user.email && localStorage.getItem(`email_verified_${user.email}`) === "true"));
-    const isProfileVerified = Boolean(profile?.onboardingCompleted || (profile as any)?.emailVerified);
-    const isVerified = user.emailVerified || isGoogleUser || isLocalVerified || isProfileVerified;
-
-    if (!isVerified) {
-      // /login sayfasındayken login bileşeninin kendi form gönderme ve kod üretme akışını tamamlamasına izin ver
-      if (pathname !== "/login" && pathname !== "/auth/verify-email") {
-        router.replace("/auth/verify-email");
-      }
-      return;
-    }
-
-    // User is logged in and verified
-    const isCompleted = profile?.onboardingCompleted;
-
-    if (!isCompleted) {
-      if (!isOnboardingRoute) {
-        router.push("/onboarding");
-      }
-    } else {
-      if (isAuthRoute || isOnboardingRoute) {
-        router.push("/");
-      }
-    }
-  }, [user, profile, loading, pathname, router]);
-
   return (
     <AuthContext.Provider value={{ user, profile, loading, refreshProfile, signOut }}>
+      {/* [START] CyberCore */}
+      <Suspense fallback={null}>
+        <AuthNavigationGuard user={user} profile={profile} loading={loading} />
+      </Suspense>
+      {/* [END] CyberCore */}
       {children}
     </AuthContext.Provider>
   );
