@@ -16,6 +16,7 @@ import {
   SoundTrack,
   searchTracks,
   getAudioStreamUrl,
+  getTrackAudioStatus,
   getTrackHotChunks,
   getTrackLyrics,
   warmTrackAudio,
@@ -40,6 +41,8 @@ const VIEW_WINDOW_SEC = FIXED_DURATION + EDGE_SEC * 2;
 // Saniye başına çizgi yoğunluğu
 const BARS_PER_SEC = 1.5;
 const BAR_WIDTH_PX = 2.5;
+// Henüz R2 hazır değilken güvenli tampon marjı (bufferedEnd - 0.3s)
+const SAFE_BUFFER_MARGIN_SEC = 0.3;
 
 /**
  * Şarkı kimliğine (ID) göre deterministik ve estetik ses dalgası çubukları üretir
@@ -72,9 +75,11 @@ export default function MusicPickerDrawer({
   const [tracks, setTracks] = useState<SoundTrack[]>([]);
   const [selectedTrack, setSelectedTrack] = useState<SoundTrack | null>(null);
 
-  // Saniye ve Oynatma Durumları
+  // Saniye, Tampon (Buffered) ve R2 Hazırlık Durumları
   const [selectedStartSec, setSelectedStartSec] = useState<number>(0);
   const [currentPlayTime, setCurrentPlayTime] = useState<number>(0);
+  const [bufferedEnd, setBufferedEnd] = useState<number>(0);
+  const [isR2Ready, setIsR2Ready] = useState<boolean>(false);
   const [isPlaying, setIsPlaying] = useState<boolean>(false);
   const [isAudioLoading, setIsAudioLoading] = useState<boolean>(false);
   const [audioErrorTrackId, setAudioErrorTrackId] = useState<string | null>(null);
@@ -83,6 +88,10 @@ export default function MusicPickerDrawer({
   const [currentLyricSnippet, setCurrentLyricSnippet] = useState<string>("");
 
   const audioRef = useRef<HTMLAudioElement | null>(null);
+  const bufferedEndRef = useRef<number>(0);
+  const isR2ReadyRef = useRef<boolean>(false);
+  const statusPollTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const statusAbortRef = useRef<AbortController | null>(null);
   const searchTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const searchAbortControllerRef = useRef<AbortController | null>(null);
   const animFrameRef = useRef<number | null>(null);
@@ -101,6 +110,83 @@ export default function MusicPickerDrawer({
   const emaDeltaRef = useRef<number>(0.22); // Senaryo 3: Lookahead EMA gecikme tamponu (varsayılan 0.22s)
   startRef.current = selectedStartSec;
   ppsRef.current = viewportWidth > 0 ? viewportWidth / VIEW_WINDOW_SEC : 0;
+
+  /**
+   * HTML5 audio.buffered aralıklarını izleyerek en son inmiş saniyeyi (bufferedEnd) günceller
+   */
+  const syncBufferedEnd = useCallback((): number => {
+    const audio = audioRef.current;
+    if (!audio || !audio.buffered || audio.buffered.length === 0) {
+      return bufferedEndRef.current;
+    }
+    let maxEnd = 0;
+    for (let i = 0; i < audio.buffered.length; i++) {
+      try {
+        const end = audio.buffered.end(i);
+        if (end > maxEnd) maxEnd = end;
+      } catch {}
+    }
+    if (Math.abs(maxEnd - bufferedEndRef.current) > 0.01) {
+      bufferedEndRef.current = maxEnd;
+      setBufferedEnd(maxEnd);
+    }
+    return maxEnd;
+  }, []);
+
+  /**
+   * R2'de dosya hazır olana kadar güvenli üst sınır: Math.max(0, bufferedEnd - 0.3s)
+   */
+  const getSafeBufferedLimit = useCallback((): number => {
+    const bufEnd = syncBufferedEnd();
+    return Math.max(0, bufEnd - SAFE_BUFFER_MARGIN_SEC);
+  }, [syncBufferedEnd]);
+
+  // /api/audio/status üzerinden dosyanın R2'de hazır olup olmadığını izle;
+  // ready: true olduğu an sıçrama kilidi otomatik kalkar
+  useEffect(() => {
+    if (statusPollTimerRef.current) {
+      clearTimeout(statusPollTimerRef.current);
+      statusPollTimerRef.current = null;
+    }
+    if (statusAbortRef.current) {
+      statusAbortRef.current.abort();
+      statusAbortRef.current = null;
+    }
+
+    const trackId = selectedTrack?.id;
+    if (!isOpen || !trackId) {
+      isR2ReadyRef.current = false;
+      setIsR2Ready(false);
+      return;
+    }
+
+    let isCancelled = false;
+    const abortController = new AbortController();
+    statusAbortRef.current = abortController;
+
+    const pollStatus = async () => {
+      if (isCancelled || isR2ReadyRef.current) return;
+      const status = await getTrackAudioStatus(trackId, abortController.signal);
+      if (isCancelled) return;
+      if (status.ready) {
+        isR2ReadyRef.current = true;
+        setIsR2Ready(true);
+        return;
+      }
+      statusPollTimerRef.current = setTimeout(pollStatus, 350);
+    };
+
+    pollStatus();
+
+    return () => {
+      isCancelled = true;
+      if (statusPollTimerRef.current) {
+        clearTimeout(statusPollTimerRef.current);
+        statusPollTimerRef.current = null;
+      }
+      abortController.abort();
+    };
+  }, [isOpen, selectedTrack?.id]);
 
   // Yükleme durumu için emniyet zaman aşımı (maksimum 2 saniye sonra yükleniyor zorla kapanır)
   useEffect(() => {
@@ -218,11 +304,15 @@ export default function MusicPickerDrawer({
     setSelectedTrack(track);
     setAudioErrorTrackId(null);
     setIsAudioLoading(true);
+    isR2ReadyRef.current = false;
+    setIsR2Ready(false);
+    bufferedEndRef.current = 0;
+    setBufferedEnd(0);
 
     warmTrackAudio(track.id);
 
-    const maxStart = Math.max(0, track.duration - FIXED_DURATION);
-    const defaultStart = Math.min(30, Math.floor(maxStart * 0.2));
+    // İlk 512 KB HTTP 206 diliminin 0. saniyeden anında çalması için 0s'den başlatılır
+    const defaultStart = 0;
     setSelectedStartSec(defaultStart);
     setCurrentPlayTime(defaultStart);
     pendingSeekRef.current = defaultStart;
@@ -239,7 +329,6 @@ export default function MusicPickerDrawer({
       audioRef.current.src = getAudioStreamUrl(track.id);
       audioRef.current.load();
 
-      // Not: currentTime burada atanmaz; ses metadata'sı yüklendiğinde onCanPlay içinde pendingSeekRef ile atanır.
       audioRef.current
         .play()
         .then(() => {
@@ -247,7 +336,6 @@ export default function MusicPickerDrawer({
           setIsAudioLoading(false);
         })
         .catch(() => {
-          // Hızlı şarkı geçişlerinde 'play() request interrupted by new load' hatasını yut
           setIsPlaying(false);
           setIsAudioLoading(false);
         });
@@ -281,9 +369,12 @@ export default function MusicPickerDrawer({
       setIsAudioLoading(true);
       setAudioErrorTrackId(null);
       const cur = audioRef.current.currentTime;
+      const safeTarget = isR2ReadyRef.current
+        ? selectedStartSec
+        : Math.min(selectedStartSec, getSafeBufferedLimit());
       if (cur < selectedStartSec || cur >= selectedStartSec + FIXED_DURATION) {
-        audioRef.current.currentTime = selectedStartSec;
-        setCurrentPlayTime(selectedStartSec);
+        audioRef.current.currentTime = safeTarget;
+        setCurrentPlayTime(safeTarget);
       }
       audioRef.current
         .play()
@@ -298,9 +389,8 @@ export default function MusicPickerDrawer({
     }
   };
 
-  // 5. Senaryo 1 & 2: Dinamik VBR Emniyet Marjı (Δsafe) ve Tmax Hesabı
+  // 5. Senaryo 1 & 2: Dinamik VBR Emniyet Marjı (Δsafe), Tmax ve Buffered Sınır Kenetlemesi
   const calculateDeltaSafe = (effDur: number) => {
-    // Δsafe = 0.45 + 0.0065 * Deff (Senaryo 1: 29.6s -> 0.642s, Senaryo 2: 239.2s -> 2.005s)
     return 0.45 + 0.0065 * effDur;
   };
 
@@ -316,7 +406,13 @@ export default function MusicPickerDrawer({
 
   const clampStart = (sec: number) => {
     const maxVal = getMaxStart();
-    const clamped = Math.min(maxVal, Math.max(0, sec));
+    let clamped = Math.min(maxVal, Math.max(0, sec));
+    // R2'de dosya hazır olana kadar henüz inmemiş saniyelere gidilmesini engelle,
+    // oynatma konumunu güvenli sınıra (bufferedEnd - 0.3s) kenetle
+    if (!isR2ReadyRef.current) {
+      const safeLimit = getSafeBufferedLimit();
+      clamped = Math.min(clamped, safeLimit);
+    }
     return Math.round(clamped * 1000) / 1000;
   };
 
@@ -324,13 +420,22 @@ export default function MusicPickerDrawer({
     viewportWidth > 0 ? viewportWidth / VIEW_WINDOW_SEC : 0;
 
   const handleSeek = (rawSec: number) => {
+    if (!isR2ReadyRef.current) {
+      const safeLimit = getSafeBufferedLimit();
+      if (rawSec > safeLimit) {
+        rawSec = safeLimit;
+      }
+    }
     const newSec = clampStart(rawSec);
     setSelectedStartSec(newSec);
     setCurrentPlayTime(newSec);
     lastTimeUpdateRef.current = newSec;
     if (audioRef.current) {
+      const targetTime = isR2ReadyRef.current
+        ? newSec
+        : Math.min(newSec, getSafeBufferedLimit());
       try {
-        audioRef.current.currentTime = newSec;
+        audioRef.current.currentTime = targetTime;
       } catch {}
       setIsAudioLoading(true);
       audioRef.current
@@ -347,7 +452,20 @@ export default function MusicPickerDrawer({
 
   // 5b. Dalga Formunu Sürükleme (Sabit çerçeve, hareketli şarkı)
   const handleWavePointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
-    if (!selectedTrack || getPxPerSec() === 0) return;
+    const pps = getPxPerSec();
+    if (!selectedTrack || pps === 0) return;
+
+    // R2 hazır değilken henüz inmemiş bir saniyeye doğrudan tıklanmasını engelle
+    if (!isR2ReadyRef.current) {
+      const rect = e.currentTarget.getBoundingClientRect();
+      const relX = e.clientX - rect.left;
+      const clickedSec = selectedStartSec + (relX / pps - EDGE_SEC);
+      const safeLimit = getSafeBufferedLimit();
+      if (clickedSec > safeLimit && safeLimit <= 0) {
+        return;
+      }
+    }
+
     e.currentTarget.setPointerCapture(e.pointerId);
     dragRef.current = {
       x: e.clientX,
@@ -416,8 +534,22 @@ export default function MusicPickerDrawer({
     const updatePlayhead = () => {
       const audio = audioRef.current;
       if (audio && !dragRef.current) {
+        syncBufferedEnd();
         const now = performance.now();
-        const cur = audio.currentTime;
+        let cur = audio.currentTime;
+
+        // R2 hazır değilken oynatma konumunu güvenli sınıra (bufferedEnd - 0.3s) kenetle
+        if (!isR2ReadyRef.current) {
+          const safeLimit = getSafeBufferedLimit();
+          if (safeLimit > 0 && cur > safeLimit) {
+            const clampedPos = Math.min(startRef.current, safeLimit);
+            try {
+              audio.currentTime = clampedPos;
+              cur = clampedPos;
+            } catch {}
+          }
+        }
+
         if (cur !== lastAudioTime) {
           lastAudioTime = cur;
           lastStamp = now;
@@ -466,7 +598,7 @@ export default function MusicPickerDrawer({
     return () => {
       if (animFrameRef.current) cancelAnimationFrame(animFrameRef.current);
     };
-  }, [isPlaying, lyrics, paintProgress]);
+  }, [isPlaying, lyrics, paintProgress, syncBufferedEnd, getSafeBufferedLimit]);
 
   // Başlangıç değiştiğinde veya boyut değiştiğinde ilerlemeyi yeniden hizala
   useEffect(() => {
@@ -512,20 +644,45 @@ export default function MusicPickerDrawer({
   const trackOffsetPx = (EDGE_SEC - selectedStartSec) * pxPerSec;
   const frameLeftPercent = (EDGE_SEC / VIEW_WINDOW_SEC) * 100;
   const frameWidthPercent = (FIXED_DURATION / VIEW_WINDOW_SEC) * 100;
+  const safeBufferedLimitSec = Math.max(0, bufferedEnd - SAFE_BUFFER_MARGIN_SEC);
 
   return (
     <div className="fixed inset-0 z-50 flex flex-col bg-neutral-950/98 text-white backdrop-blur-2xl animate-in slide-in-from-bottom duration-300 ease-out select-none">
       {/* Görünmez Canlı Ses Akışı Oynatıcısı */}
       <audio
         ref={audioRef}
+        onProgress={() => {
+          syncBufferedEnd();
+        }}
+        onLoadedMetadata={() => {
+          syncBufferedEnd();
+        }}
+        onLoadedData={() => {
+          syncBufferedEnd();
+        }}
         onCanPlay={() => {
           setIsAudioLoading(false);
           setAudioErrorTrackId(null);
+          syncBufferedEnd();
           if (audioRef.current && pendingSeekRef.current !== null) {
+            const desiredSeek = pendingSeekRef.current;
+            const targetSeek = isR2ReadyRef.current
+              ? desiredSeek
+              : Math.min(desiredSeek, getSafeBufferedLimit());
             try {
-              audioRef.current.currentTime = pendingSeekRef.current;
+              audioRef.current.currentTime = targetSeek;
             } catch {}
             pendingSeekRef.current = null;
+          }
+        }}
+        onSeeking={() => {
+          if (audioRef.current && !isR2ReadyRef.current) {
+            const safeLimit = getSafeBufferedLimit();
+            if (safeLimit > 0 && audioRef.current.currentTime > safeLimit) {
+              try {
+                audioRef.current.currentTime = safeLimit;
+              } catch {}
+            }
           }
         }}
         onPlaying={() => {
@@ -538,10 +695,23 @@ export default function MusicPickerDrawer({
           setIsAudioLoading(true);
         }}
         onTimeUpdate={() => {
+          syncBufferedEnd();
           if (audioRef.current && !dragRef.current) {
-            const cur = audioRef.current.currentTime;
+            let cur = audioRef.current.currentTime;
             const dur = audioRef.current.duration;
             const endSec = selectedStartSec + FIXED_DURATION;
+
+            // R2 hazır değilken oynatma konumunu güvenli sınıra (bufferedEnd - 0.3s) kenetle
+            if (!isR2ReadyRef.current) {
+              const safeLimit = getSafeBufferedLimit();
+              if (safeLimit > 0 && cur > safeLimit) {
+                const clampedPos = Math.min(selectedStartSec, safeLimit);
+                try {
+                  audioRef.current.currentTime = clampedPos;
+                  cur = clampedPos;
+                } catch {}
+              }
+            }
 
             // EMA Delta hesaplama (alfa = 0.3)
             if (lastTimeUpdateRef.current > 0 && cur > lastTimeUpdateRef.current) {
@@ -749,16 +919,27 @@ export default function MusicPickerDrawer({
             </div>
 
             {/* Popüler Nakarat Rozeti (Varsa) */}
-            {hotChunks.length > 0 && (
-              <button
-                type="button"
-                onClick={() => handleSeek(hotChunks[0].start)}
-                className="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-amber-500/15 border border-amber-500/30 text-amber-300 hover:bg-amber-500/25 active:scale-95 transition-all text-[11px] font-semibold"
-              >
-                <Flame className="w-3.5 h-3.5 fill-amber-400 text-amber-400" />
-                <span>Nakarat ({formatSeconds(hotChunks[0].start)})</span>
-              </button>
-            )}
+            {hotChunks.length > 0 && (() => {
+              const isChorusLocked = !isR2Ready && hotChunks[0].start > safeBufferedLimitSec;
+              return (
+                <button
+                  type="button"
+                  disabled={isChorusLocked}
+                  onClick={() => {
+                    if (isChorusLocked) return;
+                    handleSeek(hotChunks[0].start);
+                  }}
+                  className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-amber-500/15 border border-amber-500/30 text-amber-300 transition-all text-[11px] font-semibold ${
+                    isChorusLocked
+                      ? "opacity-45 cursor-not-allowed"
+                      : "hover:bg-amber-500/25 active:scale-95"
+                  }`}
+                >
+                  <Flame className="w-3.5 h-3.5 fill-amber-400 text-amber-400" />
+                  <span>Nakarat ({formatSeconds(hotChunks[0].start)})</span>
+                </button>
+              );
+            })()}
           </div>
 
           {/* Senkronize Şarkı Sözü Satırı */}
@@ -806,16 +987,21 @@ export default function MusicPickerDrawer({
                 }`}
                 style={{ transform: `translate3d(${trackOffsetPx}px, 0, 0)` }}
               >
-                {/* Taban Çizgiler (soluk kenarlar / parlak aktif alan) */}
+                {/* Taban Çizgiler (soluk kenarlar / parlak aktif alan / henüz inmemiş alan) */}
                 {waveformBars.map((height, idx) => {
                   const barSec = idx / BARS_PER_SEC;
                   const isInsideClip = barSec >= selectedStartSec && barSec < clipEndSec;
+                  const isUnbuffered = !isR2Ready && barSec > safeBufferedLimitSec;
 
                   return (
                     <div
                       key={idx}
                       className={`absolute top-1/2 -translate-y-1/2 rounded-full ${
-                        isInsideClip ? "bg-white/85" : "bg-white/20"
+                        isUnbuffered
+                          ? "bg-white/10"
+                          : isInsideClip
+                          ? "bg-white/85"
+                          : "bg-white/20"
                       }`}
                       style={{
                         left: `${idx * barPitchPx}px`,

@@ -36,6 +36,9 @@ export async function GET(req: NextRequest) {
   } else if (type === 'warm') {
     const id = searchParams.get('id') || '';
     pathAndQuery = `/api/audio/warm?id=${encodeURIComponent(id)}`;
+  } else if (type === 'status') {
+    const id = searchParams.get('id') || '';
+    pathAndQuery = `/api/audio/status?id=${encodeURIComponent(id)}`;
   } else {
     return NextResponse.json({ error: 'Geçersiz istek tipi' }, { status: 400 });
   }
@@ -46,6 +49,7 @@ export async function GET(req: NextRequest) {
       const fullUrl = `${baseUrl}${pathAndQuery}${sep}apiKey=${encodeURIComponent(API_KEY)}`;
       const res = await fetch(fullUrl, {
         headers: { 'x-api-key': API_KEY },
+        cache: type === 'status' ? 'no-store' : undefined,
         signal: AbortSignal.timeout(12000),
       });
 
@@ -55,6 +59,7 @@ export async function GET(req: NextRequest) {
           status: 200,
           headers: {
             'Access-Control-Allow-Origin': '*',
+            ...(type === 'status' ? { 'Cache-Control': 'no-store, no-cache, must-revalidate' } : {}),
           },
         });
       }
@@ -72,6 +77,9 @@ export async function GET(req: NextRequest) {
   }
   if (type === 'warm') {
     return NextResponse.json({ success: true }, { status: 200 });
+  }
+  if (type === 'status') {
+    return NextResponse.json({ success: false, ready: false, r2Ready: false, source: 'pending' }, { status: 200 });
   }
 
   return NextResponse.json({ error: 'Müzik servisine bağlanılamadı' }, { status: 502 });

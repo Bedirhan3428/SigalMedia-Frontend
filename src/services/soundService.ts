@@ -53,6 +53,14 @@ export interface CommitResult {
   error?: string;
 }
 
+export interface AudioStatusResponse {
+  success: boolean;
+  videoId?: string;
+  ready: boolean;
+  r2Ready?: boolean;
+  source?: 'r2' | 'local' | 'pending';
+}
+
 /**
  * Format seconds to mm:ss format
  */
@@ -172,6 +180,43 @@ export function warmTrackAudio(videoId: string): void {
     method: 'GET',
     headers: isClient ? {} : { 'x-api-key': SOUND_API_KEY },
   }).catch(() => { });
+}
+
+/**
+ * Dosyanın Cloudflare R2 üzerinde hazır olup olmadığını kontrol eder (/api/audio/status)
+ */
+export async function getTrackAudioStatus(
+  videoId: string,
+  signal?: AbortSignal
+): Promise<AudioStatusResponse> {
+  if (!videoId) return { success: false, ready: false };
+  try {
+    const isClient = typeof window !== 'undefined';
+    const url = isClient
+      ? `/api/audio/status?id=${encodeURIComponent(videoId)}`
+      : `${SOUND_SERVICE_URL}/api/audio/status?id=${encodeURIComponent(
+          videoId
+        )}&apiKey=${encodeURIComponent(SOUND_API_KEY)}`;
+
+    const res = await fetch(url, {
+      method: 'GET',
+      headers: isClient ? {} : { 'x-api-key': SOUND_API_KEY },
+      cache: 'no-store',
+      signal,
+    });
+
+    if (!res.ok) return { success: false, ready: false };
+    const data = await res.json();
+    return {
+      success: Boolean(data?.success),
+      videoId: data?.videoId || videoId,
+      ready: Boolean(data?.ready),
+      r2Ready: Boolean(data?.r2Ready),
+      source: data?.source,
+    };
+  } catch {
+    return { success: false, ready: false };
+  }
 }
 
 /**
