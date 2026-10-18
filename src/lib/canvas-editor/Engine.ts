@@ -350,6 +350,18 @@ export class CanvasEngine {
     return this.activeFilterIndex;
   }
 
+  public getFilterIndex(): number {
+    return this.activeFilterIndex;
+  }
+
+  public rotateMedia90(degrees = 90) {
+    this.rotateMediaOrSelected(degrees);
+  }
+
+  public resetMediaGeometry() {
+    this.resetMediaTransform();
+  }
+
   public setFilterByIndex(index: number): string {
     const total = FILTER_PRESETS.length;
     this.activeFilterIndex = ((index % total) + total) % total;

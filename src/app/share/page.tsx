@@ -375,7 +375,7 @@ export default function ShareStoryPage() {
     engine.on("filter-swipe", (_dir: string, filterName: string) => {
       const currentPreset = engine.getCurrentFilterPreset();
       setActiveFilterGradient(currentPreset.backgroundGradient);
-      setActiveFilterIndex(engine.getFilterIndex());
+      setActiveFilterIndex(engine.getCurrentFilterIndex());
       setFilterToast(filterName);
       if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
       toastTimerRef.current = setTimeout(() => {
@@ -561,7 +561,7 @@ export default function ShareStoryPage() {
       const media = await engine.loadMedia(file, undefined, shareModeRef.current === "post");
       setHasMedia(true);
       setPostAdjustments(engine.getPostAdjustments());
-      setActiveFilterIndex(engine.getFilterIndex());
+      setActiveFilterIndex(engine.getCurrentFilterIndex());
       setActiveReelsEffect(engine.getReelsEffect());
       e.target.value = "";
 
