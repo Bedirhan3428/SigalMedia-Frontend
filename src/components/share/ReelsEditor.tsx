@@ -1474,9 +1474,11 @@ export default function ReelsEditor({
                   <button
                     type="button"
                     onClick={() => {
-                      const selLayer = engine
-                        ?.getLayers()
-                        .find((l) => l.id === selectedItemId);
+                      const selLayer =
+                        engine?.getSelectedLayer() ||
+                        engine
+                          ?.getAllLayers()
+                          .find((l) => l.id === selectedItemId);
                       if (selLayer && selLayer instanceof TextLayer) {
                         onOpenTextEditor(selLayer);
                       } else {
