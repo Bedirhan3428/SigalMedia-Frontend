@@ -8,3 +8,8 @@ export * from './layers/OverlayImageLayer';
 export * from './layers/MusicStickerLayer';
 export * from './interaction/InteractionManager';
 export * from './exporter/ImageExporter';
+// [START] CREATED BY Bedirhan
+export * from './exporter/VideoExporter';
+export * from './exporter/MediaRecorderFallback';
+export * from './utils/videoThumbs';
+// [END] CREATED BY Bedirhan

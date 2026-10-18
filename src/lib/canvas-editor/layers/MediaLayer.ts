@@ -36,6 +36,14 @@ export class MediaLayer extends BaseLayer {
   public targetValues: FilterValues = { ...DEFAULT_FILTER_VALUES };
   public activeEffect: OverlayEffect = null;
 
+  // [START] CREATED BY Bedirhan
+  public trimStart: number = 0;
+  public trimEnd: number = 0;
+  public playbackRate: number = 1.0;
+  public volume: number = 1.0;
+  public muted: boolean = false;
+  // [END] CREATED BY Bedirhan
+
   private animFrameId: number | null = null;
   private onRenderCallback: (() => void) | null = null;
 
@@ -67,12 +75,27 @@ export class MediaLayer extends BaseLayer {
     return MediaLayer.noiseCanvas;
   }
 
+  // [MODIFIED BY Bedirhan]
   constructor(media: EditorMedia, options?: { fitMode?: FitMode; filters?: Partial<MediaFilters> }) {
     super();
     this.media = media;
     this.fitMode = options?.fitMode || 'contain';
     this.filters = { ...DEFAULT_FILTERS, ...(options?.filters || {}) };
     this.locked = false; // Görsel serbestçe sağa-sola hareket ettirilebilir, döndürülebilir ve ölçeklenebilir
+
+    if (media.type === 'video' && media.element instanceof HTMLVideoElement) {
+      const dur = Number.isFinite(media.duration) && (media.duration || 0) > 0
+        ? (media.duration as number)
+        : (Number.isFinite(media.element.duration) ? media.element.duration : 0);
+      this.trimStart = 0;
+      this.trimEnd = dur > 0 ? Math.min(dur, 60) : 0;
+      this.playbackRate = 1.0;
+      this.volume = 1.0;
+      this.muted = false;
+      media.element.playbackRate = 1.0;
+      media.element.volume = 1.0;
+      media.element.muted = false;
+    }
   }
 
   /**
@@ -372,4 +395,141 @@ export class MediaLayer extends BaseLayer {
   public flipVertical(): void {
     this.transform.flipV = !this.transform.flipV;
   }
+
+  // [START] CREATED BY Bedirhan
+  public getVideoElement(): HTMLVideoElement | null {
+    if (this.media.type === 'video' && this.media.element instanceof HTMLVideoElement) {
+      return this.media.element;
+    }
+    return null;
+  }
+
+  public getDuration(): number {
+    const video = this.getVideoElement();
+    if (!video) return 0;
+    const d = Number.isFinite(video.duration) && video.duration > 0 ? video.duration : (this.media.duration || 0);
+    return Number.isFinite(d) ? d : 0;
+  }
+
+  public setTrim(start: number, end: number): void {
+    const dur = this.getDuration();
+    const maxEnd = dur > 0 ? dur : Math.max(end, start + 0.1);
+    const clampedStart = Math.max(0, Math.min(start, maxEnd - 0.1));
+    const clampedEnd = Math.max(clampedStart + 0.1, Math.min(end, maxEnd, clampedStart + 60));
+    this.trimStart = clampedStart;
+    this.trimEnd = clampedEnd;
+
+    const video = this.getVideoElement();
+    if (video) {
+      if (video.currentTime < this.trimStart || video.currentTime > this.trimEnd) {
+        video.currentTime = this.trimStart;
+      }
+    }
+  }
+
+  public setPlaybackRate(rate: number): void {
+    const clamped = Math.max(0.25, Math.min(4.0, rate));
+    this.playbackRate = clamped;
+    const video = this.getVideoElement();
+    if (video) {
+      video.playbackRate = clamped;
+    }
+  }
+
+  public setVolume(volume: number, muted?: boolean): void {
+    const clamped = Math.max(0, Math.min(1, volume));
+    this.volume = clamped;
+    if (typeof muted === 'boolean') {
+      this.muted = muted;
+    } else if (clamped === 0) {
+      this.muted = true;
+    } else if (this.muted && clamped > 0 && muted === undefined) {
+      this.muted = false;
+    }
+
+    const video = this.getVideoElement();
+    if (video) {
+      video.volume = clamped;
+      video.muted = this.muted;
+    }
+  }
+
+  public async seek(t: number): Promise<void> {
+    const video = this.getVideoElement();
+    if (!video) return;
+
+    const dur = this.getDuration();
+    const clamped = Math.max(0, Math.min(t, dur > 0 ? Math.max(0, dur - 0.001) : t));
+
+    if (Math.abs(video.currentTime - clamped) < 0.002 && video.readyState >= 2 && !video.seeking) {
+      return;
+    }
+
+    return new Promise<void>((resolve) => {
+      let settled = false;
+      let rvfcId: number | null = null;
+      const anyVideo = video as HTMLVideoElement & {
+        requestVideoFrameCallback?: (cb: () => void) => number;
+        cancelVideoFrameCallback?: (id: number) => void;
+      };
+
+      const finish = () => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        video.removeEventListener('seeked', onSeeked);
+        if (rvfcId !== null && typeof anyVideo.cancelVideoFrameCallback === 'function') {
+          try {
+            anyVideo.cancelVideoFrameCallback(rvfcId);
+          } catch {}
+        }
+        resolve();
+      };
+
+      const onSeeked = () => {
+        finish();
+      };
+
+      const timer = setTimeout(finish, 250);
+      video.addEventListener('seeked', onSeeked, { once: true });
+      if (typeof anyVideo.requestVideoFrameCallback === 'function') {
+        rvfcId = anyVideo.requestVideoFrameCallback(() => {
+          if (!video.seeking) finish();
+        });
+      }
+      video.currentTime = clamped;
+    });
+  }
+
+  public async renderAt(
+    ctx: CanvasRenderingContext2D,
+    canvasWidth: number,
+    canvasHeight: number,
+    t: number
+  ): Promise<void> {
+    this.currentValues = { ...this.targetValues };
+    await this.seek(t);
+    this.render(ctx, canvasWidth, canvasHeight);
+  }
+
+  public destroy(): void {
+    if (this.animFrameId !== null) {
+      cancelAnimationFrame(this.animFrameId);
+      this.animFrameId = null;
+    }
+    const video = this.getVideoElement();
+    if (video) {
+      try {
+        video.pause();
+        video.removeAttribute('src');
+        video.load();
+      } catch {}
+    }
+    if (this.media.objectUrl) {
+      try {
+        URL.revokeObjectURL(this.media.objectUrl);
+      } catch {}
+    }
+  }
+  // [END] CREATED BY Bedirhan
 }

@@ -5,9 +5,12 @@ service firebase.storage {
       allow read: if true;
       allow write: if request.auth != null;
     }
+    // [MODIFIED BY Bedirhan]
     match /posts/{allPaths=**} {
       allow read: if true;
-      allow write: if request.auth != null;
+      allow write: if request.auth != null
+        && request.resource.size < 100 * 1024 * 1024
+        && request.resource.contentType.matches('image/.*|video/.*');
     }
   }
 }

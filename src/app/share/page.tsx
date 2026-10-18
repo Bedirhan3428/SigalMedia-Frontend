@@ -6,6 +6,7 @@ import { useAuth } from "@/context/AuthContext";
 import { ref, uploadBytes, getDownloadURL } from "firebase/storage";
 import { collection, addDoc, doc, updateDoc, increment, serverTimestamp } from "firebase/firestore";
 import { storage, db } from "@/lib/firebase";
+// [MODIFIED BY Bedirhan]
 import {
   CanvasEngine,
   BaseLayer,
@@ -15,9 +16,18 @@ import {
   TextBgPreset,
   FONT_PRESET_CONFIGS,
   StoryAudioMeta,
+  VideoState,
+  VideoExporter,
+  ImageExporter,
+  generateVideoThumbnails,
 } from "@/lib/canvas-editor";
 import MusicPickerDrawer from "@/components/share/MusicPickerDrawer";
+// [START] CREATED BY Bedirhan
+import VideoToolsDrawer from "@/components/share/VideoToolsDrawer";
+import ExportProgress from "@/components/share/ExportProgress";
+// [END] CREATED BY Bedirhan
 import { commitAudioClip } from "@/services/soundService";
+// [MODIFIED BY Bedirhan]
 import {
   ChevronLeft,
   Image as ImageIcon,
@@ -38,6 +48,7 @@ import {
   Pause,
   Check,
   Music,
+  Film,
 } from "lucide-react";
 
 // 18 Canlı Instagram Hikaye Renk Paleti
@@ -62,7 +73,22 @@ const STORY_COLORS = [
   "#F43F5E", // Gül
 ];
 
-type ActiveDrawer = "none" | "sticker_sheet" | "tag";
+// [MODIFIED BY Bedirhan]
+type ActiveDrawer = "none" | "sticker_sheet" | "tag" | "video_tools";
+
+// [START] CREATED BY Bedirhan
+const INITIAL_VIDEO_STATE: VideoState = {
+  isVideo: false,
+  duration: 0,
+  trimStart: 0,
+  trimEnd: 0,
+  playbackRate: 1.0,
+  volume: 1.0,
+  muted: false,
+  currentTime: 0,
+  isPlaying: false,
+};
+// [END] CREATED BY Bedirhan
 
 let hasHandledShareReload = false;
 
@@ -103,6 +129,17 @@ export default function ShareStoryPage() {
   // Müzik Durumları
   const [isMusicDrawerOpen, setIsMusicDrawerOpen] = useState(false);
   const [selectedMusic, setSelectedMusic] = useState<StoryAudioMeta | null>(null);
+
+  // [START] CREATED BY Bedirhan
+  // Video Düzenleme ve Dışa Aktarma Durumları
+  const [videoState, setVideoState] = useState<VideoState>(INITIAL_VIDEO_STATE);
+  const [videoThumbnails, setVideoThumbnails] = useState<string[]>([]);
+  const [musicVolume, setMusicVolume] = useState<number>(0.85);
+  const [isExportingVideo, setIsExportingVideo] = useState<boolean>(false);
+  const [exportProgress, setExportProgress] = useState<number>(0);
+  const exportAbortRef = useRef<AbortController | null>(null);
+  const thumbAbortRef = useRef<AbortController | null>(null);
+  // [END] CREATED BY Bedirhan
 
   // İşlem Durumları
   const [isPublishing, setIsPublishing] = useState(false);
@@ -166,9 +203,12 @@ export default function ShareStoryPage() {
     };
   }, [router]);
 
+  // [MODIFIED BY Bedirhan]
   // Editörü Tamamen Temizleme Fonksiyonu
   const resetEditor = useCallback(() => {
     if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
+    exportAbortRef.current?.abort();
+    thumbAbortRef.current?.abort();
     if (engineRef.current) {
       engineRef.current.destroy();
       engineRef.current = null;
@@ -198,6 +238,11 @@ export default function ShareStoryPage() {
     setActiveTextAlign("center");
     setSelectedMusic(null);
     setIsMusicDrawerOpen(false);
+    setVideoState(INITIAL_VIDEO_STATE);
+    setVideoThumbnails([]);
+    setMusicVolume(0.85);
+    setIsExportingVideo(false);
+    setExportProgress(0);
     setShowExitConfirm(false);
     guardTriggeredRef.current = false;
   }, []);
@@ -205,6 +250,8 @@ export default function ShareStoryPage() {
   // Sayfadan çıkışta sesi tamamen durdur
   useEffect(() => {
     return () => {
+      exportAbortRef.current?.abort();
+      thumbAbortRef.current?.abort();
     };
   }, []);
   
@@ -356,6 +403,12 @@ export default function ShareStoryPage() {
       setIsTrashHot(false);
     });
 
+    // [START] CREATED BY Bedirhan
+    engine.on("video-time", (vState: VideoState) => {
+      setVideoState(vState);
+    });
+    // [END] CREATED BY Bedirhan
+
     engineRef.current = engine;
     return engine;
   }, []);
@@ -389,17 +442,43 @@ export default function ShareStoryPage() {
     }
   }, [mounted, hasMedia]);
 
+  // [MODIFIED BY Bedirhan]
   const handleBaseFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
+
+    const MAX_FILE_BYTES = 100 * 1024 * 1024;
+    if (file.size > MAX_FILE_BYTES) {
+      setFilterToast("Maksimum 100 MB dosya seçilebilir");
+      if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
+      toastTimerRef.current = setTimeout(() => setFilterToast(null), 2200);
+      e.target.value = "";
+      return;
+    }
 
     try {
       const engine = getOrCreateEngine();
       if (!engine) return;
 
-      await engine.loadMedia(file, undefined, false);
+      thumbAbortRef.current?.abort();
+      setVideoThumbnails([]);
+
+      const media = await engine.loadMedia(file, undefined, false);
       setHasMedia(true);
       e.target.value = "";
+
+      if (media.type === "video") {
+        setVideoState(engine.getVideoState());
+        const abortCtrl = new AbortController();
+        thumbAbortRef.current = abortCtrl;
+        generateVideoThumbnails(file, {
+          count: 8,
+          signal: abortCtrl.signal,
+          onThumbnail: (thumbs) => setVideoThumbnails(thumbs),
+        }).catch(() => {});
+      } else {
+        setVideoState(INITIAL_VIDEO_STATE);
+      }
     } catch (err) {
       console.error("Taban görsel yüklenemedi:", err);
       if (!hasMedia) {
@@ -561,42 +640,97 @@ export default function ShareStoryPage() {
     }
   };
 
-  // Cihaza WebP İndir
+  // [START] CREATED BY Bedirhan
+  const handleCancelExport = () => {
+    exportAbortRef.current?.abort();
+    setIsExportingVideo(false);
+    setIsPublishing(false);
+    setExportProgress(0);
+    engineRef.current?.playVideo().catch(() => {});
+  };
+  // [END] CREATED BY Bedirhan
+
+  // [MODIFIED BY Bedirhan]
+  // Cihaza WebP veya MP4 İndir
   const handleDownloadImage = async () => {
     const engine = getOrCreateEngine();
-    if (!engine) return;
+    if (!engine || isPublishing || isExportingVideo) return;
     try {
-      await engine.downloadImage(`sigalmedia_${Date.now()}.webp`, {
-        mimeType: "image/webp",
-        quality: 0.95,
-      });
+      if (videoState.isVideo) {
+        setIsExportingVideo(true);
+        setExportProgress(0);
+        const abortCtrl = new AbortController();
+        exportAbortRef.current = abortCtrl;
+        const blob = await VideoExporter.exportToBlob(engine, {
+          music: selectedMusic,
+          musicVolume,
+          onProgress: (p) => setExportProgress(p),
+          signal: abortCtrl.signal,
+        });
+        setIsExportingVideo(false);
+        const ext = blob.type.includes("webm") ? "webm" : "mp4";
+        ImageExporter.downloadBlob(blob, `sigalmedia_${Date.now()}.${ext}`);
+        await engine.playVideo();
+      } else {
+        await engine.downloadImage(`sigalmedia_${Date.now()}.webp`, {
+          mimeType: "image/webp",
+          quality: 0.95,
+        });
+      }
     } catch (e) {
-      console.error("İndirme hatası:", e);
+      setIsExportingVideo(false);
+      if ((e as Error)?.name !== "AbortError") {
+        console.error("İndirme hatası:", e);
+      }
     }
   };
 
+  // [MODIFIED BY Bedirhan]
   // ─────────────────────────────────────────────────────────────
-  // 4. HİKAYEYİ / GÖNDERİYİ PAYLAŞ (AKILLI HİBRİT ÇIKTI MODELİ)
-  // Saniyelerce video bekleme süresi yerine 15ms WebP + Müzik metaverisi
+  // 4. HİKAYEYİ / GÖNDERİYİ PAYLAŞ (GÖRSEL WEBP VEYA VİDEO MP4)
   // ─────────────────────────────────────────────────────────────
   const handlePublish = async () => {
-    if (!profile?.uid || !engineRef.current || isPublishing) return;
+    if (!profile?.uid || !engineRef.current || isPublishing || isExportingVideo) return;
 
     try {
       setIsPublishing(true);
-
-      // 15 milisaniyede yüksek kaliteli 1080x1920 WebP çıktısı
-      const blob = await engineRef.current.exportImage({
-        mimeType: "image/webp",
-        quality: 0.92,
-      });
-
       const timestamp = Date.now();
-      const filename = `story_${profile.uid}_${timestamp}.webp`;
+      let blob: Blob;
+      let filename: string;
+      let contentType: string;
+      let publishedMediaType: "image" | "video" = "image";
+
+      if (videoState.isVideo) {
+        setIsExportingVideo(true);
+        setExportProgress(0);
+        const abortCtrl = new AbortController();
+        exportAbortRef.current = abortCtrl;
+
+        blob = await VideoExporter.exportToBlob(engineRef.current, {
+          music: selectedMusic,
+          musicVolume,
+          onProgress: (p) => setExportProgress(p),
+          signal: abortCtrl.signal,
+        });
+        setIsExportingVideo(false);
+        const isWebm = blob.type.includes("webm");
+        filename = `story_${profile.uid}_${timestamp}.${isWebm ? "webm" : "mp4"}`;
+        contentType = isWebm ? "video/webm" : "video/mp4";
+        publishedMediaType = "video";
+      } else {
+        blob = await engineRef.current.exportImage({
+          mimeType: "image/webp",
+          quality: 0.92,
+        });
+        filename = `story_${profile.uid}_${timestamp}.webp`;
+        contentType = "image/webp";
+        publishedMediaType = "image";
+      }
+
       const storageRef = ref(storage, `posts/${profile.uid}/${filename}`);
 
       await uploadBytes(storageRef, blob, {
-        contentType: "image/webp",
+        contentType,
       });
 
       const mediaUrl = await getDownloadURL(storageRef);
@@ -607,7 +741,7 @@ export default function ShareStoryPage() {
         authorDisplayName: profile.displayName || "Kullanıcı",
         authorPhotoURL: profile.photoURL || "",
         mediaUrl,
-        mediaType: "image",
+        mediaType: publishedMediaType,
         type: "reels",
         caption: "",
         likesCount: 0,
@@ -650,8 +784,11 @@ export default function ShareStoryPage() {
         router.push("/profile");
       }, 400);
     } catch (err) {
-      console.error("Paylaşım hatası:", err);
+      setIsExportingVideo(false);
       setIsPublishing(false);
+      if ((err as Error)?.name !== "AbortError") {
+        console.error("Paylaşım hatası:", err);
+      }
     }
   };
 
@@ -804,6 +941,22 @@ export default function ShareStoryPage() {
           >
             <AtSign className="w-5 h-5 text-cyan-400" />
           </button>
+
+          {/* [START] CREATED BY Bedirhan */}
+          {videoState.isVideo && (
+            <button
+              type="button"
+              onClick={() => setActiveDrawer("video_tools")}
+              className={`w-10 h-10 rounded-full backdrop-blur-md border transition-all shadow-xl flex items-center justify-center active:scale-90 ${
+                activeDrawer === "video_tools"
+                  ? "bg-white text-black border-white"
+                  : "bg-black/50 border-white/15 text-white hover:bg-black/70"
+              }`}
+            >
+              <Film className="w-5 h-5 text-amber-400" />
+            </button>
+          )}
+          {/* [END] CREATED BY Bedirhan */}
         </div>
       )}
 
@@ -962,6 +1115,33 @@ export default function ShareStoryPage() {
           </button>
         </div>
       )}
+
+      {/* [START] CREATED BY Bedirhan */}
+      <VideoToolsDrawer
+        isOpen={activeDrawer === "video_tools" && videoState.isVideo}
+        onClose={() => setActiveDrawer("none")}
+        videoState={videoState}
+        thumbnails={videoThumbnails}
+        hasMusic={Boolean(selectedMusic)}
+        musicVolume={musicVolume}
+        onChangeTrim={(start, end) => engineRef.current?.setTrim(start, end)}
+        onChangeSpeed={(rate) => engineRef.current?.setSpeed(rate)}
+        onChangeVolume={(vol, muted) => engineRef.current?.setVolume(vol, muted)}
+        onChangeMusicVolume={(vol) => setMusicVolume(vol)}
+        onSeek={(t) => {
+          engineRef.current?.seekVideo(t);
+        }}
+        onTogglePlay={() => {
+          engineRef.current?.toggleVideoPlay();
+        }}
+      />
+
+      <ExportProgress
+        isOpen={isExportingVideo}
+        progress={exportProgress}
+        onCancel={handleCancelExport}
+      />
+      {/* [END] CREATED BY Bedirhan */}
 
       {/* 13. CANLI METİN YAZMA & RENK MODU (INSTAGRAM STORY ODAK MODU) */}
       {isTextEditing && (

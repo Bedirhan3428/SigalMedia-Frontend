@@ -1,12 +1,29 @@
 export type MediaType = 'image' | 'video';
 
+// [MODIFIED BY Bedirhan]
 export interface EditorMedia {
   type: MediaType;
   element: HTMLImageElement | HTMLVideoElement;
   width: number;
   height: number;
   duration?: number;
+  source?: string | Blob | File;
+  objectUrl?: string;
 }
+
+// [START] CREATED BY Bedirhan
+export interface VideoState {
+  isVideo: boolean;
+  duration: number;
+  trimStart: number;
+  trimEnd: number;
+  playbackRate: number;
+  volume: number;
+  muted: boolean;
+  currentTime: number;
+  isPlaying: boolean;
+}
+// [END] CREATED BY Bedirhan
 
 export interface MediaFilters {
   brightness: number; // 100 = default (%)

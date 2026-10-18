@@ -35,6 +35,7 @@ export class MediaSourceManager {
     });
   }
 
+  // [MODIFIED BY Bedirhan]
   public static async loadVideo(source: string | Blob | File): Promise<EditorMedia> {
     return new Promise((resolve, reject) => {
       const video = document.createElement('video');
@@ -42,8 +43,8 @@ export class MediaSourceManager {
         video.crossOrigin = 'anonymous';
       }
       video.playsInline = true;
-      video.muted = true;
-      video.loop = true;
+      video.muted = false;
+      video.loop = false;
       video.preload = 'auto';
 
       let objectUrl: string | null = null;
@@ -55,17 +56,20 @@ export class MediaSourceManager {
       }
 
       const onLoaded = () => {
+        video.removeEventListener('loadeddata', onLoaded);
         video.removeEventListener('loadedmetadata', onLoaded);
         resolve({
           type: 'video',
           element: video,
-          width: video.videoWidth || 1920,
-          height: video.videoHeight || 1080,
-          duration: video.duration || 0
+          width: video.videoWidth || 1080,
+          height: video.videoHeight || 1920,
+          duration: Number.isFinite(video.duration) ? video.duration : 0,
+          source,
+          objectUrl: objectUrl || undefined,
         });
       };
 
-      video.addEventListener('loadedmetadata', onLoaded);
+      video.addEventListener('loadeddata', onLoaded);
       video.addEventListener('error', (err) => {
         if (objectUrl) {
           try { URL.revokeObjectURL(objectUrl); } catch {}
