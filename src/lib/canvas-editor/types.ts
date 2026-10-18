@@ -78,6 +78,8 @@ export interface VideoTrackClip {
   volume: number;          // 0.0 - 1.0
   muted: boolean;
   isMotionPhoto?: boolean; // Reels için foto karesi
+  transform?: LayerTransform; // Klip bazlı bağımsız kadraj/kırpma (scale, x, y, rotation, flipH, flipV)
+  fitMode?: FitMode;       // Klip bazlı 9:16 Doldur ('cover') veya Sığdır ('contain')
 }
 
 export interface OverlayTrackItem {

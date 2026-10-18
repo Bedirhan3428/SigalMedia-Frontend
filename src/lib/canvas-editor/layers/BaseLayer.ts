@@ -73,11 +73,42 @@ export abstract class BaseLayer {
     );
   }
 
-  /**
-   * Borderless Canvas: Nesneler etrafında çirkin dikdörtgen çizgiler veya tutamaçlar çizilmez.
-   * Geri bildirim doğrudan katmanın kendi render döngüsündeki yaylanma ve hafif parlama ile verilir.
-   */
-  public renderSelectionHighlight(_ctx: CanvasRenderingContext2D, _canvasWidth: number, _canvasHeight: number): void {
-    // Sıfır çizgi ilkesi gereği tutamaç veya çizgi çizilmez
+  public renderSelectionHighlight(ctx: CanvasRenderingContext2D, canvasWidth: number, canvasHeight: number): void {
+    if (this.type === 'media' || !this.selected) return;
+
+    const center = this.getPixelPosition(canvasWidth, canvasHeight);
+    const bounds = this.getBoundingBox(ctx, canvasWidth, canvasHeight);
+    const pad = 14;
+    const w = bounds.width + pad * 2;
+    const h = bounds.height + pad * 2;
+
+    ctx.save();
+    ctx.translate(center.x, center.y);
+    ctx.rotate((this.transform.rotation * Math.PI) / 180);
+    ctx.scale(this.transform.scale, this.transform.scale);
+
+    ctx.strokeStyle = 'rgba(251, 191, 36, 0.95)';
+    ctx.lineWidth = Math.max(2, 3 / Math.max(0.4, this.transform.scale));
+    ctx.beginPath();
+    ctx.roundRect(-w / 2, -h / 2, w, h, 14);
+    ctx.stroke();
+
+    // Köşe tutamaç noktaları
+    const r = Math.max(5, 7 / Math.max(0.4, this.transform.scale));
+    ctx.fillStyle = '#ffffff';
+    const corners = [
+      [-w / 2, -h / 2],
+      [w / 2, -h / 2],
+      [w / 2, h / 2],
+      [-w / 2, h / 2],
+    ];
+    for (const [cx, cy] of corners) {
+      ctx.beginPath();
+      ctx.arc(cx, cy, r, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.stroke();
+    }
+
+    ctx.restore();
   }
 }

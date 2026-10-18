@@ -17,12 +17,19 @@ import {
   Sticker,
   Image as ImageIcon,
   Type,
+  Crop,
+  RotateCw,
+  FlipHorizontal2,
+  RotateCcw,
+  Maximize2,
+  Minimize2,
   X,
 } from "lucide-react";
 import {
   BaseLayer,
   CanvasEngine,
   FILTER_PRESETS,
+  OverlayImageLayer,
   OverlayTrackItem,
   REELS_EFFECT_PRESETS,
   ReelsEffectClip,
@@ -63,7 +70,7 @@ export interface ReelsEditorProps {
   onPublish: () => void;
 }
 
-type ActiveToolStrip = "none" | "effects" | "audio_speed" | "filters";
+type ActiveToolStrip = "none" | "effects" | "audio_speed" | "filters" | "crop";
 
 type NLEHistorySnapshot = {
   clips: VideoTrackClip[];
@@ -238,6 +245,13 @@ export default function ReelsEditor({
     } else {
       engine?.selectLayerById(null);
     }
+    if (type === "video" && engine) {
+      const targetClip = clips.find((c) => c.id === id);
+      if (targetClip) {
+        engine.applyClipTransformToMediaLayer(targetClip);
+        engine.requestRender();
+      }
+    }
     if (type === "effect") {
       setActiveStrip("effects");
     }
@@ -251,6 +265,11 @@ export default function ReelsEditor({
   const selectedEffectClip =
     selectedItemType === "effect"
       ? effectClips.find((c) => c.id === selectedItemId) || null
+      : null;
+
+  const selectedPhotoLayer =
+    selectedItemType === "photo" && engine
+      ? (engine.getSelectedLayer() as OverlayImageLayer | null)
       : null;
 
   // İbre seçili klibin/katmanın içindeyse Böl butonu aktiftir
@@ -373,6 +392,7 @@ export default function ReelsEditor({
       syncFromEngine();
       setSelectedItemId(null);
       setSelectedItemType(null);
+      setActiveStrip("none");
       return;
     }
 
@@ -517,6 +537,14 @@ export default function ReelsEditor({
     ? selectedVideoClip.playbackRate
     : videoState.playbackRate;
 
+  const activeClipScale = selectedVideoClip
+    ? selectedVideoClip.transform?.scale ?? 1
+    : selectedPhotoLayer
+      ? selectedPhotoLayer.transform.scale
+      : 1;
+
+  const activeClipFitMode = selectedVideoClip?.fitMode || "cover";
+
   const effectiveMusicVolume = Math.round(musicVolume * 100);
 
   return (
@@ -550,9 +578,15 @@ export default function ReelsEditor({
           engine?.updateOverlayTrackTiming(layerId, start, end);
           syncFromEngine();
         }}
+        onReorderOverlayLayer={(layerId, direction) => {
+          commitHistory();
+          engine?.reorderOverlayLayer(layerId, direction);
+          syncFromEngine();
+        }}
         onChangeEffectClips={onChangeEffectClips}
         onChangeMusicTimeline={handleMusicTimelineChange}
         onSeek={onSeek}
+        onPauseVideo={() => engine?.pauseVideo()}
         onTogglePlay={onTogglePlay}
         onUndo={handleUndo}
         onRedo={handleRedo}
@@ -565,7 +599,177 @@ export default function ReelsEditor({
         onCommitHistory={commitHistory}
       />
 
-      {/* 2. Açılır Alt Ayar Şeridi (Efektler / Ses & Hız / Filtreler) */}
+      {/* 2. Açılır Alt Ayar Şeridi (Kırp & Kadraj / Efektler / Ses & Hız / Filtreler) */}
+      {activeStrip === "crop" &&
+        (selectedItemType === "video" || selectedItemType === "photo") && (
+          <div className="flex flex-col gap-2 px-4">
+            <div className="flex items-center gap-2 overflow-x-auto no-scrollbar">
+              {selectedItemType === "video" && selectedVideoClip && engine && (
+                <>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      commitHistory();
+                      engine.updateClipTransform(selectedVideoClip.id, undefined, "cover");
+                      syncFromEngine();
+                    }}
+                    className={`px-3 py-1.5 rounded-xl text-xs font-semibold flex items-center gap-1.5 shrink-0 border transition-all active:scale-95 ${
+                      activeClipFitMode === "cover"
+                        ? "bg-amber-400 text-black border-amber-400"
+                        : "bg-[#1c1c1e] text-zinc-200 border-white/10"
+                    }`}
+                  >
+                    <Maximize2 className="w-3.5 h-3.5" />
+                    <span>9:16 Doldur</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      commitHistory();
+                      engine.updateClipTransform(selectedVideoClip.id, undefined, "contain");
+                      syncFromEngine();
+                    }}
+                    className={`px-3 py-1.5 rounded-xl text-xs font-semibold flex items-center gap-1.5 shrink-0 border transition-all active:scale-95 ${
+                      activeClipFitMode === "contain"
+                        ? "bg-amber-400 text-black border-amber-400"
+                        : "bg-[#1c1c1e] text-zinc-200 border-white/10"
+                    }`}
+                  >
+                    <Minimize2 className="w-3.5 h-3.5" />
+                    <span>9:16 Sığdır</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      commitHistory();
+                      const curRot = selectedVideoClip.transform?.rotation ?? 0;
+                      engine.updateClipTransform(selectedVideoClip.id, {
+                        rotation: (curRot + 90) % 360,
+                      });
+                      syncFromEngine();
+                    }}
+                    className="px-3 py-1.5 rounded-xl text-xs font-semibold flex items-center gap-1.5 shrink-0 bg-[#1c1c1e] text-zinc-200 border border-white/10 active:scale-95"
+                  >
+                    <RotateCw className="w-3.5 h-3.5" />
+                    <span>90° Döndür</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      commitHistory();
+                      const curFlip = Boolean(selectedVideoClip.transform?.flipH);
+                      engine.updateClipTransform(selectedVideoClip.id, {
+                        flipH: !curFlip,
+                      });
+                      syncFromEngine();
+                    }}
+                    className={`px-3 py-1.5 rounded-xl text-xs font-semibold flex items-center gap-1.5 shrink-0 border transition-all active:scale-95 ${
+                      selectedVideoClip.transform?.flipH
+                        ? "bg-amber-400 text-black border-amber-400"
+                        : "bg-[#1c1c1e] text-zinc-200 border-white/10"
+                    }`}
+                  >
+                    <FlipHorizontal2 className="w-3.5 h-3.5" />
+                    <span>Aynala</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      commitHistory();
+                      engine.resetClipTransform(selectedVideoClip.id);
+                      syncFromEngine();
+                    }}
+                    className="px-3 py-1.5 rounded-xl text-xs font-semibold flex items-center gap-1.5 shrink-0 bg-[#1c1c1e] text-zinc-300 border border-white/10 active:scale-95"
+                  >
+                    <RotateCcw className="w-3.5 h-3.5" />
+                    <span>Sıfırla</span>
+                  </button>
+                </>
+              )}
+
+              {selectedItemType === "photo" && selectedPhotoLayer && engine && (
+                <>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      selectedPhotoLayer.cycleShapeMode();
+                      engine.requestRender();
+                    }}
+                    className="px-3 py-1.5 rounded-xl text-xs font-semibold flex items-center gap-1.5 shrink-0 bg-[#1c1c1e] text-zinc-200 border border-white/10 active:scale-95"
+                  >
+                    <Crop className="w-3.5 h-3.5 text-amber-400" />
+                    <span>Çerçeve Şekli</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      selectedPhotoLayer.transform.rotation =
+                        (selectedPhotoLayer.transform.rotation + 90) % 360;
+                      engine.requestRender();
+                    }}
+                    className="px-3 py-1.5 rounded-xl text-xs font-semibold flex items-center gap-1.5 shrink-0 bg-[#1c1c1e] text-zinc-200 border border-white/10 active:scale-95"
+                  >
+                    <RotateCw className="w-3.5 h-3.5" />
+                    <span>90° Döndür</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      selectedPhotoLayer.transform = {
+                        x: 0.5,
+                        y: 0.5,
+                        scale: 1,
+                        rotation: 0,
+                      };
+                      engine.requestRender();
+                    }}
+                    className="px-3 py-1.5 rounded-xl text-xs font-semibold flex items-center gap-1.5 shrink-0 bg-[#1c1c1e] text-zinc-300 border border-white/10 active:scale-95"
+                  >
+                    <RotateCcw className="w-3.5 h-3.5" />
+                    <span>Sıfırla</span>
+                  </button>
+                </>
+              )}
+            </div>
+
+            {/* Yakınlaştırma (Zoom / Scale 1.0x - 3.0x) Slider */}
+            <div className="flex items-center gap-3 bg-[#16171b] rounded-2xl px-3.5 py-2 border border-white/5">
+              <span className="text-xs font-medium text-zinc-400 shrink-0">
+                Yakınlaştır
+              </span>
+              <input
+                type="range"
+                min={50}
+                max={300}
+                value={Math.round(activeClipScale * 100)}
+                onChange={(e) => {
+                  const nextScale = Number((Number(e.target.value) / 100).toFixed(2));
+                  if (selectedItemType === "video" && selectedVideoClip && engine) {
+                    engine.updateClipTransform(selectedVideoClip.id, {
+                      scale: nextScale,
+                    });
+                    syncFromEngine();
+                  } else if (selectedItemType === "photo" && selectedPhotoLayer && engine) {
+                    selectedPhotoLayer.transform.scale = nextScale;
+                    engine.requestRender();
+                    syncFromEngine();
+                  }
+                }}
+                className="flex-1 h-1.5 bg-white/15 rounded-lg appearance-none cursor-pointer accent-amber-400"
+              />
+              <span className="text-xs font-semibold text-white w-10 text-right tabular-nums">
+                {activeClipScale.toFixed(1)}x
+              </span>
+            </div>
+          </div>
+        )}
+
       {activeStrip === "effects" && (
         <div className="flex flex-col gap-2 px-4">
           <div className="flex items-center gap-2 overflow-x-auto no-scrollbar">
@@ -778,7 +982,7 @@ export default function ReelsEditor({
 
       {/* 3. DİNAMİK ALT ARAÇ ÇUBUĞU (Contextual Action Toolbar) */}
       {selectedItemId && selectedItemType ? (
-        /* BİR KLİP VEYA KATMAN SEÇİLİYKEN: [ ✂️ Böl ] [ 🗑️ Sil ] [ 🔊 Ses / Hız ] [ 📑 Kopyala ] */
+        /* BİR KLİP VEYA KATMAN SEÇİLİYKEN: [ ✂️ Böl ] [ 🗑️ Sil ] [ 📐 Kırp ] [ 🔊 Ses / Hız ] [ 📑 Kopyala ] */
         <div className="flex items-center justify-between gap-2 px-4 pt-0.5">
           {selectedItemType !== "audio" && (
             <button
@@ -805,6 +1009,29 @@ export default function ReelsEditor({
             </div>
             <span className="text-[11px] font-medium text-red-300">Sil</span>
           </button>
+
+          {(selectedItemType === "video" || selectedItemType === "photo") && (
+            <button
+              type="button"
+              onClick={() =>
+                setActiveStrip((p) => (p === "crop" ? "none" : "crop"))
+              }
+              className="flex-1 flex flex-col items-center gap-1 group"
+            >
+              <div
+                className={`w-full h-11 rounded-2xl flex items-center justify-center transition-all active:scale-95 ${
+                  activeStrip === "crop"
+                    ? "bg-amber-400 text-black"
+                    : "bg-[#1c1c1e] group-hover:bg-[#26262a] text-white"
+                }`}
+              >
+                <Crop className="w-4 h-4" />
+              </div>
+              <span className="text-[11px] font-medium text-zinc-200">
+                Kırp
+              </span>
+            </button>
+          )}
 
           {(selectedItemType === "video" || selectedItemType === "audio") && (
             <button

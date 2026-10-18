@@ -173,6 +173,10 @@ export class InteractionManager {
       this.isMoved = false;
       this.isSwipeTriggered = false;
       this.candidateLayer = this.findHitLayer(pt);
+      const wasSelected = Boolean(
+        this.candidateLayer && this.selectedLayer === this.candidateLayer
+      );
+      this.prevFontBeforeTap = wasSelected ? 'already_selected' : null;
 
       // Tek elle etiket/resim taşıma (Single-finger drag):
       if (this.candidateLayer && this.candidateLayer.type !== 'media' && !this.candidateLayer.locked) {
@@ -490,11 +494,13 @@ export class InteractionManager {
         // İLK DOKUNMA:
         this.lastTapTime = now;
         this.lastTapLayer = target;
+        const wasAlreadySelected = this.prevFontBeforeTap === 'already_selected';
 
-        // Katmanı anında seçili yap (gecikmesiz seçim)
-        if (target) {
+        // Katmanı anında seçili yap (kalıcı / sticky seçim)
+        if (target && target.type !== 'media') {
           this.setSelectedLayer(target);
         } else {
+          // Yalnızca tuvalde boş alana (media arka planına) dokunulduğunda üst katman seçimi kalkar
           this.setSelectedLayer(null);
         }
 
@@ -504,15 +510,14 @@ export class InteractionManager {
           this.pendingTapTimer = null;
         }
 
-        // Tek tık eylemini (font/şekil döngüsü) çift tık penceresi (240ms) kadar beklet.
-        // Eğer kullanıcı çift tıklarsa bu zamanlayıcı anında iptal edilir ve font KESİNLİKLE değişmez!
-        if (target) {
+        // Tek tık eylemini (font/şekil döngüsü) yalnızca katman ZATEN seçiliyse çalıştır
+        if (target && target.type !== 'media' && wasAlreadySelected) {
           this.pendingTapLayer = target;
           this.pendingTapTimer = setTimeout(() => {
             const l = this.pendingTapLayer;
             this.pendingTapTimer = null;
             this.pendingTapLayer = null;
-            if (l) {
+            if (l && this.selectedLayer === l) {
               this.onSingleTapLayer?.(l);
             }
           }, 240);

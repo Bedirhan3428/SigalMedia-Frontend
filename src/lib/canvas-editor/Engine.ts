@@ -25,6 +25,7 @@ import {
   ReelsEffectId,
   VideoTrackClip,
   OverlayTrackItem,
+  LayerTransform,
 } from './types';
 
 // [MODIFIED BY Bedirhan]
@@ -100,6 +101,16 @@ export class CanvasEngine {
       getLayers: () => this.getAllLayers(),
       getContext: () => this.ctx,
       onStateChange: () => {
+        if (this.shareMode === 'reels' && this.mediaLayer && this.videoClips.length > 0) {
+          const active = this.getActiveClipAtTime(this.nleTimelineTime);
+          if (active) {
+            this.videoClips[active.index] = {
+              ...active.clip,
+              transform: { ...this.mediaLayer.transform },
+              fitMode: this.mediaLayer.fitMode,
+            };
+          }
+        }
         this.invalidateStaticCache();
         this.requestRender();
         this.emit('change');
@@ -236,10 +247,13 @@ export class CanvasEngine {
         volume: 1.0,
         muted: media.type === 'image',
         isMotionPhoto: this.shareMode === 'reels' && media.type === 'image',
+        transform: { ...this.mediaLayer.transform },
+        fitMode: this.fitMode,
       },
     ];
     this.nleTimelineTime = 0;
 
+    this.invalidateStaticCache();
     this.render();
     this.requestRender();
     this.emit('change');
@@ -260,6 +274,7 @@ export class CanvasEngine {
     this.fitMode = fitMode;
     if (this.mediaLayer) {
       this.mediaLayer.fitMode = fitMode;
+      this.invalidateStaticCache();
       this.requestRender();
       this.emit('change');
     }
@@ -272,6 +287,7 @@ export class CanvasEngine {
       let next = (target.transform.rotation + degrees) % 360;
       if (next < 0) next += 360;
       target.transform.rotation = Math.round(next);
+      this.invalidateStaticCache();
       this.render();
       this.requestRender();
       this.emit('change');
@@ -284,6 +300,7 @@ export class CanvasEngine {
     if (target) {
       const norm = (degrees % 360 + 360) % 360;
       target.transform.rotation = Math.round(norm);
+      this.invalidateStaticCache();
       this.render();
       this.requestRender();
       this.emit('change');
@@ -299,6 +316,7 @@ export class CanvasEngine {
   public flipMediaHorizontal() {
     if (this.mediaLayer) {
       this.mediaLayer.flipHorizontal();
+      this.invalidateStaticCache();
       this.render();
       this.requestRender();
       this.emit('change');
@@ -309,6 +327,7 @@ export class CanvasEngine {
   public flipMediaVertical() {
     if (this.mediaLayer) {
       this.mediaLayer.flipVertical();
+      this.invalidateStaticCache();
       this.render();
       this.requestRender();
       this.emit('change');
@@ -372,6 +391,7 @@ export class CanvasEngine {
       this.mediaLayer.transform.scale = 1.0;
       this.mediaLayer.transform.flipH = false;
       this.mediaLayer.transform.flipV = false;
+      this.invalidateStaticCache();
       this.render();
       this.requestRender();
       this.emit('change');
@@ -385,6 +405,7 @@ export class CanvasEngine {
   public setFilters(filters: Partial<MediaFilters>) {
     if (!this.mediaLayer) return;
     this.mediaLayer.setFilters(filters);
+    this.invalidateStaticCache();
     this.requestRender();
     this.emit('change');
   }
@@ -392,6 +413,7 @@ export class CanvasEngine {
   public resetFilters() {
     if (!this.mediaLayer) return;
     this.mediaLayer.resetFilters();
+    this.invalidateStaticCache();
     this.requestRender();
     this.emit('change');
   }
@@ -408,6 +430,7 @@ export class CanvasEngine {
     if (this.mediaLayer) {
       this.mediaLayer.setPreset(preset, () => this.requestRender());
     }
+    this.invalidateStaticCache();
     this.requestRender();
     this.emit('change');
     return preset.name;
@@ -444,6 +467,7 @@ export class CanvasEngine {
     if (this.mediaLayer) {
       this.mediaLayer.setPreset(preset, () => this.requestRender());
     }
+    this.invalidateStaticCache();
     this.requestRender();
     this.emit('change');
     return preset.name;
@@ -472,6 +496,8 @@ export class CanvasEngine {
 
     this.overlayLayers.push(layer);
     this.interactionManager.setSelectedLayer(layer);
+    this.invalidateStaticCache();
+    this.render();
     this.requestRender();
     this.emit('change');
     return layer;
@@ -488,6 +514,8 @@ export class CanvasEngine {
 
     this.overlayLayers.push(layer);
     this.interactionManager.setSelectedLayer(layer);
+    this.invalidateStaticCache();
+    this.render();
     this.requestRender();
     this.emit('change');
     return layer;
@@ -511,6 +539,8 @@ export class CanvasEngine {
         : totalDur;
     this.overlayLayers.push(layer);
     this.interactionManager.setSelectedLayer(layer);
+    this.invalidateStaticCache();
+    this.render();
     this.requestRender();
     this.emit('change');
     return layer;
@@ -518,17 +548,9 @@ export class CanvasEngine {
 
   private assignDefaultOverlayTiming(layer: BaseLayer) {
     if (this.shareMode === 'reels') {
-      const totalDur = Math.max(1, this.getTotalTimelineDuration() || 5);
-      const cur = Math.max(0, Math.min(this.getCurrentTime(), totalDur));
-      const defaultSpan = Math.min(3.0, Math.max(0.8, totalDur));
-      let start = cur;
-      let end = Math.min(totalDur, start + defaultSpan);
-      if (end - start < 0.6) {
-        start = Math.max(0, totalDur - defaultSpan);
-        end = totalDur;
-      }
-      layer.timelineStart = Number(start.toFixed(2));
-      layer.timelineEnd = Number(end.toFixed(2));
+      const totalDur = Math.max(5, this.getTotalTimelineDuration() || 5);
+      layer.timelineStart = 0;
+      layer.timelineEnd = Number(totalDur.toFixed(2));
       layer.temporalVisible = true;
     } else {
       layer.timelineStart = 0;
@@ -552,9 +574,22 @@ export class CanvasEngine {
     if (idx !== -1 && idx < this.overlayLayers.length - 1) {
       this.overlayLayers.splice(idx, 1);
       this.overlayLayers.push(layer);
+      this.invalidateStaticCache();
       this.requestRender();
       this.emit('change');
     }
+  }
+
+  public reorderOverlayLayer(layerId: string, direction: 'up' | 'down') {
+    const idx = this.overlayLayers.findIndex((l) => l.id === layerId);
+    if (idx === -1) return;
+    const targetIdx = direction === 'up' ? idx + 1 : idx - 1;
+    if (targetIdx < 0 || targetIdx >= this.overlayLayers.length) return;
+    const [moved] = this.overlayLayers.splice(idx, 1);
+    this.overlayLayers.splice(targetIdx, 0, moved);
+    this.invalidateStaticCache();
+    this.requestRender();
+    this.emit('change');
   }
 
   /**
@@ -590,6 +625,7 @@ export class CanvasEngine {
       this.overlayLayers = this.overlayLayers.filter((l) => l.id !== layerId);
     }
 
+    this.invalidateStaticCache();
     this.requestRender();
     this.emit('change');
   }
@@ -605,16 +641,19 @@ export class CanvasEngine {
   public selectLayerById(layerId: string | null): BaseLayer | null {
     if (!layerId) {
       this.interactionManager.setSelectedLayer(null);
+      this.invalidateStaticCache();
       this.requestRender();
       return null;
     }
     const found = this.overlayLayers.find((l) => l.id === layerId) || null;
     this.interactionManager.setSelectedLayer(found);
+    this.invalidateStaticCache();
     this.requestRender();
     return found;
   }
 
   public requestRender() {
+    this.invalidateStaticCache();
     if (this.isDirty) return;
     this.isDirty = true;
 
@@ -938,6 +977,7 @@ export class CanvasEngine {
       ...active.clip,
       sourceEnd: splitSource,
       duration: durA,
+      transform: active.clip.transform ? { ...active.clip.transform } : undefined,
     };
 
     const clipB: VideoTrackClip = {
@@ -945,6 +985,7 @@ export class CanvasEngine {
       id: `clip_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 5)}`,
       sourceStart: splitSource,
       duration: durB,
+      transform: active.clip.transform ? { ...active.clip.transform } : undefined,
     };
 
     this.videoClips.splice(active.index, 1, clipA, clipB);
@@ -976,12 +1017,96 @@ export class CanvasEngine {
     const clone: VideoTrackClip = {
       ...orig,
       id: `clip_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 5)}`,
+      transform: orig.transform ? { ...orig.transform } : undefined,
     };
     this.videoClips.splice(idx + 1, 0, clone);
     this.syncMediaLayerWithClips();
     this.emit('video-time', this.getVideoState());
     this.emit('change');
     return clone;
+  }
+
+  public applyClipTransformToMediaLayer(clip: VideoTrackClip): boolean {
+    const ml = this.mediaLayer;
+    if (!ml) return false;
+    let changed = false;
+    const nextFit = clip.fitMode || 'cover';
+    if (ml.fitMode !== nextFit) {
+      ml.fitMode = nextFit;
+      changed = true;
+    }
+    if (clip.transform) {
+      const t = clip.transform;
+      if (
+        Math.abs(ml.transform.x - t.x) > 0.0005 ||
+        Math.abs(ml.transform.y - t.y) > 0.0005 ||
+        Math.abs(ml.transform.scale - t.scale) > 0.0005 ||
+        Math.abs(ml.transform.rotation - t.rotation) > 0.0005 ||
+        ml.transform.flipH !== t.flipH ||
+        ml.transform.flipV !== t.flipV
+      ) {
+        ml.transform = { ...t };
+        changed = true;
+      }
+    }
+    if (changed) {
+      this.invalidateStaticCache();
+    }
+    return changed;
+  }
+
+  public updateClipTransform(
+    clipId: string,
+    partialTransform?: Partial<LayerTransform>,
+    fitMode?: FitMode
+  ): void {
+    const idx = this.videoClips.findIndex((c) => c.id === clipId);
+    if (idx === -1) return;
+    const clip = this.videoClips[idx];
+    const currentTransform: LayerTransform = clip.transform || {
+      x: this.mediaLayer?.transform.x ?? 0.5,
+      y: this.mediaLayer?.transform.y ?? 0.5,
+      scale: this.mediaLayer?.transform.scale ?? 1,
+      rotation: this.mediaLayer?.transform.rotation ?? 0,
+      flipH: this.mediaLayer?.transform.flipH ?? false,
+      flipV: this.mediaLayer?.transform.flipV ?? false,
+    };
+    const nextTransform: LayerTransform = {
+      ...currentTransform,
+      ...(partialTransform || {}),
+    };
+    const nextFitMode: FitMode = fitMode || clip.fitMode || this.mediaLayer?.fitMode || 'cover';
+
+    this.videoClips[idx] = {
+      ...clip,
+      transform: nextTransform,
+      fitMode: nextFitMode,
+    };
+
+    if (this.mediaLayer) {
+      this.mediaLayer.transform = { ...nextTransform };
+      this.mediaLayer.fitMode = nextFitMode;
+    }
+
+    this.invalidateStaticCache();
+    this.requestRender();
+    this.emit('video-time', this.getVideoState());
+    this.emit('change');
+  }
+
+  public resetClipTransform(clipId: string): void {
+    this.updateClipTransform(
+      clipId,
+      {
+        x: 0.5,
+        y: 0.5,
+        scale: 1,
+        rotation: 0,
+        flipH: false,
+        flipV: false,
+      },
+      'cover'
+    );
   }
 
   public reorderClips(fromIndex: number, toIndex: number): void {
@@ -1211,6 +1336,10 @@ export class CanvasEngine {
 
   public renderAtTime(t: number): void {
     this.nleTimelineTime = Math.max(0, Math.min(t, this.getTotalTimelineDuration()));
+    const active = this.getActiveClipAtTime(this.nleTimelineTime);
+    if (active) {
+      this.applyClipTransformToMediaLayer(active.clip);
+    }
     this.syncTemporalVisibility(this.nleTimelineTime);
     this.render();
   }
@@ -1355,6 +1484,7 @@ export class CanvasEngine {
       this.nleTimelineTime = Math.max(0, Math.min(t, totalDur));
       const active = this.getActiveClipAtTime(this.nleTimelineTime);
       if (active) {
+        this.applyClipTransformToMediaLayer(active.clip);
         if (this.mediaLayer.isMotionPhoto) {
           this.mediaLayer.virtualTime = this.nleTimelineTime;
         } else {
@@ -1383,6 +1513,9 @@ export class CanvasEngine {
       const active = this.getActiveClipAtTime(this.nleTimelineTime);
 
       if (this.mediaLayer.isMotionPhoto) {
+        if (active) {
+          this.applyClipTransformToMediaLayer(active.clip);
+        }
         this.mediaLayer.virtualTime = this.nleTimelineTime;
         this.mediaLayer.virtualPlaying = true;
         this.lastVirtualTickTime = performance.now();
@@ -1395,6 +1528,7 @@ export class CanvasEngine {
       if (!video) return;
 
       if (active) {
+        this.applyClipTransformToMediaLayer(active.clip);
         video.currentTime = active.localSourceTime;
         video.playbackRate = active.clip.playbackRate || 1.0;
         video.volume = active.clip.volume;
@@ -1534,9 +1668,10 @@ export class CanvasEngine {
           if (this.nleTimelineTime >= totalDur) {
             this.nleTimelineTime = 0;
           }
+          const transformChanged = active ? this.applyClipTransformToMediaLayer(active.clip) : false;
           ml.virtualTime = active ? active.localSourceTime : this.nleTimelineTime;
           const visChanged = this.syncTemporalVisibility(this.nleTimelineTime);
-          if (ml.isTimeDependentEffect() || this.staticSceneCacheDirty || visChanged) {
+          if (ml.isTimeDependentEffect() || this.staticSceneCacheDirty || visChanged || transformChanged) {
             this.render();
           }
           this.emit('video-progress', this.nleTimelineTime);
@@ -1557,6 +1692,7 @@ export class CanvasEngine {
           }
           const active = this.getActiveClipAtTime(this.nleTimelineTime);
           if (active) {
+            this.applyClipTransformToMediaLayer(active.clip);
             const targetRate = active.clip.playbackRate || 1.0;
             if (Math.abs(video.playbackRate - targetRate) > 0.01) {
               video.playbackRate = targetRate;

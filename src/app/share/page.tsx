@@ -739,6 +739,8 @@ export default function ShareStoryPage() {
     const engine = getOrCreateEngine();
     if (!engine) return;
 
+    engine.pauseVideo();
+
     let target = layer;
     if (!target) {
       target = engine.addText(
@@ -775,7 +777,13 @@ export default function ShareStoryPage() {
         setSelectedLayer(null);
       } else {
         selectedLayer.setText(editingText);
+        selectedLayer.visible = true;
+        selectedLayer.temporalVisible = true;
+        engineRef.current.selectLayerById(selectedLayer.id);
+        engineRef.current.render();
         engineRef.current.requestRender();
+        engineRef.current.emit("change");
+        setSelectedLayer(selectedLayer);
       }
     }
     setIsTextEditing(false);
@@ -785,7 +793,9 @@ export default function ShareStoryPage() {
     setEditingText(text);
     if (selectedLayer && selectedLayer instanceof TextLayer && engineRef.current) {
       selectedLayer.setText(text);
+      engineRef.current.render();
       engineRef.current.requestRender();
+      engineRef.current.emit("change");
     }
   };
 

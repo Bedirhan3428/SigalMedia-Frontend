@@ -1,7 +1,7 @@
 // [START] CREATED BY Bedirhan
 "use client";
 
-import React, { useRef } from "react";
+import React, { useRef, useState } from "react";
 import {
   Music,
   Sparkles,
@@ -35,12 +35,15 @@ export interface TimelineOverlayTracksProps {
   selectedItemType: NLESelectedType;
   onSelectItem: (id: string | null, type: NLESelectedType) => void;
   onChangeOverlayTiming: (layerId: string, start: number, end: number) => void;
+  onReorderOverlayLayer?: (layerId: string, direction: "up" | "down") => void;
   onChangeEffectClips?: (clips: ReelsEffectClip[]) => void;
   onChangeMusicTimeline?: (
     timelineStart: number,
     timelineEnd: number,
     songOffset?: number
   ) => void;
+  onPauseVideo?: () => void;
+  onSeek?: (time: number) => void;
   onOpenMusicPicker?: () => void;
   onOpenTextEditor?: () => void;
   onQuickAddEffect?: () => void;
@@ -53,6 +56,7 @@ type OverlayDragState = {
   id: string;
   itemType: NLESelectedType;
   startX: number;
+  startY: number;
   initStart: number;
   initEnd: number;
 };
@@ -67,23 +71,52 @@ export default function TimelineOverlayTracks({
   selectedItemType,
   onSelectItem,
   onChangeOverlayTiming,
+  onReorderOverlayLayer,
   onChangeEffectClips,
   onChangeMusicTimeline,
+  onPauseVideo,
+  onSeek,
   onOpenMusicPicker,
   onOpenTextEditor,
   onQuickAddEffect,
   onCommitHistory,
 }: TimelineOverlayTracksProps) {
   const dragRef = useRef<OverlayDragState | null>(null);
+  const longPressTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [elevatedItemId, setElevatedItemId] = useState<string | null>(null);
+
   const trackMaxSec = Math.max(10, Math.ceil(totalDuration + 5));
   const trackWidthPx = trackMaxSec * pps;
 
+  const clearLongPress = () => {
+    if (longPressTimerRef.current) {
+      clearTimeout(longPressTimerRef.current);
+      longPressTimerRef.current = null;
+    }
+  };
+
   const beginDrag = (e: React.PointerEvent, state: OverlayDragState) => {
     e.stopPropagation();
-    (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+    clearLongPress();
+    onPauseVideo?.();
+    try {
+      (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+    } catch {}
     onCommitHistory?.();
     onSelectItem(state.id, state.itemType);
     dragRef.current = state;
+
+    if (state.mode === "move") {
+      longPressTimerRef.current = setTimeout(() => {
+        longPressTimerRef.current = null;
+        if (typeof navigator !== "undefined" && navigator.vibrate) {
+          try {
+            navigator.vibrate(35);
+          } catch {}
+        }
+        setElevatedItemId(state.id);
+      }, 300);
+    }
   };
 
   const handlePointerMove = (e: React.PointerEvent) => {
@@ -92,8 +125,25 @@ export default function TimelineOverlayTracks({
     e.stopPropagation();
 
     const dxPx = e.clientX - st.startX;
+    const dyPx = e.clientY - st.startY;
     const dtSec = dxPx / Math.max(20, pps);
     const maxSec = Math.max(totalDuration + 5, 60);
+
+    // Dikey sürükleme ile katman sırası (Z-Index / satır sırası) değiştirme
+    if (
+      st.targetKind === "overlay" &&
+      st.mode === "move" &&
+      onReorderOverlayLayer &&
+      overlayItems.length > 1
+    ) {
+      if (dyPx < -32) {
+        onReorderOverlayLayer(st.id, "down");
+        dragRef.current = { ...st, startY: e.clientY };
+      } else if (dyPx > 32) {
+        onReorderOverlayLayer(st.id, "up");
+        dragRef.current = { ...st, startY: e.clientY };
+      }
+    }
 
     let nextStart = st.initStart;
     let nextEnd = st.initEnd;
@@ -122,9 +172,17 @@ export default function TimelineOverlayTracks({
     } else if (st.targetKind === "audio" && onChangeMusicTimeline) {
       onChangeMusicTimeline(sRounded, eRounded);
     }
+
+    if (st.mode === "left") {
+      onSeek?.(sRounded);
+    } else if (st.mode === "right") {
+      onSeek?.(eRounded);
+    }
   };
 
   const handlePointerEnd = (e: React.PointerEvent) => {
+    clearLongPress();
+    setElevatedItemId(null);
     if (!dragRef.current) return;
     try {
       (e.currentTarget as HTMLElement).releasePointerCapture(e.pointerId);
@@ -162,6 +220,7 @@ export default function TimelineOverlayTracks({
             );
             const isSelected =
               selectedItemId === item.layerId && selectedItemType === item.type;
+            const isElevated = elevatedItemId === item.layerId;
 
             const barBg =
               item.type === "photo"
@@ -173,6 +232,10 @@ export default function TimelineOverlayTracks({
             return (
               <div key={item.id} className="relative h-8 w-full">
                 <div
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onSelectItem(item.layerId, item.type);
+                  }}
                   onPointerDown={(e) =>
                     beginDrag(e, {
                       targetKind: "overlay",
@@ -180,14 +243,17 @@ export default function TimelineOverlayTracks({
                       id: item.layerId,
                       itemType: item.type,
                       startX: e.clientX,
+                      startY: e.clientY,
                       initStart: item.timelineStart,
                       initEnd: item.timelineEnd,
                     })
                   }
-                  className={`absolute top-0 bottom-0 rounded-lg flex items-center px-2.5 gap-1.5 cursor-grab active:cursor-grabbing touch-none transition-shadow ${barBg} ${
-                    isSelected
-                      ? "ring-2 ring-white shadow-lg z-20"
-                      : "border border-white/20 opacity-95 hover:opacity-100 z-10"
+                  className={`absolute top-0 bottom-0 rounded-lg flex items-center px-2.5 gap-1.5 cursor-grab active:cursor-grabbing touch-none transition-transform duration-150 ${barBg} ${
+                    isElevated
+                      ? "scale-[1.03] ring-2 ring-blue-400 shadow-[0_8px_24px_rgba(0,0,0,0.75)] z-30"
+                      : isSelected
+                        ? "ring-2 ring-white shadow-lg z-20"
+                        : "border border-white/20 opacity-95 hover:opacity-100 z-10"
                   }`}
                   style={{
                     left: `${leftPx}px`,
@@ -220,6 +286,7 @@ export default function TimelineOverlayTracks({
                   {isSelected && (
                     <>
                       <div
+                        onClick={(e) => e.stopPropagation()}
                         onPointerDown={(e) =>
                           beginDrag(e, {
                             targetKind: "overlay",
@@ -227,6 +294,7 @@ export default function TimelineOverlayTracks({
                             id: item.layerId,
                             itemType: item.type,
                             startX: e.clientX,
+                            startY: e.clientY,
                             initStart: item.timelineStart,
                             initEnd: item.timelineEnd,
                           })
@@ -236,6 +304,7 @@ export default function TimelineOverlayTracks({
                         <div className="w-[1.5px] h-3.5 rounded-full bg-black" />
                       </div>
                       <div
+                        onClick={(e) => e.stopPropagation()}
                         onPointerDown={(e) =>
                           beginDrag(e, {
                             targetKind: "overlay",
@@ -243,6 +312,7 @@ export default function TimelineOverlayTracks({
                             id: item.layerId,
                             itemType: item.type,
                             startX: e.clientX,
+                            startY: e.clientY,
                             initStart: item.timelineStart,
                             initEnd: item.timelineEnd,
                           })
@@ -262,7 +332,10 @@ export default function TimelineOverlayTracks({
         <div className="relative h-7 w-full">
           <button
             type="button"
-            onClick={onOpenTextEditor}
+            onClick={(e) => {
+              e.stopPropagation();
+              onOpenTextEditor?.();
+            }}
             style={{ width: `${Math.max(120, totalDuration * pps)}px` }}
             className="h-7 rounded-lg bg-[#16171b] hover:bg-[#1e2026] border border-white/5 px-3 flex items-center gap-1.5 text-zinc-400 text-[11px] font-medium transition-colors"
           >
@@ -281,10 +354,15 @@ export default function TimelineOverlayTracks({
             const widthPx = Math.max(28, (fx.endTime - fx.startTime) * pps);
             const isSelected =
               selectedItemId === fx.id && selectedItemType === "effect";
+            const isElevated = elevatedItemId === fx.id;
 
             return (
               <div
                 key={fx.id}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onSelectItem(fx.id, "effect");
+                }}
                 onPointerDown={(e) =>
                   beginDrag(e, {
                     targetKind: "effect",
@@ -292,14 +370,17 @@ export default function TimelineOverlayTracks({
                     id: fx.id,
                     itemType: "effect",
                     startX: e.clientX,
+                    startY: e.clientY,
                     initStart: fx.startTime,
                     initEnd: fx.endTime,
                   })
                 }
-                className={`absolute top-0 bottom-0 rounded-lg flex items-center px-2.5 gap-1.5 cursor-grab active:cursor-grabbing touch-none ${
-                  isSelected
-                    ? "ring-2 ring-white shadow-lg z-20"
-                    : "border border-white/20 opacity-90 z-10"
+                className={`absolute top-0 bottom-0 rounded-lg flex items-center px-2.5 gap-1.5 cursor-grab active:cursor-grabbing touch-none transition-transform duration-150 ${
+                  isElevated
+                    ? "scale-[1.03] ring-2 ring-blue-400 shadow-2xl z-30"
+                    : isSelected
+                      ? "ring-2 ring-white shadow-lg z-20"
+                      : "border border-white/20 opacity-90 z-10"
                 }`}
                 style={{
                   left: `${leftPx}px`,
@@ -315,6 +396,7 @@ export default function TimelineOverlayTracks({
                 {isSelected && (
                   <>
                     <div
+                      onClick={(e) => e.stopPropagation()}
                       onPointerDown={(e) =>
                         beginDrag(e, {
                           targetKind: "effect",
@@ -322,6 +404,7 @@ export default function TimelineOverlayTracks({
                           id: fx.id,
                           itemType: "effect",
                           startX: e.clientX,
+                          startY: e.clientY,
                           initStart: fx.startTime,
                           initEnd: fx.endTime,
                         })
@@ -331,6 +414,7 @@ export default function TimelineOverlayTracks({
                       <div className="w-[1.5px] h-3.5 rounded-full bg-black" />
                     </div>
                     <div
+                      onClick={(e) => e.stopPropagation()}
                       onPointerDown={(e) =>
                         beginDrag(e, {
                           targetKind: "effect",
@@ -338,6 +422,7 @@ export default function TimelineOverlayTracks({
                           id: fx.id,
                           itemType: "effect",
                           startX: e.clientX,
+                          startY: e.clientY,
                           initStart: fx.startTime,
                           initEnd: fx.endTime,
                         })
@@ -354,7 +439,10 @@ export default function TimelineOverlayTracks({
         ) : (
           <button
             type="button"
-            onClick={onQuickAddEffect}
+            onClick={(e) => {
+              e.stopPropagation();
+              onQuickAddEffect?.();
+            }}
             style={{ width: `${Math.max(120, totalDuration * pps)}px` }}
             className="h-7 rounded-lg bg-[#16171b] hover:bg-[#1e2026] border border-white/5 px-3 flex items-center gap-1.5 text-zinc-400 text-[11px] font-medium transition-colors"
           >
@@ -368,6 +456,10 @@ export default function TimelineOverlayTracks({
       <div className="relative h-8 w-full">
         {musicClip ? (
           <div
+            onClick={(e) => {
+              e.stopPropagation();
+              onSelectItem(musicClip.id || "audio_main", "audio");
+            }}
             onPointerDown={(e) =>
               beginDrag(e, {
                 targetKind: "audio",
@@ -375,14 +467,17 @@ export default function TimelineOverlayTracks({
                 id: musicClip.id || "audio_main",
                 itemType: "audio",
                 startX: e.clientX,
+                startY: e.clientY,
                 initStart: musicStart,
                 initEnd: musicEnd,
               })
             }
-            className={`absolute top-0 bottom-0 rounded-lg bg-sky-600/80 flex items-center px-2.5 gap-2 cursor-grab active:cursor-grabbing touch-none overflow-visible ${
-              selectedItemType === "audio"
-                ? "ring-2 ring-white shadow-lg z-20"
-                : "border border-sky-300/30 z-10"
+            className={`absolute top-0 bottom-0 rounded-lg bg-sky-600/80 flex items-center px-2.5 gap-2 cursor-grab active:cursor-grabbing touch-none overflow-visible transition-transform duration-150 ${
+              elevatedItemId === (musicClip.id || "audio_main")
+                ? "scale-[1.03] ring-2 ring-blue-400 shadow-2xl z-30"
+                : selectedItemType === "audio"
+                  ? "ring-2 ring-white shadow-lg z-20"
+                  : "border border-sky-300/30 z-10"
             }`}
             style={{
               left: `${musicStart * pps}px`,
@@ -411,6 +506,7 @@ export default function TimelineOverlayTracks({
             {selectedItemType === "audio" && (
               <>
                 <div
+                  onClick={(e) => e.stopPropagation()}
                   onPointerDown={(e) =>
                     beginDrag(e, {
                       targetKind: "audio",
@@ -418,6 +514,7 @@ export default function TimelineOverlayTracks({
                       id: musicClip.id || "audio_main",
                       itemType: "audio",
                       startX: e.clientX,
+                      startY: e.clientY,
                       initStart: musicStart,
                       initEnd: musicEnd,
                     })
@@ -427,6 +524,7 @@ export default function TimelineOverlayTracks({
                   <div className="w-[1.5px] h-3.5 rounded-full bg-black" />
                 </div>
                 <div
+                  onClick={(e) => e.stopPropagation()}
                   onPointerDown={(e) =>
                     beginDrag(e, {
                       targetKind: "audio",
@@ -434,6 +532,7 @@ export default function TimelineOverlayTracks({
                       id: musicClip.id || "audio_main",
                       itemType: "audio",
                       startX: e.clientX,
+                      startY: e.clientY,
                       initStart: musicStart,
                       initEnd: musicEnd,
                     })
@@ -448,7 +547,10 @@ export default function TimelineOverlayTracks({
         ) : (
           <button
             type="button"
-            onClick={onOpenMusicPicker}
+            onClick={(e) => {
+              e.stopPropagation();
+              onOpenMusicPicker?.();
+            }}
             style={{ width: `${Math.max(120, totalDuration * pps)}px` }}
             className="h-7 rounded-lg bg-[#16171b] hover:bg-[#1e2026] border border-white/5 px-3 flex items-center gap-1.5 text-zinc-400 text-[11px] font-medium transition-colors"
           >

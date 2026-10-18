@@ -39,6 +39,7 @@ export interface VideoTimelineNLEProps {
   onTrimClip: (clipId: string, newSourceStart: number, newSourceEnd: number) => void;
   onReorderClips: (fromIndex: number, toIndex: number) => void;
   onChangeOverlayTiming: (layerId: string, start: number, end: number) => void;
+  onReorderOverlayLayer?: (layerId: string, direction: "up" | "down") => void;
   onChangeEffectClips?: (clips: ReelsEffectClip[]) => void;
   onChangeMusicTimeline?: (
     timelineStart: number,
@@ -46,6 +47,7 @@ export interface VideoTimelineNLEProps {
     songOffset?: number
   ) => void;
   onSeek: (time: number) => void;
+  onPauseVideo?: () => void;
   onTogglePlay: () => void;
   onUndo: () => void;
   onRedo: () => void;
@@ -82,9 +84,11 @@ export default function VideoTimelineNLE({
   onTrimClip,
   onReorderClips,
   onChangeOverlayTiming,
+  onReorderOverlayLayer,
   onChangeEffectClips,
   onChangeMusicTimeline,
   onSeek,
+  onPauseVideo,
   onTogglePlay,
   onUndo,
   onRedo,
@@ -137,13 +141,17 @@ export default function VideoTimelineNLE({
     };
   }, [currentTime, getCurrentTime, isPlaying, syncScrollToTime]);
 
-  // Kullanıcı parmağıyla timeline'ı kaydırdığında anlıkSaniye = scrollLeft / PPS
+  // Kullanıcı parmağıyla timeline'ı kaydırdığında anlıkSaniye = scrollLeft / PPS ve otomatik duraklatma
   const handleScroll = () => {
     const el = scrollContainerRef.current;
     if (!el) return;
     if (programmaticScrollRef.current) {
       programmaticScrollRef.current = false;
       return;
+    }
+
+    if (isPlaying) {
+      onPauseVideo?.();
     }
 
     userScrollingRef.current = true;
@@ -160,6 +168,9 @@ export default function VideoTimelineNLE({
   };
 
   const handleSeekAndScroll = (targetSec: number) => {
+    if (isPlaying) {
+      onPauseVideo?.();
+    }
     const clamped = Math.max(0, Math.min(safeTotal, targetSec));
     const el = scrollContainerRef.current;
     if (el) {
@@ -236,10 +247,7 @@ export default function VideoTimelineNLE({
       </div>
 
       {/* 2. Sabit Merkez İbreli (Fixed Center Playhead) ve 50vw Boşluklu NLE Kayar Konteyner */}
-      <div
-        className="relative w-full bg-[#0b0c0e] border-y border-white/10 py-2"
-        onClick={() => onSelectItem(null, null)}
-      >
+      <div className="relative w-full bg-[#0b0c0e] border-y border-white/10 py-2">
         {/* SABİT MERKEZ PLAYHEAD (left: 50%, üstte üçgen ok + dikey beyaz ibre) */}
         <div className="pointer-events-none absolute top-0 bottom-0 left-1/2 -translate-x-1/2 z-40 flex flex-col items-center">
           <div className="w-0 h-0 border-l-[6px] border-l-transparent border-r-[6px] border-r-transparent border-t-[7px] border-t-white drop-shadow" />
@@ -250,6 +258,9 @@ export default function VideoTimelineNLE({
         <div
           ref={scrollContainerRef}
           onScroll={handleScroll}
+          onTouchStart={() => {
+            if (isPlaying) onPauseVideo?.();
+          }}
           className="w-full overflow-x-auto no-scrollbar"
           style={{ WebkitOverflowScrolling: "touch" }}
         >
@@ -276,6 +287,8 @@ export default function VideoTimelineNLE({
                 onSelectClip={(clipId) => onSelectItem(clipId, "video")}
                 onTrimClip={onTrimClip}
                 onReorderClips={onReorderClips}
+                onPauseVideo={onPauseVideo}
+                onSeek={handleSeekAndScroll}
                 onCommitHistory={onCommitHistory}
               />
 
@@ -290,8 +303,11 @@ export default function VideoTimelineNLE({
                 selectedItemType={selectedItemType}
                 onSelectItem={onSelectItem}
                 onChangeOverlayTiming={onChangeOverlayTiming}
+                onReorderOverlayLayer={onReorderOverlayLayer}
                 onChangeEffectClips={onChangeEffectClips}
                 onChangeMusicTimeline={onChangeMusicTimeline}
+                onPauseVideo={onPauseVideo}
+                onSeek={handleSeekAndScroll}
                 onOpenMusicPicker={onOpenMusicPicker}
                 onOpenTextEditor={onOpenTextEditor}
                 onQuickAddEffect={onQuickAddEffect}
