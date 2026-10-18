@@ -75,5 +75,5 @@ export const adminDb: Firestore = getFirestore(app, firestoreDbId);
 // [END] AeroCode
 
 // [START] CREATED BY Umut
-export const adminRtdb: Database = getDatabase(app, rtdbUrl);
+export const adminRtdb: Database = getDatabase(app);
 // [END] CREATED BY Umut
