@@ -3,13 +3,7 @@
 // [START] CREATED BY Umut
 import { useState, useEffect, useRef, useMemo } from "react";
 import { useParams, useRouter } from "next/navigation";
-import {
-  ChevronLeft,
-  Send,
-  User as UserIcon,
-  Check,
-  CheckCheck,
-} from "lucide-react";
+import { ChevronLeft, Send, User as UserIcon } from "lucide-react";
 import { useAuth } from "@/context/AuthContext";
 import { preloadServerPublicKey } from "@/lib/crypto";
 import {
@@ -25,6 +19,7 @@ import {
 } from "@/services/messageService";
 
 const GROUP_TIME_THRESHOLD_MS = 3 * 60 * 1000; // 3 dakika
+const TIME_HEADER_INTERVAL_MS = 20 * 60 * 1000; // 20 dakika
 
 function getBubbleRadiusClass(
   isMine: boolean,
@@ -56,12 +51,29 @@ function getBubbleRadiusClass(
   }
 }
 
-function formatClockTime(timestamp?: number): string {
+function formatChatTimeHeader(timestamp?: number): string {
   if (!timestamp) return "";
-  return new Date(timestamp).toLocaleTimeString("tr-TR", {
+  const date = new Date(timestamp);
+  const now = new Date();
+  const isSameDay =
+    date.getDate() === now.getDate() &&
+    date.getMonth() === now.getMonth() &&
+    date.getFullYear() === now.getFullYear();
+
+  const timeStr = date.toLocaleTimeString("tr-TR", {
     hour: "2-digit",
     minute: "2-digit",
   });
+
+  if (isSameDay) {
+    return timeStr;
+  }
+
+  const dayStr = date.toLocaleDateString("tr-TR", {
+    day: "numeric",
+    month: "short",
+  });
+  return `${dayStr} ${timeStr}`;
 }
 
 export default function ChatRoomPage() {
@@ -90,13 +102,14 @@ export default function ChatRoomPage() {
   const [peerOnline, setPeerOnline] = useState(false);
   const [peerTyping, setPeerTyping] = useState(false);
 
+  const mainScrollRef = useRef<HTMLElement | null>(null);
   const bottomRef = useRef<HTMLDivElement | null>(null);
   const inputRef = useRef<HTMLTextAreaElement | null>(null);
   const typingTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const isLocalTypingRef = useRef<boolean>(false);
   const initialHistoryLoadedRef = useRef<boolean>(false);
   const initialMessageIdsRef = useRef<Set<string>>(new Set());
-  // Optimistic ID -> Gerçek RTDB ID eşleşmesini tutarak mesaj onaylandığında DOM düğümünün yeniden mount olmasını (ikinci kez gecikmeli animasyon oynamasını) engeller
+  // Optimistic ID -> Gerçek RTDB ID eşleşmesini tutarak mesaj onaylandığında DOM düğümünün yeniden mount olmasını engeller
   const stableKeyMapRef = useRef<Map<string, string>>(new Map());
   const lastSendTimestampRef = useRef<number>(0);
 
@@ -192,8 +205,24 @@ export default function ChatRoomPage() {
     return [...messages, ...stillPending];
   }, [messages, pendingMessages]);
 
+  // Yeni mesaj geldiğinde 0fr->1fr genişleme animasyonu boyunca kapsayıcıyı akıcı şekilde kaydırarak üstteki mesajların yukarı kaymasını sağlar
   useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: "instant" });
+    const el = mainScrollRef.current;
+    if (!el) return;
+
+    let rafId: number;
+    const start = performance.now();
+    const duration = 380;
+
+    const syncScroll = (now: number) => {
+      el.scrollTop = el.scrollHeight;
+      if (now - start < duration) {
+        rafId = requestAnimationFrame(syncScroll);
+      }
+    };
+
+    rafId = requestAnimationFrame(syncScroll);
+    return () => cancelAnimationFrame(rafId);
   }, [displayedMessages.length, peerTyping]);
 
   const handleInputChange = (val: string) => {
@@ -253,7 +282,6 @@ export default function ChatRoomPage() {
     }
     setInputText("");
 
-    // 0. milisaniyede Optimistic mesajı senkron olarak state'e ekle (hiçbir async işlem beklemeden anında animasyon başlar)
     const tempId = `optimistic_${now}_${Math.random()
       .toString(36)
       .slice(2, 7)}`;
@@ -277,7 +305,6 @@ export default function ChatRoomPage() {
       setTypingStatus(chatId, profile.uid, false);
     }
 
-    // Arka planda şifrele ve gönder; onaylandığında aynı DOM key'ini koru
     void sendEncryptedMessage(peerUid, clean)
       .then((result) => {
         stableKeyMapRef.current.set(result.messageId, tempId);
@@ -307,20 +334,54 @@ export default function ChatRoomPage() {
 
   return (
     <div className="h-[100dvh] bg-zinc-950 text-zinc-100 flex flex-col overflow-hidden">
-      {/* 0ms Gecikmesiz GPU Keyframe Animasyonu (185ms) */}
+      {/* Yukarı Kaydırma (Slide-Up) ve Yaylı Pop-in GPU Animasyonları */}
       <style>{`
-        @keyframes sigalMsgPopIn {
+        @keyframes sigalRowExpand {
+          0% {
+            grid-template-rows: 0fr;
+          }
+          100% {
+            grid-template-rows: 1fr;
+          }
+        }
+        @keyframes sigalMsgPopInMine {
           0% {
             opacity: 0;
-            transform: scale(0.88) translateY(6px);
+            transform: translate3d(14px, 28px, 0) scale(0.52);
+          }
+          62% {
+            opacity: 1;
+            transform: translate3d(-2px, -4px, 0) scale(1.04);
           }
           100% {
             opacity: 1;
-            transform: scale(1) translateY(0);
+            transform: translate3d(0, 0, 0) scale(1);
           }
         }
-        .msg-pop-in {
-          animation: sigalMsgPopIn 185ms cubic-bezier(0.2, 0.9, 0.3, 1) forwards;
+        @keyframes sigalMsgPopInPeer {
+          0% {
+            opacity: 0;
+            transform: translate3d(-14px, 28px, 0) scale(0.52);
+          }
+          62% {
+            opacity: 1;
+            transform: translate3d(2px, -4px, 0) scale(1.04);
+          }
+          100% {
+            opacity: 1;
+            transform: translate3d(0, 0, 0) scale(1);
+          }
+        }
+        .msg-row-slide {
+          display: grid;
+          animation: sigalRowExpand 320ms cubic-bezier(0.22, 1, 0.36, 1) both;
+        }
+        .msg-pop-in-mine {
+          animation: sigalMsgPopInMine 380ms cubic-bezier(0.22, 1.35, 0.36, 1) both;
+          will-change: transform, opacity;
+        }
+        .msg-pop-in-peer {
+          animation: sigalMsgPopInPeer 380ms cubic-bezier(0.22, 1.35, 0.36, 1) both;
           will-change: transform, opacity;
         }
       `}</style>
@@ -379,13 +440,16 @@ export default function ChatRoomPage() {
       </header>
 
       {/* Mesaj Akışı */}
-      <main className="flex-1 max-w-md w-full mx-auto px-3 py-3 overflow-y-auto flex flex-col">
+      <main
+        ref={mainScrollRef}
+        className="flex-1 max-w-md w-full mx-auto px-3 py-3 overflow-y-auto flex flex-col"
+      >
         {displayedMessages.length === 0 && !peerTyping ? (
           <div className="m-auto text-center text-xs text-zinc-500 select-none">
             Henüz mesaj yok.
           </div>
         ) : (
-          <div className="flex flex-col">
+          <div className="mt-auto flex flex-col">
             {displayedMessages.map((msg, idx) => {
               const isMine = msg.senderUid === profile?.uid;
               const prevMsg = idx > 0 ? displayedMessages[idx - 1] : null;
@@ -394,15 +458,29 @@ export default function ChatRoomPage() {
                   ? displayedMessages[idx + 1]
                   : null;
 
+              // İlk mesajda veya son mesajın üzerinden 20 dakika geçtiğinde ortada saat başlığı göster
+              const showTimeHeader =
+                idx === 0 ||
+                (msg.timestamp || 0) - (prevMsg?.timestamp || 0) >=
+                  TIME_HEADER_INTERVAL_MS;
+
+              const nextShowsTimeHeader = Boolean(
+                nextMsg &&
+                  (nextMsg.timestamp || 0) - (msg.timestamp || 0) >=
+                    TIME_HEADER_INTERVAL_MS
+              );
+
               const prevSameCluster = Boolean(
-                prevMsg &&
+                !showTimeHeader &&
+                  prevMsg &&
                   prevMsg.senderUid === msg.senderUid &&
                   Math.abs((msg.timestamp || 0) - (prevMsg.timestamp || 0)) <=
                     GROUP_TIME_THRESHOLD_MS
               );
 
               const nextSameCluster = Boolean(
-                nextMsg &&
+                !nextShowsTimeHeader &&
+                  nextMsg &&
                   nextMsg.senderUid === msg.senderUid &&
                   Math.abs((nextMsg.timestamp || 0) - (msg.timestamp || 0)) <=
                     GROUP_TIME_THRESHOLD_MS
@@ -414,58 +492,54 @@ export default function ChatRoomPage() {
                 nextSameCluster
               );
 
+              // Kutucuklar arası mesafe yarıya indirildi (aynı grup: 2px, farklı grup: 6px)
               const marginTopClass =
-                idx === 0
+                idx === 0 || showTimeHeader
                   ? "mt-0"
                   : prevSameCluster
-                  ? "mt-1"
-                  : "mt-3.5";
+                  ? "mt-[2px]"
+                  : "mt-1.5";
 
               const stableDomKey =
                 stableKeyMapRef.current.get(msg.id) || msg.id;
-              const isNewMessage = !initialMessageIdsRef.current.has(msg.id);
+              const isNewMessage =
+                Boolean(msg.optimistic) ||
+                !initialMessageIdsRef.current.has(msg.id);
 
               return (
-                <div
-                  key={stableDomKey}
-                  className={`flex ${
-                    isMine ? "justify-end" : "justify-start"
-                  } ${marginTopClass}`}
-                >
-                  <div
-                    className={`max-w-[78%] px-4 py-2.5 text-sm break-words transform-gpu ${
-                      isMine ? "origin-bottom-right" : "origin-bottom-left"
-                    } ${isNewMessage ? "msg-pop-in" : ""} ${radiusClass} ${
-                      isMine
-                        ? "bg-emerald-600 text-white"
-                        : "bg-zinc-900 text-zinc-100 border border-zinc-800/80"
-                    }`}
-                  >
-                    <span className="whitespace-pre-wrap leading-relaxed">
-                      {msg.text}
-                    </span>
-                    <span
-                      className={`inline-flex items-center gap-1 float-right ml-2.5 mt-1.5 text-[10px] select-none ${
-                        isMine ? "text-emerald-100/80" : "text-zinc-400/80"
-                      }`}
+                <div key={stableDomKey} className="flex flex-col">
+                  {showTimeHeader && (
+                    <div className="my-2 flex justify-center select-none">
+                      <span className="text-[11px] font-medium text-zinc-500">
+                        {formatChatTimeHeader(msg.timestamp)}
+                      </span>
+                    </div>
+                  )}
+
+                  <div className={isNewMessage ? "msg-row-slide" : ""}>
+                    <div
+                      className={`overflow-hidden flex ${
+                        isMine ? "justify-end" : "justify-start"
+                      } ${marginTopClass}`}
                     >
-                      <span>{formatClockTime(msg.timestamp)}</span>
-                      {isMine && (
-                        <>
-                          {msg.status === "read" ? (
-                            <CheckCheck className="w-3.5 h-3.5 text-white stroke-[2.4]" />
-                          ) : (
-                            <Check
-                              className={`w-3 h-3 stroke-[2.2] ${
-                                msg.optimistic
-                                  ? "text-emerald-200/50"
-                                  : "text-emerald-100/80"
-                              }`}
-                            />
-                          )}
-                        </>
-                      )}
-                    </span>
+                      <div
+                        className={`max-w-[78%] px-3.5 py-2 text-[15.5px] leading-[1.35] break-words transform-gpu ${
+                          isMine ? "origin-bottom-right" : "origin-bottom-left"
+                        } ${
+                          isNewMessage
+                            ? isMine
+                              ? "msg-pop-in-mine"
+                              : "msg-pop-in-peer"
+                            : ""
+                        } ${radiusClass} ${
+                          isMine
+                            ? "bg-emerald-600 text-white"
+                            : "bg-zinc-900 text-zinc-100 border border-zinc-800/80"
+                        }`}
+                      >
+                        <span className="whitespace-pre-wrap">{msg.text}</span>
+                      </div>
+                    </div>
                   </div>
                 </div>
               );
@@ -475,11 +549,13 @@ export default function ChatRoomPage() {
 
         {/* Mesaj Kutusu Kalınlığında ve Belirgin Yazıyor... Balonu */}
         {peerTyping && (
-          <div className="mt-3.5 flex justify-start">
-            <div className="bg-zinc-900 border border-zinc-800/80 px-4 py-3 rounded-2xl rounded-bl-[4px] inline-flex items-center gap-2 transform-gpu msg-pop-in origin-bottom-left">
-              <span className="w-2 h-2 rounded-full bg-emerald-400 animate-bounce shadow-[0_0_8px_rgba(52,211,153,0.65)]" />
-              <span className="w-2 h-2 rounded-full bg-emerald-400 animate-bounce [animation-delay:150ms] shadow-[0_0_8px_rgba(52,211,153,0.65)]" />
-              <span className="w-2 h-2 rounded-full bg-emerald-400 animate-bounce [animation-delay:300ms] shadow-[0_0_8px_rgba(52,211,153,0.65)]" />
+          <div className="msg-row-slide">
+            <div className="overflow-hidden mt-1.5 flex justify-start">
+              <div className="bg-zinc-900 border border-zinc-800/80 px-4 py-3 rounded-2xl rounded-bl-[4px] inline-flex items-center gap-2 transform-gpu msg-pop-in-peer origin-bottom-left">
+                <span className="w-2 h-2 rounded-full bg-emerald-400 animate-bounce shadow-[0_0_8px_rgba(52,211,153,0.65)]" />
+                <span className="w-2 h-2 rounded-full bg-emerald-400 animate-bounce [animation-delay:150ms] shadow-[0_0_8px_rgba(52,211,153,0.65)]" />
+                <span className="w-2 h-2 rounded-full bg-emerald-400 animate-bounce [animation-delay:300ms] shadow-[0_0_8px_rgba(52,211,153,0.65)]" />
+              </div>
             </div>
           </div>
         )}
@@ -497,7 +573,7 @@ export default function ChatRoomPage() {
             value={inputText}
             onChange={(e) => handleInputChange(e.target.value)}
             placeholder="Mesaj yaz..."
-            className="flex-1 bg-zinc-900 border border-zinc-800 rounded-2xl px-3.5 py-2.5 text-sm text-zinc-100 placeholder:text-zinc-500 focus:outline-none focus:border-zinc-700 resize-none max-h-[120px] leading-snug"
+            className="flex-1 bg-zinc-900 border border-zinc-800 rounded-2xl px-3.5 py-2.5 text-[15.5px] text-zinc-100 placeholder:text-zinc-500 focus:outline-none focus:border-zinc-700 resize-none max-h-[120px] leading-snug"
           />
 
           <button
