@@ -98,6 +98,7 @@ export default function ChatRoomPage() {
   const initialMessageIdsRef = useRef<Set<string>>(new Set());
   // Optimistic ID -> Gerçek RTDB ID eşleşmesini tutarak mesaj onaylandığında DOM düğümünün yeniden mount olmasını (ikinci kez gecikmeli animasyon oynamasını) engeller
   const stableKeyMapRef = useRef<Map<string, string>>(new Map());
+  const lastSendTimestampRef = useRef<number>(0);
 
   const showError = (msg: string) => {
     setErrorToast(msg);
@@ -238,6 +239,13 @@ export default function ChatRoomPage() {
     const clean = rawValue.trim();
     if (!clean) return;
 
+    // 200ms mesaj gönderme (yazma) sınırı
+    const now = Date.now();
+    if (now - lastSendTimestampRef.current < 200) {
+      return;
+    }
+    lastSendTimestampRef.current = now;
+
     if (inputRef.current) {
       inputRef.current.value = "";
       inputRef.current.style.height = "auto";
@@ -246,7 +254,7 @@ export default function ChatRoomPage() {
     setInputText("");
 
     // 0. milisaniyede Optimistic mesajı senkron olarak state'e ekle (hiçbir async işlem beklemeden anında animasyon başlar)
-    const tempId = `optimistic_${Date.now()}_${Math.random()
+    const tempId = `optimistic_${now}_${Math.random()
       .toString(36)
       .slice(2, 7)}`;
     const optimisticMsg: ChatMessage = {
@@ -254,7 +262,7 @@ export default function ChatRoomPage() {
       senderUid: profile.uid,
       recipientUid: peerUid,
       text: clean,
-      timestamp: Date.now(),
+      timestamp: now,
       status: "sent",
       optimistic: true,
     };
@@ -299,7 +307,7 @@ export default function ChatRoomPage() {
 
   return (
     <div className="h-[100dvh] bg-zinc-950 text-zinc-100 flex flex-col overflow-hidden">
-      {/* 0ms Gecikmesiz GPU Keyframe Animasyonu */}
+      {/* 0ms Gecikmesiz GPU Keyframe Animasyonu (185ms) */}
       <style>{`
         @keyframes sigalMsgPopIn {
           0% {
@@ -312,7 +320,7 @@ export default function ChatRoomPage() {
           }
         }
         .msg-pop-in {
-          animation: sigalMsgPopIn 85ms cubic-bezier(0.2, 0.9, 0.3, 1) forwards;
+          animation: sigalMsgPopIn 185ms cubic-bezier(0.2, 0.9, 0.3, 1) forwards;
           will-change: transform, opacity;
         }
       `}</style>
