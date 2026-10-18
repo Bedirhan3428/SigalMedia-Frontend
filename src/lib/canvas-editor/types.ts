@@ -68,6 +68,39 @@ export const DEFAULT_POST_ADJUSTMENTS: PostAdjustmentState = {
   filterPreset: 'none',
 };
 
+export interface VideoTrackClip {
+  id: string;              // Benzersiz kimlik (örn: "clip_x9d2a")
+  sourceMediaId: string;   // Orijinal video/fotoğraf referansı
+  sourceStart: number;     // Orijinal medyadaki başlangıç saniyesi (sn)
+  sourceEnd: number;       // Orijinal medyadaki bitiş saniyesi (sn)
+  duration: number;        // (sourceEnd - sourceStart) / playbackRate
+  playbackRate: number;    // Oynatma hızı (0.5x, 1x, 1.5x, 2x)
+  volume: number;          // 0.0 - 1.0
+  muted: boolean;
+  isMotionPhoto?: boolean; // Reels için foto karesi
+}
+
+export interface OverlayTrackItem {
+  id: string;
+  layerId: string;         // CanvasEngine BaseLayer id'si
+  type: 'text' | 'sticker' | 'photo' | 'audio';
+  timelineStart: number;   // Başlangıç saniyesi
+  timelineEnd: number;     // Bitiş saniyesi
+  label: string;
+  previewUrl?: string;     // Sticker/fotoğraf küçük resmi
+  color?: string;          // Bar rengi (Metin için sarı, Foto için mor, vb.)
+}
+
+export interface NLETimelineState {
+  clips: VideoTrackClip[];
+  overlayItems: OverlayTrackItem[];
+  selectedItemId: string | null;
+  selectedItemType: 'video' | 'text' | 'sticker' | 'photo' | 'audio' | 'effect' | null;
+  totalDuration: number;
+  currentTime: number;
+  pps: number;
+}
+
 export interface VideoState {
   isVideo: boolean;
   isMotionPhoto?: boolean;

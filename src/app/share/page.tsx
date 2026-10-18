@@ -486,9 +486,9 @@ export default function ShareStoryPage() {
       }, 500);
     });
 
-    // Mıknatıslı Çöp Kutusu Sürükleme Takibi
+    // Mıknatıslı Çöp Kutusu Sürükleme Takibi (Reels NLE modunda fırlatarak silme kapalıdır)
     engine.on("drag-move", (info: { layer: BaseLayer; clientX: number; clientY: number; isDragging: boolean }) => {
-      if (info.layer.type === "media") return;
+      if (info.layer.type === "media" || shareModeRef.current === "reels") return;
       setIsDraggingObject(true);
 
       const trashCenterX = window.innerWidth / 2;
@@ -499,11 +499,11 @@ export default function ShareStoryPage() {
       setIsTrashHot(isOver);
     });
 
-    // Mıknatıslı Çöp Kutusu Bırakma Takibi
+    // Mıknatıslı Çöp Kutusu Bırakma Takibi (Reels NLE modunda silme yalnızca Sil butonuyla yapılır)
     engine.on("drag-end", (info: { layer: BaseLayer; clientX: number; clientY: number }) => {
       setIsDraggingObject(false);
 
-      if (info.layer && info.layer.type !== "media") {
+      if (info.layer && info.layer.type !== "media" && shareModeRef.current !== "reels") {
         const trashCenterX = window.innerWidth / 2;
         const trashCenterY = window.innerHeight - 68;
         const dist = Math.hypot(info.clientX - trashCenterX, info.clientY - trashCenterY);
@@ -1223,9 +1223,11 @@ export default function ShareStoryPage() {
         </>
       )}
 
-      {/* 6B. REELS MODU (FERAH STÜDYO ÖNİZLEME + ÇOK KANALLI TIMELINE + KUTU İKONLU ALT BAR) */}
+      {/* 6B. REELS MODU (SABİT PPS MERKEZ İBRELİ NLE TIMELINE + DİNAMİK ALT AKSİYON ÇUBUĞU) */}
       {!isTextEditing && hasMedia && shareMode === "reels" && (
         <ReelsEditor
+          engine={engineRef.current}
+          selectedCanvasLayer={selectedLayer}
           videoState={videoState}
           thumbnails={videoThumbnails}
           selectedMusic={selectedMusic}
@@ -1246,6 +1248,7 @@ export default function ShareStoryPage() {
           onOpenTextEditor={() => openTextEditor()}
           onOpenMusicPicker={() => setIsMusicDrawerOpen(true)}
           onOpenStickerSheet={() => setActiveDrawer("sticker_sheet")}
+          onOpenPhotoOverlay={() => overlayFileInputRef.current?.click()}
           onSelectFilterIndex={handleSelectFilterIndex}
           onSelectReelsEffect={handleSelectReelsEffect}
           onPublish={handlePublish}
@@ -1452,6 +1455,7 @@ export default function ShareStoryPage() {
       <ExportProgress
         isOpen={isExportingVideo}
         progress={exportProgress}
+        clipCount={engineRef.current?.getVideoClips().length || 1}
         onCancel={handleCancelExport}
       />
       {/* [END] CREATED BY Bedirhan */}

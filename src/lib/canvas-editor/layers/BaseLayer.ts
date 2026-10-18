@@ -5,6 +5,9 @@ export abstract class BaseLayer {
   public abstract type: string;
   public transform: LayerTransform;
   public visible: boolean = true;
+  public temporalVisible: boolean = true;
+  public timelineStart: number = 0;
+  public timelineEnd: number = 60;
   public locked: boolean = false;
   public selected: boolean = false;
   public isInteracting: boolean = false; // İki parmakla dokunulduğunda aktifleşen yaylanma durumu
@@ -12,6 +15,8 @@ export abstract class BaseLayer {
   constructor(options?: {
     id?: string;
     transform?: Partial<LayerTransform>;
+    timelineStart?: number;
+    timelineEnd?: number;
   }) {
     this.id = options?.id || Math.random().toString(36).substring(2, 9);
     this.transform = {
@@ -21,6 +26,16 @@ export abstract class BaseLayer {
       rotation: 0,
       ...(options?.transform || {})
     };
+    if (typeof options?.timelineStart === 'number') {
+      this.timelineStart = options.timelineStart;
+    }
+    if (typeof options?.timelineEnd === 'number') {
+      this.timelineEnd = options.timelineEnd;
+    }
+  }
+
+  public isVisibleAtTime(t: number): boolean {
+    return this.visible && t >= this.timelineStart - 0.03 && t <= this.timelineEnd + 0.03;
   }
 
   public getPixelPosition(canvasWidth: number, canvasHeight: number): Point {
@@ -35,7 +50,7 @@ export abstract class BaseLayer {
   public abstract getBoundingBox(ctx: CanvasRenderingContext2D, canvasWidth: number, canvasHeight: number): Rect;
 
   public containsPoint(point: Point, ctx: CanvasRenderingContext2D, canvasWidth: number, canvasHeight: number): boolean {
-    if (!this.visible) return false;
+    if (!this.visible || !this.temporalVisible) return false;
 
     const center = this.getPixelPosition(canvasWidth, canvasHeight);
     const bounds = this.getBoundingBox(ctx, canvasWidth, canvasHeight);

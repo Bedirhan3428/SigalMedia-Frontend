@@ -23,6 +23,8 @@ import {
   DEFAULT_POST_ADJUSTMENTS,
   ReelsEffectClip,
   ReelsEffectId,
+  VideoTrackClip,
+  OverlayTrackItem,
 } from './types';
 
 // [MODIFIED BY Bedirhan]
@@ -68,6 +70,8 @@ export class CanvasEngine {
   private isExportingVideo = false;
   private shareMode: ShareMode = 'story';
   private lastVirtualTickTime: number = 0;
+  private videoClips: VideoTrackClip[] = [];
+  private nleTimelineTime: number = 0;
 
   // 5sn Fotoğraf->Video Statik Katman Offscreen Önbelleği (Tek Seferlik Tahsis)
   private staticSceneCacheCanvas: HTMLCanvasElement | null = null;
@@ -219,6 +223,22 @@ export class CanvasEngine {
     if (this.shareMode === 'reels' && media.type === 'image') {
       this.mediaLayer.enableMotionPhoto(5);
     }
+
+    const initDur = Math.max(0.5, this.mediaLayer.getDuration() || 5);
+    this.videoClips = [
+      {
+        id: `clip_${Date.now().toString(36)}_0`,
+        sourceMediaId: media.objectUrl || 'main_media',
+        sourceStart: 0,
+        sourceEnd: Number(initDur.toFixed(2)),
+        duration: Number(initDur.toFixed(2)),
+        playbackRate: 1.0,
+        volume: 1.0,
+        muted: media.type === 'image',
+        isMotionPhoto: this.shareMode === 'reels' && media.type === 'image',
+      },
+    ];
+    this.nleTimelineTime = 0;
 
     this.render();
     this.requestRender();
@@ -448,6 +468,8 @@ export class CanvasEngine {
       transform: { x, y, scale: 1.0, rotation: 0 }
     });
 
+    this.assignDefaultOverlayTiming(layer);
+
     this.overlayLayers.push(layer);
     this.interactionManager.setSelectedLayer(layer);
     this.requestRender();
@@ -461,6 +483,8 @@ export class CanvasEngine {
       x,
       y
     });
+
+    this.assignDefaultOverlayTiming(layer);
 
     this.overlayLayers.push(layer);
     this.interactionManager.setSelectedLayer(layer);
@@ -478,11 +502,39 @@ export class CanvasEngine {
       y,
       onUpdate: () => this.requestRender(),
     });
+    const totalDur = Math.max(3, this.getTotalTimelineDuration() || 15);
+    layer.timelineStart =
+      typeof audioMeta.timelineStart === 'number' ? audioMeta.timelineStart : 0;
+    layer.timelineEnd =
+      typeof audioMeta.timelineEnd === 'number' && audioMeta.timelineEnd > layer.timelineStart
+        ? audioMeta.timelineEnd
+        : totalDur;
     this.overlayLayers.push(layer);
     this.interactionManager.setSelectedLayer(layer);
     this.requestRender();
     this.emit('change');
     return layer;
+  }
+
+  private assignDefaultOverlayTiming(layer: BaseLayer) {
+    if (this.shareMode === 'reels') {
+      const totalDur = Math.max(1, this.getTotalTimelineDuration() || 5);
+      const cur = Math.max(0, Math.min(this.getCurrentTime(), totalDur));
+      const defaultSpan = Math.min(3.0, Math.max(0.8, totalDur));
+      let start = cur;
+      let end = Math.min(totalDur, start + defaultSpan);
+      if (end - start < 0.6) {
+        start = Math.max(0, totalDur - defaultSpan);
+        end = totalDur;
+      }
+      layer.timelineStart = Number(start.toFixed(2));
+      layer.timelineEnd = Number(end.toFixed(2));
+      layer.temporalVisible = true;
+    } else {
+      layer.timelineStart = 0;
+      layer.timelineEnd = 60;
+      layer.temporalVisible = true;
+    }
   }
 
   public getMusicSticker(): MusicStickerLayer | null {
@@ -550,6 +602,18 @@ export class CanvasEngine {
     this.interactionManager.setSelectedLayer(layer);
   }
 
+  public selectLayerById(layerId: string | null): BaseLayer | null {
+    if (!layerId) {
+      this.interactionManager.setSelectedLayer(null);
+      this.requestRender();
+      return null;
+    }
+    const found = this.overlayLayers.find((l) => l.id === layerId) || null;
+    this.interactionManager.setSelectedLayer(found);
+    this.requestRender();
+    return found;
+  }
+
   public requestRender() {
     if (this.isDirty) return;
     this.isDirty = true;
@@ -593,6 +657,24 @@ export class CanvasEngine {
   }
 
   // [MODIFIED BY Bedirhan]
+  public syncTemporalVisibility(t?: number): boolean {
+    const curT = typeof t === 'number' ? t : this.getCurrentTime();
+    let changed = false;
+    for (let i = 0; i < this.overlayLayers.length; i++) {
+      const layer = this.overlayLayers[i];
+      const nextVis =
+        this.shareMode === 'reels' ? layer.isVisibleAtTime(curT) : true;
+      if (layer.temporalVisible !== nextVis) {
+        layer.temporalVisible = nextVis;
+        changed = true;
+      }
+    }
+    if (changed) {
+      this.invalidateStaticCache();
+    }
+    return changed;
+  }
+
   private ensureStaticSceneCache(width: number, height: number): HTMLCanvasElement | null {
     if (typeof document === 'undefined') return null;
     if (!this.staticSceneCacheCanvas) {
@@ -617,7 +699,7 @@ export class CanvasEngine {
       }
       for (let i = 0; i < this.overlayLayers.length; i++) {
         const layer = this.overlayLayers[i];
-        if (layer.visible) {
+        if (layer.visible && layer.temporalVisible) {
           layer.render(cCtx, width, height);
         }
       }
@@ -646,7 +728,7 @@ export class CanvasEngine {
       oCtx.clearRect(0, 0, width, height);
       for (let i = 0; i < this.overlayLayers.length; i++) {
         const layer = this.overlayLayers[i];
-        if (layer.visible) {
+        if (layer.visible && layer.temporalVisible) {
           layer.render(oCtx, width, height);
         }
       }
@@ -656,6 +738,7 @@ export class CanvasEngine {
   }
 
   public render() {
+    this.syncTemporalVisibility();
     this.ctx.clearRect(0, 0, this.width, this.height);
 
     const ml = this.mediaLayer;
@@ -671,13 +754,13 @@ export class CanvasEngine {
       // 1. Aktif filtreye özel dinamik ışık süzmesi ve atmosferik arka plan
       this.renderAmbientBackground(this.ctx, this.width, this.height);
 
-      // 2. Katmanlar (Görsel / Metin / Çıkartmalar)
+      // 2. Katmanlar (Görsel / Metin / Çıkartmalar - Zamansal Görünürlük Kontrollü)
       if (ml && ml.visible) {
         ml.render(this.ctx, this.width, this.height);
       }
       for (let i = 0; i < this.overlayLayers.length; i++) {
         const layer = this.overlayLayers[i];
-        if (layer.visible) {
+        if (layer.visible && layer.temporalVisible) {
           layer.render(this.ctx, this.width, this.height);
         }
       }
@@ -705,7 +788,7 @@ export class CanvasEngine {
       this.ctx.restore();
     }
 
-    if (sel && sel.visible && !sel.locked) {
+    if (sel && sel.visible && sel.temporalVisible && !sel.locked) {
       sel.renderSelectionHighlight(this.ctx, this.width, this.height);
     }
   }
@@ -746,16 +829,398 @@ export class CanvasEngine {
     }
     for (let i = 0; i < this.overlayLayers.length; i++) {
       const layer = this.overlayLayers[i];
-      if (layer.visible) {
+      if (layer.visible && layer.temporalVisible) {
         layer.render(targetCtx, width, height);
       }
     }
   }
 
   // [START] CREATED BY Bedirhan
+  // ─────────────────────────────────────────────────────────────
+  // NLE ÇOKLU KLİP (MAGNETIC RIPPLE TRACK) & ZAMANSAL MOTOR METOTLARI
+  // ─────────────────────────────────────────────────────────────
+
+  public getVideoClips(): VideoTrackClip[] {
+    return this.videoClips.map((c) => ({ ...c }));
+  }
+
+  public setVideoClips(clips: VideoTrackClip[]): void {
+    if (!clips || clips.length === 0) return;
+    this.videoClips = clips.map((c) => ({
+      ...c,
+      duration: Number(
+        Math.max(0.2, (c.sourceEnd - c.sourceStart) / Math.max(0.25, c.playbackRate || 1)).toFixed(2)
+      ),
+    }));
+    const totalDur = this.getTotalTimelineDuration();
+    if (this.nleTimelineTime > totalDur) {
+      this.nleTimelineTime = Math.max(0, totalDur - 0.05);
+    }
+    this.syncMediaLayerWithClips();
+    this.requestRender();
+    this.emit('video-time', this.getVideoState());
+    this.emit('change');
+  }
+
+  public getTotalTimelineDuration(): number {
+    if (this.shareMode === 'reels' && this.videoClips.length > 0) {
+      const sum = this.videoClips.reduce((acc, c) => acc + Math.max(0.2, c.duration), 0);
+      return Number(Math.max(0.5, Math.min(60, sum)).toFixed(2));
+    }
+    const ml = this.mediaLayer;
+    if (!ml) return 0;
+    const end = ml.trimEnd > 0 ? ml.trimEnd : ml.getDuration();
+    return Math.max(0.1, end - ml.trimStart);
+  }
+
+  public getActiveClipAtTime(t: number): {
+    clip: VideoTrackClip;
+    index: number;
+    clipTimelineStart: number;
+    clipTimelineEnd: number;
+    localSourceTime: number;
+  } | null {
+    if (this.videoClips.length === 0) return null;
+    const clampedT = Math.max(0, t);
+    let acc = 0;
+    for (let i = 0; i < this.videoClips.length; i++) {
+      const clip = this.videoClips[i];
+      const dur = Math.max(0.2, clip.duration);
+      const end = acc + dur;
+      if (clampedT <= end + 0.001 || i === this.videoClips.length - 1) {
+        const localOffset = Math.max(0, Math.min(dur, clampedT - acc));
+        const localSourceTime = Math.max(
+          clip.sourceStart,
+          Math.min(clip.sourceEnd, clip.sourceStart + localOffset * (clip.playbackRate || 1))
+        );
+        return {
+          clip,
+          index: i,
+          clipTimelineStart: Number(acc.toFixed(2)),
+          clipTimelineEnd: Number(end.toFixed(2)),
+          localSourceTime: Number(localSourceTime.toFixed(3)),
+        };
+      }
+      acc = end;
+    }
+    return null;
+  }
+
+  private syncMediaLayerWithClips(): void {
+    const ml = this.mediaLayer;
+    if (!ml || this.videoClips.length === 0) return;
+    const totalDur = this.getTotalTimelineDuration();
+    if (ml.isMotionPhoto) {
+      ml.media.duration = Math.max(5, totalDur);
+      ml.trimStart = 0;
+      ml.trimEnd = totalDur;
+    }
+  }
+
+  public splitActiveClipAt(t?: number, targetClipId?: string): VideoTrackClip | null {
+    const splitTime = typeof t === 'number' ? t : this.getCurrentTime();
+    const active = this.getActiveClipAtTime(splitTime);
+    if (!active) return null;
+    if (targetClipId && active.clip.id !== targetClipId) return null;
+
+    const offsetInClip = splitTime - active.clipTimelineStart;
+    const remainingInClip = active.clipTimelineEnd - splitTime;
+    if (offsetInClip < 0.25 || remainingInClip < 0.25) {
+      return null;
+    }
+
+    const rate = active.clip.playbackRate || 1.0;
+    const splitSource = Number((active.clip.sourceStart + offsetInClip * rate).toFixed(2));
+    const durA = Number(Math.max(0.2, (splitSource - active.clip.sourceStart) / rate).toFixed(2));
+    const durB = Number(Math.max(0.2, (active.clip.sourceEnd - splitSource) / rate).toFixed(2));
+
+    const clipA: VideoTrackClip = {
+      ...active.clip,
+      sourceEnd: splitSource,
+      duration: durA,
+    };
+
+    const clipB: VideoTrackClip = {
+      ...active.clip,
+      id: `clip_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 5)}`,
+      sourceStart: splitSource,
+      duration: durB,
+    };
+
+    this.videoClips.splice(active.index, 1, clipA, clipB);
+    this.syncMediaLayerWithClips();
+    this.emit('video-time', this.getVideoState());
+    this.emit('change');
+    return clipB;
+  }
+
+  public removeClip(id: string): boolean {
+    if (this.videoClips.length <= 1) return false;
+    const idx = this.videoClips.findIndex((c) => c.id === id);
+    if (idx === -1) return false;
+
+    this.videoClips.splice(idx, 1);
+    const totalDur = this.getTotalTimelineDuration();
+    this.nleTimelineTime = Math.max(0, Math.min(this.nleTimelineTime, totalDur - 0.05));
+    this.syncMediaLayerWithClips();
+    this.seekVideo(this.nleTimelineTime).catch(() => {});
+    this.emit('video-time', this.getVideoState());
+    this.emit('change');
+    return true;
+  }
+
+  public duplicateClip(id: string): VideoTrackClip | null {
+    const idx = this.videoClips.findIndex((c) => c.id === id);
+    if (idx === -1) return null;
+    const orig = this.videoClips[idx];
+    const clone: VideoTrackClip = {
+      ...orig,
+      id: `clip_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 5)}`,
+    };
+    this.videoClips.splice(idx + 1, 0, clone);
+    this.syncMediaLayerWithClips();
+    this.emit('video-time', this.getVideoState());
+    this.emit('change');
+    return clone;
+  }
+
+  public reorderClips(fromIndex: number, toIndex: number): void {
+    if (
+      fromIndex < 0 ||
+      toIndex < 0 ||
+      fromIndex >= this.videoClips.length ||
+      toIndex >= this.videoClips.length ||
+      fromIndex === toIndex
+    ) {
+      return;
+    }
+    const [moved] = this.videoClips.splice(fromIndex, 1);
+    this.videoClips.splice(toIndex, 0, moved);
+    this.syncMediaLayerWithClips();
+    this.requestRender();
+    this.emit('video-time', this.getVideoState());
+    this.emit('change');
+  }
+
+  public updateClipTrim(id: string, newSourceStart: number, newSourceEnd: number): void {
+    const idx = this.videoClips.findIndex((c) => c.id === id);
+    if (idx === -1) return;
+    const clip = this.videoClips[idx];
+    const maxMediaDur = clip.isMotionPhoto
+      ? 60
+      : Math.max(0.5, this.mediaLayer?.media.duration || 60);
+    const s = Math.max(0, Math.min(newSourceStart, maxMediaDur - 0.3));
+    const e = Math.max(s + 0.3, Math.min(newSourceEnd, maxMediaDur));
+    const rate = Math.max(0.25, clip.playbackRate || 1);
+    this.videoClips[idx] = {
+      ...clip,
+      sourceStart: Number(s.toFixed(2)),
+      sourceEnd: Number(e.toFixed(2)),
+      duration: Number(((e - s) / rate).toFixed(2)),
+    };
+    this.syncMediaLayerWithClips();
+    this.requestRender();
+    this.emit('video-time', this.getVideoState());
+    this.emit('change');
+  }
+
+  public updateClipSpeed(id: string, rate: number): void {
+    const clampedRate = Math.max(0.25, Math.min(3.0, rate));
+    this.videoClips = this.videoClips.map((c) => {
+      if (id && c.id !== id) return c;
+      const dur = Number(Math.max(0.2, (c.sourceEnd - c.sourceStart) / clampedRate).toFixed(2));
+      return {
+        ...c,
+        playbackRate: clampedRate,
+        duration: dur,
+      };
+    });
+    if (this.mediaLayer) {
+      this.mediaLayer.setPlaybackRate(clampedRate);
+    }
+    this.syncMediaLayerWithClips();
+    this.emit('video-time', this.getVideoState());
+    this.emit('change');
+  }
+
+  public updateClipVolume(id: string, volume: number, muted?: boolean): void {
+    const clampedVol = Math.max(0, Math.min(1, volume));
+    this.videoClips = this.videoClips.map((c) => {
+      if (id && c.id !== id) return c;
+      const nextMuted = typeof muted === 'boolean' ? muted : clampedVol === 0;
+      return {
+        ...c,
+        volume: clampedVol,
+        muted: nextMuted,
+      };
+    });
+    if (this.mediaLayer) {
+      this.mediaLayer.setVolume(clampedVol, muted);
+    }
+    this.emit('video-time', this.getVideoState());
+    this.emit('change');
+  }
+
+  public getOverlayTrackItems(): OverlayTrackItem[] {
+    const items: OverlayTrackItem[] = [];
+    for (let i = 0; i < this.overlayLayers.length; i++) {
+      const layer = this.overlayLayers[i];
+      if (layer instanceof MusicStickerLayer) continue;
+
+      if (layer instanceof TextLayer) {
+        const rawText = (layer.style.text || 'Metin').trim();
+        const isTagOrSticker = rawText.startsWith('@');
+        items.push({
+          id: `ov_${layer.id}`,
+          layerId: layer.id,
+          type: isTagOrSticker ? 'sticker' : 'text',
+          timelineStart: layer.timelineStart,
+          timelineEnd: layer.timelineEnd,
+          label: rawText || 'Metin',
+          color: isTagOrSticker ? '#10b981' : '#f59e0b',
+        });
+      } else if (layer instanceof OverlayImageLayer) {
+        items.push({
+          id: `ov_${layer.id}`,
+          layerId: layer.id,
+          type: 'photo',
+          timelineStart: layer.timelineStart,
+          timelineEnd: layer.timelineEnd,
+          label: 'Fotoğraf / PIP',
+          previewUrl: layer.image?.src,
+          color: '#a855f7',
+        });
+      }
+    }
+    return items;
+  }
+
+  public updateOverlayTrackTiming(layerId: string, start: number, end: number): void {
+    const layer = this.overlayLayers.find((l) => l.id === layerId);
+    if (!layer) return;
+    const safeStart = Math.max(0, Number(start.toFixed(2)));
+    const safeEnd = Math.max(safeStart + 0.3, Number(end.toFixed(2)));
+    layer.timelineStart = safeStart;
+    layer.timelineEnd = safeEnd;
+    this.syncTemporalVisibility();
+    this.invalidateStaticCache();
+    this.requestRender();
+    this.emit('change');
+  }
+
+  public splitOverlayLayerAt(layerId: string, t?: number): BaseLayer | null {
+    const splitTime = typeof t === 'number' ? t : this.getCurrentTime();
+    const idx = this.overlayLayers.findIndex((l) => l.id === layerId);
+    if (idx === -1) return null;
+    const orig = this.overlayLayers[idx];
+    if (splitTime <= orig.timelineStart + 0.25 || splitTime >= orig.timelineEnd - 0.25) {
+      return null;
+    }
+
+    const origEnd = orig.timelineEnd;
+    orig.timelineEnd = Number(splitTime.toFixed(2));
+
+    let clone: BaseLayer | null = null;
+    if (orig instanceof TextLayer) {
+      const nextText = new TextLayer({
+        style: { ...orig.style },
+        fontPreset: orig.fontPreset,
+        bgPreset: orig.bgPreset,
+        x: orig.transform.x,
+        y: orig.transform.y,
+        scale: orig.transform.scale,
+        rotation: orig.transform.rotation,
+      });
+      nextText.timelineStart = Number(splitTime.toFixed(2));
+      nextText.timelineEnd = origEnd;
+      clone = nextText;
+    } else if (orig instanceof OverlayImageLayer) {
+      const nextImg = new OverlayImageLayer({
+        image: orig.image,
+        shapeMode: orig.shapeMode,
+        transform: { ...orig.transform },
+      });
+      nextImg.timelineStart = Number(splitTime.toFixed(2));
+      nextImg.timelineEnd = origEnd;
+      clone = nextImg;
+    }
+
+    if (clone) {
+      this.overlayLayers.splice(idx + 1, 0, clone);
+      this.interactionManager.setSelectedLayer(clone);
+      this.syncTemporalVisibility();
+      this.invalidateStaticCache();
+      this.requestRender();
+      this.emit('change');
+    }
+    return clone;
+  }
+
+  public duplicateOverlayLayer(layerId: string): BaseLayer | null {
+    const idx = this.overlayLayers.findIndex((l) => l.id === layerId);
+    if (idx === -1) return null;
+    const orig = this.overlayLayers[idx];
+    const totalDur = Math.max(5, this.getTotalTimelineDuration());
+    const span = Math.max(0.5, orig.timelineEnd - orig.timelineStart);
+    let nextStart = orig.timelineEnd;
+    let nextEnd = nextStart + span;
+    if (nextEnd > totalDur) {
+      nextStart = orig.timelineStart;
+      nextEnd = orig.timelineEnd;
+    }
+
+    let clone: BaseLayer | null = null;
+    if (orig instanceof TextLayer) {
+      const nextText = new TextLayer({
+        style: { ...orig.style },
+        fontPreset: orig.fontPreset,
+        bgPreset: orig.bgPreset,
+        x: Math.min(0.85, orig.transform.x + 0.04),
+        y: Math.min(0.85, orig.transform.y + 0.04),
+        scale: orig.transform.scale,
+        rotation: orig.transform.rotation,
+      });
+      nextText.timelineStart = Number(nextStart.toFixed(2));
+      nextText.timelineEnd = Number(nextEnd.toFixed(2));
+      clone = nextText;
+    } else if (orig instanceof OverlayImageLayer) {
+      const nextImg = new OverlayImageLayer({
+        image: orig.image,
+        shapeMode: orig.shapeMode,
+        transform: {
+          ...orig.transform,
+          x: Math.min(0.85, orig.transform.x + 0.04),
+          y: Math.min(0.85, orig.transform.y + 0.04),
+        },
+      });
+      nextImg.timelineStart = Number(nextStart.toFixed(2));
+      nextImg.timelineEnd = Number(nextEnd.toFixed(2));
+      clone = nextImg;
+    }
+
+    if (clone) {
+      this.overlayLayers.splice(idx + 1, 0, clone);
+      this.interactionManager.setSelectedLayer(clone);
+      this.syncTemporalVisibility();
+      this.invalidateStaticCache();
+      this.requestRender();
+      this.emit('change');
+    }
+    return clone;
+  }
+
+  public renderAtTime(t: number): void {
+    this.nleTimelineTime = Math.max(0, Math.min(t, this.getTotalTimelineDuration()));
+    this.syncTemporalVisibility(this.nleTimelineTime);
+    this.render();
+  }
+
   public getCurrentTime(): number {
     const ml = this.mediaLayer;
     if (!ml) return 0;
+    if (this.shareMode === 'reels' && this.videoClips.length > 0) {
+      return this.nleTimelineTime;
+    }
     return ml.getCurrentTime();
   }
 
@@ -772,6 +1237,30 @@ export class CanvasEngine {
         muted: false,
         currentTime: 0,
         isPlaying: false,
+      };
+    }
+
+    if (this.shareMode === 'reels' && this.videoClips.length > 0) {
+      const totalDur = this.getTotalTimelineDuration();
+      const active = this.getActiveClipAtTime(this.nleTimelineTime) || {
+        clip: this.videoClips[0],
+      };
+      const video = ml.getVideoElement();
+      const isPlaying = ml.isMotionPhoto
+        ? ml.virtualPlaying
+        : Boolean(video && !video.paused && !video.ended);
+
+      return {
+        isVideo: true,
+        isMotionPhoto: ml.isMotionPhoto,
+        duration: totalDur,
+        trimStart: 0,
+        trimEnd: totalDur,
+        playbackRate: active.clip.playbackRate || 1.0,
+        volume: ml.isMotionPhoto ? 0 : active.clip.volume,
+        muted: ml.isMotionPhoto ? true : active.clip.muted,
+        currentTime: this.nleTimelineTime,
+        isPlaying,
       };
     }
 
@@ -824,6 +1313,10 @@ export class CanvasEngine {
   public setTrim(start: number, end: number) {
     // Hikaye modunda video kare kırpma / trimming kesinlikle devre dışıdır
     if (this.shareMode === 'story' || !this.mediaLayer) return;
+    if (this.shareMode === 'reels' && this.videoClips.length === 1) {
+      this.updateClipTrim(this.videoClips[0].id, start, end);
+      return;
+    }
     this.mediaLayer.setTrim(start, end);
     this.requestRender();
     this.emit('video-time', this.getVideoState());
@@ -832,6 +1325,11 @@ export class CanvasEngine {
 
   public setSpeed(rate: number) {
     if (this.shareMode === 'story' || !this.mediaLayer) return;
+    if (this.shareMode === 'reels' && this.videoClips.length > 0) {
+      const active = this.getActiveClipAtTime(this.nleTimelineTime);
+      this.updateClipSpeed(active ? active.clip.id : this.videoClips[0].id, rate);
+      return;
+    }
     this.mediaLayer.setPlaybackRate(rate);
     this.emit('video-time', this.getVideoState());
     this.emit('change');
@@ -839,6 +1337,11 @@ export class CanvasEngine {
 
   public setVolume(volume: number, muted?: boolean) {
     if (!this.mediaLayer) return;
+    if (this.shareMode === 'reels' && this.videoClips.length > 0) {
+      const active = this.getActiveClipAtTime(this.nleTimelineTime);
+      this.updateClipVolume(active ? active.clip.id : this.videoClips[0].id, volume, muted);
+      return;
+    }
     this.mediaLayer.setVolume(volume, muted);
     this.emit('video-time', this.getVideoState());
     this.emit('change');
@@ -846,6 +1349,24 @@ export class CanvasEngine {
 
   public async seekVideo(t: number): Promise<void> {
     if (!this.mediaLayer) return;
+
+    if (this.shareMode === 'reels' && this.videoClips.length > 0) {
+      const totalDur = this.getTotalTimelineDuration();
+      this.nleTimelineTime = Math.max(0, Math.min(t, totalDur));
+      const active = this.getActiveClipAtTime(this.nleTimelineTime);
+      if (active) {
+        if (this.mediaLayer.isMotionPhoto) {
+          this.mediaLayer.virtualTime = this.nleTimelineTime;
+        } else {
+          await this.mediaLayer.seek(active.localSourceTime);
+        }
+      }
+      this.syncTemporalVisibility(this.nleTimelineTime);
+      this.render();
+      this.emit('video-progress', this.nleTimelineTime);
+      return;
+    }
+
     await this.mediaLayer.seek(t);
     this.render();
     this.emit('video-progress', this.mediaLayer.getCurrentTime());
@@ -853,6 +1374,47 @@ export class CanvasEngine {
 
   public async playVideo(): Promise<void> {
     if (!this.mediaLayer) return;
+
+    if (this.shareMode === 'reels' && this.videoClips.length > 0) {
+      const totalDur = this.getTotalTimelineDuration();
+      if (this.nleTimelineTime < 0 || this.nleTimelineTime >= totalDur - 0.04) {
+        this.nleTimelineTime = 0;
+      }
+      const active = this.getActiveClipAtTime(this.nleTimelineTime);
+
+      if (this.mediaLayer.isMotionPhoto) {
+        this.mediaLayer.virtualTime = this.nleTimelineTime;
+        this.mediaLayer.virtualPlaying = true;
+        this.lastVirtualTickTime = performance.now();
+        this.startVideoLoop();
+        this.emit('video-time', this.getVideoState());
+        return;
+      }
+
+      const video = this.mediaLayer.getVideoElement();
+      if (!video) return;
+
+      if (active) {
+        video.currentTime = active.localSourceTime;
+        video.playbackRate = active.clip.playbackRate || 1.0;
+        video.volume = active.clip.volume;
+        video.muted = active.clip.muted;
+      }
+
+      try {
+        await video.play();
+      } catch {
+        video.muted = true;
+        this.mediaLayer.muted = true;
+        try {
+          await video.play();
+        } catch {}
+      }
+
+      this.startVideoLoop();
+      this.emit('video-time', this.getVideoState());
+      return;
+    }
 
     if (this.mediaLayer.isMotionPhoto) {
       if (
@@ -955,6 +1517,98 @@ export class CanvasEngine {
         return;
       }
 
+      if (this.shareMode === 'reels' && this.videoClips.length > 0) {
+        const now = performance.now();
+        const dt = Math.max(0, (now - this.lastVirtualTickTime) / 1000);
+        this.lastVirtualTickTime = now;
+        const totalDur = this.getTotalTimelineDuration();
+
+        if (ml.isMotionPhoto) {
+          if (!ml.virtualPlaying) {
+            this.videoLoopId = null;
+            this.emit('video-time', this.getVideoState());
+            return;
+          }
+          const active = this.getActiveClipAtTime(this.nleTimelineTime);
+          this.nleTimelineTime += dt;
+          if (this.nleTimelineTime >= totalDur) {
+            this.nleTimelineTime = 0;
+          }
+          ml.virtualTime = active ? active.localSourceTime : this.nleTimelineTime;
+          const visChanged = this.syncTemporalVisibility(this.nleTimelineTime);
+          if (ml.isTimeDependentEffect() || this.staticSceneCacheDirty || visChanged) {
+            this.render();
+          }
+          this.emit('video-progress', this.nleTimelineTime);
+          this.videoLoopId = requestAnimationFrame(tick);
+          return;
+        }
+
+        const video = ml.getVideoElement();
+        if (!video) {
+          this.videoLoopId = null;
+          return;
+        }
+
+        if (!video.paused) {
+          this.nleTimelineTime += dt;
+          if (this.nleTimelineTime >= totalDur) {
+            this.nleTimelineTime = 0;
+          }
+          const active = this.getActiveClipAtTime(this.nleTimelineTime);
+          if (active) {
+            const targetRate = active.clip.playbackRate || 1.0;
+            if (Math.abs(video.playbackRate - targetRate) > 0.01) {
+              video.playbackRate = targetRate;
+            }
+            if (Math.abs(video.volume - active.clip.volume) > 0.01) {
+              video.volume = active.clip.volume;
+            }
+            if (video.muted !== active.clip.muted) {
+              video.muted = active.clip.muted;
+            }
+            if (Math.abs(video.currentTime - active.localSourceTime) > 0.24 || video.ended) {
+              video.currentTime = active.localSourceTime;
+              video.play().catch(() => {});
+            } else {
+              // Donanım video saatine senkronla
+              const syncedOffset = Math.max(
+                0,
+                (video.currentTime - active.clip.sourceStart) / targetRate
+              );
+              this.nleTimelineTime = Math.min(
+                active.clipTimelineEnd,
+                active.clipTimelineStart + syncedOffset
+              );
+            }
+          }
+          this.syncTemporalVisibility(this.nleTimelineTime);
+          this.render();
+          this.emit('video-progress', this.nleTimelineTime);
+          this.videoLoopId = requestAnimationFrame(tick);
+          return;
+        } else {
+          if (video.ended) {
+            this.nleTimelineTime = 0;
+            const first = this.getActiveClipAtTime(0);
+            if (first) video.currentTime = first.localSourceTime;
+            video
+              .play()
+              .then(() => {
+                this.videoLoopId = requestAnimationFrame(tick);
+              })
+              .catch(() => {
+                this.videoLoopId = null;
+                this.emit('video-time', this.getVideoState());
+              });
+            return;
+          }
+          this.videoLoopId = null;
+          this.emit('video-time', this.getVideoState());
+          return;
+        }
+      }
+
       if (ml.isMotionPhoto) {
         if (!ml.virtualPlaying) {
           this.videoLoopId = null;
@@ -1029,6 +1683,22 @@ export class CanvasEngine {
     const w = width || this.width;
     const h = height || this.height;
     const ml = this.mediaLayer;
+
+    if (this.shareMode === 'reels' && this.videoClips.length > 0) {
+      this.nleTimelineTime = t;
+      this.syncTemporalVisibility(t);
+      const active = this.getActiveClipAtTime(t);
+      if (ml && active) {
+        if (ml.isMotionPhoto) {
+          ml.virtualTime = t;
+        } else {
+          await ml.seek(active.localSourceTime);
+        }
+      }
+      this.renderClean(targetCtx, w, h);
+      return;
+    }
+
     if (ml) {
       if (ml.isMotionPhoto) {
         ml.virtualTime = t;

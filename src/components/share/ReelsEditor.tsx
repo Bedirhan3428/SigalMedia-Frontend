@@ -2,7 +2,7 @@
 // [MODIFIED BY Bedirhan]
 "use client";
 
-import { useRef, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import {
   Scissors,
   Sparkles,
@@ -13,20 +13,30 @@ import {
   VolumeX,
   Plus,
   Trash2,
-  Maximize2,
+  Copy,
   Sticker,
+  Image as ImageIcon,
+  Type,
+  X,
 } from "lucide-react";
 import {
+  BaseLayer,
+  CanvasEngine,
   FILTER_PRESETS,
+  OverlayTrackItem,
   REELS_EFFECT_PRESETS,
   ReelsEffectClip,
   ReelsEffectId,
   StoryAudioMeta,
   VideoState,
+  VideoTrackClip,
 } from "@/lib/canvas-editor";
-import VideoTimeline from "./VideoTimeline";
+import VideoTimelineNLE from "./VideoTimelineNLE";
+import { NLESelectedType } from "./TimelineOverlayTracks";
 
 export interface ReelsEditorProps {
+  engine?: CanvasEngine | null;
+  selectedCanvasLayer?: BaseLayer | null;
   videoState: VideoState;
   thumbnails: string[];
   selectedMusic: StoryAudioMeta | null;
@@ -47,16 +57,26 @@ export interface ReelsEditorProps {
   onOpenTextEditor: () => void;
   onOpenMusicPicker: () => void;
   onOpenStickerSheet?: () => void;
+  onOpenPhotoOverlay?: () => void;
   onSelectFilterIndex: (index: number) => void;
   onSelectReelsEffect: (effect: ReelsEffectId) => void;
   onPublish: () => void;
 }
 
-type ActiveToolStrip = "none" | "effects" | "audio" | "speed" | "filters";
+type ActiveToolStrip = "none" | "effects" | "audio_speed" | "filters";
 
-const SPEED_OPTIONS = [0.25, 0.5, 1.0, 1.5, 2.0, 3.0];
+type NLEHistorySnapshot = {
+  clips: VideoTrackClip[];
+  effectClips: ReelsEffectClip[];
+  musicClip: StoryAudioMeta | null;
+  overlayTimings: Array<{ layerId: string; start: number; end: number }>;
+};
+
+const SPEED_OPTIONS = [0.5, 1.0, 1.5, 2.0];
 
 export default function ReelsEditor({
+  engine,
+  selectedCanvasLayer,
   videoState,
   thumbnails,
   selectedMusic,
@@ -65,7 +85,6 @@ export default function ReelsEditor({
   activeReelsEffect,
   effectClips = [],
   getCurrentTime,
-  onChangeTrim,
   onChangeSpeed,
   onChangeVolume,
   onChangeMusicVolume,
@@ -76,58 +95,362 @@ export default function ReelsEditor({
   onOpenTextEditor,
   onOpenMusicPicker,
   onOpenStickerSheet,
+  onOpenPhotoOverlay,
   onSelectFilterIndex,
   onSelectReelsEffect,
 }: ReelsEditorProps) {
   const [activeStrip, setActiveStrip] = useState<ActiveToolStrip>("none");
-  const [selectedEffectClipId, setSelectedEffectClipId] = useState<string | null>(null);
+  const [selectedItemId, setSelectedItemId] = useState<string | null>(null);
+  const [selectedItemType, setSelectedItemType] = useState<NLESelectedType>(null);
+  const [clips, setClips] = useState<VideoTrackClip[]>([]);
+  const [overlayItems, setOverlayItems] = useState<OverlayTrackItem[]>([]);
+  const [historyStack, setHistoryStack] = useState<NLEHistorySnapshot[]>([]);
+  const [redoStack, setRedoStack] = useState<NLEHistorySnapshot[]>([]);
 
-  // Playhead (scrubber) hareketi React useState yerine useRef + doğrudan DOM style.transform ile 60 FPS güncellenir
-  const playheadRef = useRef<HTMLDivElement | null>(null);
-  const trackRef = useRef<HTMLDivElement | null>(null);
-  const timeLabelRef = useRef<HTMLSpanElement | null>(null);
-  const splitTriggerRef = useRef<(() => void) | null>(null);
+  const syncFromEngine = useCallback(() => {
+    if (!engine) return;
+    setClips(engine.getVideoClips());
+    setOverlayItems(engine.getOverlayTrackItems());
+  }, [engine]);
 
-  const safeDuration = Math.max(
+  useEffect(() => {
+    syncFromEngine();
+    if (!engine) return;
+    const handleEngineChange = () => {
+      syncFromEngine();
+    };
+    engine.on("change", handleEngineChange);
+    engine.on("video-time", handleEngineChange);
+    return () => {
+      engine.off("change", handleEngineChange);
+      engine.off("video-time", handleEngineChange);
+    };
+  }, [engine, syncFromEngine]);
+
+  // 9:16 önizleme sahnesinde bir metin/sticker/fotoğrafa dokunulduğunda timeline'daki barı otomatik seç
+  useEffect(() => {
+    if (!selectedCanvasLayer) return;
+    if (selectedCanvasLayer.type === "text") {
+      const items = engine?.getOverlayTrackItems() || [];
+      const found = items.find((i) => i.layerId === selectedCanvasLayer.id);
+      setSelectedItemId(selectedCanvasLayer.id);
+      setSelectedItemType(found?.type || "text");
+    } else if (selectedCanvasLayer.type === "image_overlay") {
+      setSelectedItemId(selectedCanvasLayer.id);
+      setSelectedItemType("photo");
+    }
+  }, [selectedCanvasLayer, engine]);
+
+  const totalDuration = Math.max(
     0.5,
-    Math.min(
-      videoState.duration || 0.5,
-      60
-    )
-  );
-  const safeStart = Math.max(0, Math.min(videoState.trimStart, safeDuration - 0.1));
-  const safeEnd = Math.max(
-    safeStart + 0.1,
-    Math.min(videoState.trimEnd || safeDuration, safeDuration)
+    clips.length > 0
+      ? clips.reduce((acc, c) => acc + Math.max(0.2, c.duration), 0)
+      : videoState.duration || 5
   );
 
-  const toggleStrip = (strip: ActiveToolStrip) => {
-    setActiveStrip((prev) => (prev === strip ? "none" : strip));
-  };
+  const maxSourceDuration = Math.max(
+    totalDuration,
+    engine?.getMedia()?.duration || videoState.duration || 60
+  );
 
   const getPlayheadTime = () => {
     const raw = getCurrentTime ? getCurrentTime() : videoState.currentTime;
-    return Math.max(safeStart, Math.min(safeEnd, raw));
+    return Math.max(0, Math.min(totalDuration, raw));
   };
 
+  // Undo / Redo Snapshot Kaydı
+  const commitHistory = useCallback(() => {
+    if (!engine) return;
+    const snap: NLEHistorySnapshot = {
+      clips: engine.getVideoClips(),
+      effectClips: effectClips.map((c) => ({ ...c })),
+      musicClip: selectedMusic ? { ...selectedMusic } : null,
+      overlayTimings: engine.getOverlayTrackItems().map((i) => ({
+        layerId: i.layerId,
+        start: i.timelineStart,
+        end: i.timelineEnd,
+      })),
+    };
+    setHistoryStack((prev) => [...prev.slice(-24), snap]);
+    setRedoStack([]);
+  }, [engine, effectClips, selectedMusic]);
+
+  const applySnapshot = useCallback(
+    (snap: NLEHistorySnapshot) => {
+      if (!engine) return;
+      engine.setVideoClips(snap.clips);
+      onChangeEffectClips?.(snap.effectClips);
+      onChangeMusicMeta?.(snap.musicClip);
+      for (const ov of snap.overlayTimings) {
+        engine.updateOverlayTrackTiming(ov.layerId, ov.start, ov.end);
+      }
+      syncFromEngine();
+    },
+    [engine, onChangeEffectClips, onChangeMusicMeta, syncFromEngine]
+  );
+
+  const handleUndo = () => {
+    if (historyStack.length === 0 || !engine) return;
+    const currentSnap: NLEHistorySnapshot = {
+      clips: engine.getVideoClips(),
+      effectClips: effectClips.map((c) => ({ ...c })),
+      musicClip: selectedMusic ? { ...selectedMusic } : null,
+      overlayTimings: engine.getOverlayTrackItems().map((i) => ({
+        layerId: i.layerId,
+        start: i.timelineStart,
+        end: i.timelineEnd,
+      })),
+    };
+    const prevSnap = historyStack[historyStack.length - 1];
+    setHistoryStack((s) => s.slice(0, -1));
+    setRedoStack((r) => [...r, currentSnap]);
+    applySnapshot(prevSnap);
+  };
+
+  const handleRedo = () => {
+    if (redoStack.length === 0 || !engine) return;
+    const currentSnap: NLEHistorySnapshot = {
+      clips: engine.getVideoClips(),
+      effectClips: effectClips.map((c) => ({ ...c })),
+      musicClip: selectedMusic ? { ...selectedMusic } : null,
+      overlayTimings: engine.getOverlayTrackItems().map((i) => ({
+        layerId: i.layerId,
+        start: i.timelineStart,
+        end: i.timelineEnd,
+      })),
+    };
+    const nextSnap = redoStack[redoStack.length - 1];
+    setRedoStack((r) => r.slice(0, -1));
+    setHistoryStack((s) => [...s, currentSnap]);
+    applySnapshot(nextSnap);
+  };
+
+  const handleSelectItem = (id: string | null, type: NLESelectedType) => {
+    setSelectedItemId(id);
+    setSelectedItemType(type);
+    if (!id) {
+      setActiveStrip("none");
+      engine?.selectLayerById(null);
+      return;
+    }
+    if (type === "text" || type === "sticker" || type === "photo") {
+      engine?.selectLayerById(id);
+    } else {
+      engine?.selectLayerById(null);
+    }
+    if (type === "effect") {
+      setActiveStrip("effects");
+    }
+  };
+
+  const selectedVideoClip =
+    selectedItemType === "video"
+      ? clips.find((c) => c.id === selectedItemId) || null
+      : null;
+
   const selectedEffectClip =
-    effectClips.find((c) => c.id === selectedEffectClipId) || null;
+    selectedItemType === "effect"
+      ? effectClips.find((c) => c.id === selectedItemId) || null
+      : null;
+
+  // İbre seçili klibin/katmanın içindeyse Böl butonu aktiftir
+  const canSplitSelected = (() => {
+    const cur = getPlayheadTime();
+    if (!selectedItemId || !selectedItemType) {
+      const active = engine?.getActiveClipAtTime(cur);
+      return Boolean(
+        active &&
+          cur - active.clipTimelineStart >= 0.25 &&
+          active.clipTimelineEnd - cur >= 0.25
+      );
+    }
+    if (selectedItemType === "video") {
+      const active = engine?.getActiveClipAtTime(cur);
+      return Boolean(
+        active &&
+          active.clip.id === selectedItemId &&
+          cur - active.clipTimelineStart >= 0.25 &&
+          active.clipTimelineEnd - cur >= 0.25
+      );
+    }
+    if (
+      selectedItemType === "text" ||
+      selectedItemType === "sticker" ||
+      selectedItemType === "photo"
+    ) {
+      const item = overlayItems.find((i) => i.layerId === selectedItemId);
+      return Boolean(
+        item && cur > item.timelineStart + 0.25 && cur < item.timelineEnd - 0.25
+      );
+    }
+    if (selectedItemType === "effect") {
+      const fx = effectClips.find((c) => c.id === selectedItemId);
+      return Boolean(fx && cur > fx.startTime + 0.2 && cur < fx.endTime - 0.2);
+    }
+    return false;
+  })();
+
+  // ✂️ BÖL (SPLIT) Aksiyonu
+  const handleSplitSelected = () => {
+    const cur = getPlayheadTime();
+    commitHistory();
+
+    if (selectedItemType === "effect" && selectedEffectClip && onChangeEffectClips) {
+      if (
+        cur > selectedEffectClip.startTime + 0.2 &&
+        cur < selectedEffectClip.endTime - 0.2
+      ) {
+        const leftFx: ReelsEffectClip = {
+          ...selectedEffectClip,
+          endTime: Number(cur.toFixed(2)),
+        };
+        const rightFx: ReelsEffectClip = {
+          ...selectedEffectClip,
+          id: `fx_${Date.now().toString(36)}`,
+          startTime: Number(cur.toFixed(2)),
+        };
+        onChangeEffectClips(
+          effectClips.flatMap((c) =>
+            c.id === selectedEffectClip.id ? [leftFx, rightFx] : [c]
+          )
+        );
+        setSelectedItemId(rightFx.id);
+      }
+      return;
+    }
+
+    if (
+      (selectedItemType === "text" ||
+        selectedItemType === "sticker" ||
+        selectedItemType === "photo") &&
+      selectedItemId &&
+      engine
+    ) {
+      const newLayer = engine.splitOverlayLayerAt(selectedItemId, cur);
+      if (newLayer) {
+        syncFromEngine();
+        setSelectedItemId(newLayer.id);
+      }
+      return;
+    }
+
+    if (engine) {
+      const rightClip = engine.splitActiveClipAt(
+        cur,
+        selectedItemType === "video" && selectedItemId ? selectedItemId : undefined
+      );
+      if (rightClip) {
+        syncFromEngine();
+        setSelectedItemId(rightClip.id);
+        setSelectedItemType("video");
+      }
+    }
+  };
+
+  // 🗑️ SİL (DELETE) Aksiyonu (Manyetik Ripple / Katman Silme)
+  const handleDeleteSelected = () => {
+    if (!selectedItemId || !selectedItemType) return;
+    commitHistory();
+
+    if (selectedItemType === "video" && engine) {
+      const removed = engine.removeClip(selectedItemId);
+      if (removed) {
+        syncFromEngine();
+        setSelectedItemId(null);
+        setSelectedItemType(null);
+        setActiveStrip("none");
+      }
+      return;
+    }
+
+    if (
+      (selectedItemType === "text" ||
+        selectedItemType === "sticker" ||
+        selectedItemType === "photo") &&
+      engine
+    ) {
+      engine.removeLayer(selectedItemId);
+      syncFromEngine();
+      setSelectedItemId(null);
+      setSelectedItemType(null);
+      return;
+    }
+
+    if (selectedItemType === "effect" && onChangeEffectClips) {
+      onChangeEffectClips(effectClips.filter((c) => c.id !== selectedItemId));
+      setSelectedItemId(null);
+      setSelectedItemType(null);
+      setActiveStrip("none");
+      return;
+    }
+
+    if (selectedItemType === "audio" && onChangeMusicMeta) {
+      onChangeMusicMeta(null);
+      setSelectedItemId(null);
+      setSelectedItemType(null);
+      setActiveStrip("none");
+    }
+  };
+
+  // 📑 KOPYALA (DUPLICATE) Aksiyonu
+  const handleDuplicateSelected = () => {
+    if (!selectedItemId || !selectedItemType) return;
+    commitHistory();
+
+    if (selectedItemType === "video" && engine) {
+      const cloned = engine.duplicateClip(selectedItemId);
+      if (cloned) {
+        syncFromEngine();
+        setSelectedItemId(cloned.id);
+      }
+      return;
+    }
+
+    if (
+      (selectedItemType === "text" ||
+        selectedItemType === "sticker" ||
+        selectedItemType === "photo") &&
+      engine
+    ) {
+      const clonedLayer = engine.duplicateOverlayLayer(selectedItemId);
+      if (clonedLayer) {
+        syncFromEngine();
+        setSelectedItemId(clonedLayer.id);
+      }
+      return;
+    }
+
+    if (selectedItemType === "effect" && selectedEffectClip && onChangeEffectClips) {
+      const span = Math.max(0.4, selectedEffectClip.endTime - selectedEffectClip.startTime);
+      const nextStart = Math.min(totalDuration - 0.4, selectedEffectClip.endTime);
+      const nextEnd = Math.min(totalDuration, nextStart + span);
+      const cloneFx: ReelsEffectClip = {
+        ...selectedEffectClip,
+        id: `fx_${Date.now().toString(36)}`,
+        startTime: Number(nextStart.toFixed(2)),
+        endTime: Number(Math.max(nextStart + 0.4, nextEnd).toFixed(2)),
+      };
+      onChangeEffectClips([...effectClips, cloneFx]);
+      setSelectedItemId(cloneFx.id);
+    }
+  };
 
   const addEffectClipAtPlayhead = (effectId: Exclude<ReelsEffectId, "none">) => {
     if (!onChangeEffectClips) {
       onSelectReelsEffect(effectId);
       return;
     }
+    commitHistory();
     const cur = getPlayheadTime();
-    const defaultSpan = Math.min(2.5, Math.max(0.6, (safeEnd - safeStart) * 0.35));
+    const defaultSpan = Math.min(2.5, Math.max(0.8, totalDuration * 0.35));
     let clipStart = cur;
-    let clipEnd = Math.min(safeEnd, clipStart + defaultSpan);
+    let clipEnd = Math.min(totalDuration, clipStart + defaultSpan);
     if (clipEnd - clipStart < 0.4) {
-      clipStart = Math.max(safeStart, safeEnd - defaultSpan);
-      clipEnd = safeEnd;
+      clipStart = Math.max(0, totalDuration - defaultSpan);
+      clipEnd = totalDuration;
     }
     const newClip: ReelsEffectClip = {
-      id: `fx-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+      id: `fx_${Date.now().toString(36)}`,
       effect: effectId,
       startTime: Number(clipStart.toFixed(2)),
       endTime: Number(clipEnd.toFixed(2)),
@@ -135,7 +458,8 @@ export default function ReelsEditor({
     };
     onSelectReelsEffect("none");
     onChangeEffectClips([...effectClips, newClip]);
-    setSelectedEffectClipId(newClip.id);
+    setSelectedItemId(newClip.id);
+    setSelectedItemType("effect");
   };
 
   const handleSelectEffectPreset = (effectId: ReelsEffectId) => {
@@ -145,16 +469,18 @@ export default function ReelsEditor({
     }
     if (effectId === "none") {
       if (selectedEffectClip) {
+        commitHistory();
         onChangeEffectClips(effectClips.filter((c) => c.id !== selectedEffectClip.id));
-        setSelectedEffectClipId(null);
+        setSelectedItemId(null);
+        setSelectedItemType(null);
       } else {
         onChangeEffectClips([]);
         onSelectReelsEffect("none");
       }
       return;
     }
-
     if (selectedEffectClip) {
+      commitHistory();
       onChangeEffectClips(
         effectClips.map((c) =>
           c.id === selectedEffectClip.id ? { ...c, effect: effectId } : c
@@ -162,12 +488,6 @@ export default function ReelsEditor({
       );
     } else {
       addEffectClipAtPlayhead(effectId);
-    }
-  };
-
-  const handleSplitAtPlayhead = () => {
-    if (splitTriggerRef.current) {
-      splitTriggerRef.current();
     }
   };
 
@@ -185,52 +505,67 @@ export default function ReelsEditor({
     });
   };
 
-  const effectiveVolume = videoState.muted ? 0 : Math.round(videoState.volume * 100);
+  const activeClipVolume = selectedVideoClip
+    ? selectedVideoClip.muted
+      ? 0
+      : Math.round(selectedVideoClip.volume * 100)
+    : videoState.muted
+      ? 0
+      : Math.round(videoState.volume * 100);
+
+  const activeClipSpeed = selectedVideoClip
+    ? selectedVideoClip.playbackRate
+    : videoState.playbackRate;
+
   const effectiveMusicVolume = Math.round(musicVolume * 100);
 
   return (
-    <div className="fixed inset-x-0 bottom-0 z-40 bg-black pt-2 pb-6 flex flex-col gap-3.5 pointer-events-auto select-none">
-      {/* 1. Ferah Çok Kanallı Zaman Çizelgesi */}
-      <VideoTimeline
-        duration={videoState.duration}
-        trimStart={videoState.trimStart}
-        trimEnd={videoState.trimEnd}
+    <div className="fixed inset-x-0 bottom-0 z-40 bg-black pt-1.5 pb-5 flex flex-col gap-2.5 pointer-events-auto select-none">
+      {/* 1. Sabit PPS (60px/s) ve Sabit Merkez İbreli NLE Zaman Çizelgesi */}
+      <VideoTimelineNLE
+        clips={clips}
+        overlayItems={overlayItems}
+        effectClips={effectClips}
+        musicClip={selectedMusic}
+        totalDuration={totalDuration}
+        maxSourceDuration={maxSourceDuration}
         currentTime={videoState.currentTime}
         isPlaying={videoState.isPlaying}
-        isMotionPhoto={videoState.isMotionPhoto}
         thumbnails={thumbnails}
-        muted={videoState.muted || effectiveVolume === 0}
+        selectedItemId={selectedItemId}
+        selectedItemType={selectedItemType}
+        canUndo={historyStack.length > 0}
+        canRedo={redoStack.length > 0}
         getCurrentTime={getCurrentTime}
-        playheadRef={playheadRef}
-        trackRef={trackRef}
-        timeLabelRef={timeLabelRef}
-        splitTriggerRef={splitTriggerRef}
-        effectClips={effectClips}
-        selectedEffectClipId={selectedEffectClipId}
-        onSelectEffectClip={(id) => {
-          setSelectedEffectClipId(id);
-          if (id) setActiveStrip("effects");
+        onSelectItem={handleSelectItem}
+        onTrimClip={(clipId, newStart, newEnd) => {
+          engine?.updateClipTrim(clipId, newStart, newEnd);
+          syncFromEngine();
+        }}
+        onReorderClips={(fromIdx, toIdx) => {
+          engine?.reorderClips(fromIdx, toIdx);
+          syncFromEngine();
+        }}
+        onChangeOverlayTiming={(layerId, start, end) => {
+          engine?.updateOverlayTrackTiming(layerId, start, end);
+          syncFromEngine();
         }}
         onChangeEffectClips={onChangeEffectClips}
-        musicClip={selectedMusic}
         onChangeMusicTimeline={handleMusicTimelineChange}
-        onChangeTrim={onChangeTrim}
         onSeek={onSeek}
         onTogglePlay={onTogglePlay}
-        onToggleMute={() =>
-          onChangeVolume(
-            videoState.muted && videoState.volume === 0 ? 1 : videoState.volume,
-            !videoState.muted
-          )
-        }
+        onUndo={handleUndo}
+        onRedo={handleRedo}
         onOpenMusicPicker={onOpenMusicPicker}
-        onQuickAddEffectAtPlayhead={() => {
+        onOpenTextEditor={onOpenTextEditor}
+        onQuickAddEffect={() => {
           setActiveStrip("effects");
           addEffectClipAtPlayhead("zoom_pulse");
         }}
+        onCommitHistory={commitHistory}
       />
 
-      {/* 2. Açılır Alt Araç Şeridi (Yalnızca ilgili araca dokunulduğunda açılır) */}
+      {/* 2. Açılır Alt Ayar Şeridi (Efektler / Ses & Hız / Filtreler) */}
       {activeStrip === "effects" && (
         <div className="flex flex-col gap-2 px-4">
           <div className="flex items-center gap-2 overflow-x-auto no-scrollbar">
@@ -270,7 +605,7 @@ export default function ReelsEditor({
                 className="px-3.5 py-2 rounded-2xl text-xs font-semibold shrink-0 border border-white/15 text-white bg-[#1c1c1e] hover:bg-[#26262a] active:scale-95 flex items-center gap-1"
               >
                 <Plus className="w-3.5 h-3.5" />
-                <span>Yeni Klip</span>
+                <span>Yeni Efekt</span>
               </button>
             )}
           </div>
@@ -289,7 +624,9 @@ export default function ReelsEditor({
                   const val = Number(e.target.value);
                   onChangeEffectClips(
                     effectClips.map((c) =>
-                      c.id === selectedEffectClip.id ? { ...c, intensity: val } : c
+                      c.id === selectedEffectClip.id
+                        ? { ...c, intensity: val }
+                        : c
                     )
                   );
                 }}
@@ -298,60 +635,122 @@ export default function ReelsEditor({
               <span className="text-xs font-semibold text-white w-9 text-right tabular-nums">
                 {selectedEffectClip.intensity}%
               </span>
-
-              <button
-                type="button"
-                onClick={() =>
-                  onChangeEffectClips(
-                    effectClips.map((c) =>
-                      c.id === selectedEffectClip.id
-                        ? { ...c, startTime: safeStart, endTime: safeEnd }
-                        : c
-                    )
-                  )
-                }
-                className="px-2.5 py-1 rounded-xl bg-white/10 hover:bg-white/15 text-xs font-medium text-zinc-200 flex items-center gap-1 shrink-0"
-              >
-                <Maximize2 className="w-3 h-3" />
-                <span>Tamamı</span>
-              </button>
-
-              <button
-                type="button"
-                onClick={() => {
-                  onChangeEffectClips(
-                    effectClips.filter((c) => c.id !== selectedEffectClip.id)
-                  );
-                  setSelectedEffectClipId(null);
-                }}
-                className="p-1.5 rounded-xl bg-red-500/20 hover:bg-red-500/30 text-red-300 shrink-0"
-              >
-                <Trash2 className="w-3.5 h-3.5" />
-              </button>
             </div>
           )}
         </div>
       )}
 
-      {activeStrip === "speed" && (
-        <div className="grid grid-cols-6 gap-2 px-4">
-          {SPEED_OPTIONS.map((rate) => {
-            const active = Math.abs(videoState.playbackRate - rate) < 0.01;
-            return (
-              <button
-                key={rate}
-                type="button"
-                onClick={() => onChangeSpeed(rate)}
-                className={`py-2 rounded-2xl text-xs font-semibold border transition-all active:scale-95 ${
-                  active
-                    ? "bg-white text-black border-white"
-                    : "bg-[#1c1c1e] text-white border-white/5 hover:bg-[#26262a]"
-                }`}
-              >
-                {rate}x
-              </button>
-            );
-          })}
+      {activeStrip === "audio_speed" && (
+        <div className="flex flex-col gap-2 px-4">
+          {selectedItemType === "audio" && selectedMusic ? (
+            <div className="flex items-center gap-3 bg-[#16171b] rounded-2xl px-3.5 py-2">
+              <Music className="w-4 h-4 text-sky-400 shrink-0" />
+              <span className="text-xs font-medium text-zinc-300 w-16 truncate shrink-0">
+                {selectedMusic.title}
+              </span>
+              <input
+                type="range"
+                min={0}
+                max={100}
+                value={effectiveMusicVolume}
+                onChange={(e) =>
+                  onChangeMusicVolume(Number(e.target.value) / 100)
+                }
+                className="flex-1 h-1.5 bg-white/15 rounded-lg appearance-none cursor-pointer accent-white"
+              />
+              <span className="text-xs font-semibold text-white w-9 text-right tabular-nums">
+                {effectiveMusicVolume}%
+              </span>
+            </div>
+          ) : (
+            <>
+              {/* Klip Hız Seçenekleri (0.5x - 2x) */}
+              <div className="grid grid-cols-4 gap-2">
+                {SPEED_OPTIONS.map((rate) => {
+                  const active = Math.abs(activeClipSpeed - rate) < 0.01;
+                  return (
+                    <button
+                      key={rate}
+                      type="button"
+                      onClick={() => {
+                        commitHistory();
+                        if (selectedVideoClip && engine) {
+                          engine.updateClipSpeed(selectedVideoClip.id, rate);
+                          syncFromEngine();
+                        } else {
+                          onChangeSpeed(rate);
+                        }
+                      }}
+                      className={`py-1.5 rounded-xl text-xs font-bold border transition-all active:scale-95 ${
+                        active
+                          ? "bg-amber-400 text-black border-amber-400"
+                          : "bg-[#1c1c1e] text-white border-white/5 hover:bg-[#26262a]"
+                      }`}
+                    >
+                      {rate}x
+                    </button>
+                  );
+                })}
+              </div>
+
+              {/* Klip Ses Seviyesi (0 - 100) */}
+              {!videoState.isMotionPhoto && (
+                <div className="flex items-center gap-3 bg-[#16171b] rounded-2xl px-3.5 py-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      commitHistory();
+                      const nextMuted = activeClipVolume > 0;
+                      const nextVol = nextMuted ? 0 : 1;
+                      if (selectedVideoClip && engine) {
+                        engine.updateClipVolume(
+                          selectedVideoClip.id,
+                          nextVol,
+                          nextMuted
+                        );
+                        syncFromEngine();
+                      } else {
+                        onChangeVolume(nextVol, nextMuted);
+                      }
+                    }}
+                    className="text-white shrink-0"
+                  >
+                    {activeClipVolume === 0 ? (
+                      <VolumeX className="w-4 h-4 text-red-400" />
+                    ) : (
+                      <Volume2 className="w-4 h-4 text-zinc-300" />
+                    )}
+                  </button>
+                  <span className="text-xs font-medium text-zinc-400 w-14 shrink-0">
+                    Klip Sesi
+                  </span>
+                  <input
+                    type="range"
+                    min={0}
+                    max={100}
+                    value={activeClipVolume}
+                    onChange={(e) => {
+                      const val = Number(e.target.value) / 100;
+                      if (selectedVideoClip && engine) {
+                        engine.updateClipVolume(
+                          selectedVideoClip.id,
+                          val,
+                          val === 0
+                        );
+                        syncFromEngine();
+                      } else {
+                        onChangeVolume(val, val === 0);
+                      }
+                    }}
+                    className="flex-1 h-1.5 bg-white/15 rounded-lg appearance-none cursor-pointer accent-white"
+                  />
+                  <span className="text-xs font-semibold text-white w-9 text-right tabular-nums">
+                    {activeClipVolume}%
+                  </span>
+                </div>
+              )}
+            </>
+          )}
         </div>
       )}
 
@@ -377,224 +776,194 @@ export default function ReelsEditor({
         </div>
       )}
 
-      {activeStrip === "audio" && (
-        <div className="flex flex-col gap-2 px-4">
-          {!videoState.isMotionPhoto && (
-            <div className="flex items-center gap-3 bg-[#16171b] rounded-2xl px-3.5 py-2">
-              <button
-                type="button"
-                onClick={() =>
-                  onChangeVolume(
-                    videoState.muted && videoState.volume === 0 ? 1 : videoState.volume,
-                    !videoState.muted
-                  )
-                }
-                className="text-white shrink-0"
-              >
-                {videoState.muted || effectiveVolume === 0 ? (
-                  <VolumeX className="w-4 h-4 text-red-400" />
-                ) : (
-                  <Volume2 className="w-4 h-4 text-zinc-300" />
-                )}
-              </button>
-              <span className="text-xs font-medium text-zinc-400 w-14 shrink-0">
-                Orijinal
-              </span>
-              <input
-                type="range"
-                min={0}
-                max={100}
-                value={effectiveVolume}
-                onChange={(e) => {
-                  const val = Number(e.target.value) / 100;
-                  onChangeVolume(val, val === 0);
-                }}
-                className="flex-1 h-1.5 bg-white/15 rounded-lg appearance-none cursor-pointer accent-white"
-              />
-              <span className="text-xs font-semibold text-white w-9 text-right tabular-nums">
-                {effectiveVolume}%
-              </span>
-            </div>
-          )}
-
-          <div className="flex items-center gap-3 bg-[#16171b] rounded-2xl px-3.5 py-2">
+      {/* 3. DİNAMİK ALT ARAÇ ÇUBUĞU (Contextual Action Toolbar) */}
+      {selectedItemId && selectedItemType ? (
+        /* BİR KLİP VEYA KATMAN SEÇİLİYKEN: [ ✂️ Böl ] [ 🗑️ Sil ] [ 🔊 Ses / Hız ] [ 📑 Kopyala ] */
+        <div className="flex items-center justify-between gap-2 px-4 pt-0.5">
+          {selectedItemType !== "audio" && (
             <button
               type="button"
-              onClick={onOpenMusicPicker}
-              className="px-3 py-1 rounded-xl bg-white/10 text-white text-xs font-semibold shrink-0 active:scale-95 transition-all"
+              onClick={handleSplitSelected}
+              disabled={!canSplitSelected}
+              className="flex-1 flex flex-col items-center gap-1 disabled:opacity-35 group"
             >
-              {selectedMusic ? selectedMusic.title.slice(0, 14) : "Müzik Seç"}
+              <div className="w-full h-11 rounded-2xl bg-[#1c1c1e] group-hover:bg-[#26262a] flex items-center justify-center text-white transition-all active:scale-95">
+                <Scissors className="w-4 h-4" />
+              </div>
+              <span className="text-[11px] font-medium text-zinc-200">Böl</span>
             </button>
-            {selectedMusic && (
-              <>
-                <input
-                  type="range"
-                  min={0}
-                  max={100}
-                  value={effectiveMusicVolume}
-                  onChange={(e) => onChangeMusicVolume(Number(e.target.value) / 100)}
-                  className="flex-1 h-1.5 bg-white/15 rounded-lg appearance-none cursor-pointer accent-white"
-                />
-                <span className="text-xs font-semibold text-white w-9 text-right tabular-nums">
-                  {effectiveMusicVolume}%
-                </span>
-                {onChangeMusicMeta && (
-                  <button
-                    type="button"
-                    onClick={() => onChangeMusicMeta(null)}
-                    className="p-1.5 rounded-xl bg-red-500/20 text-red-300 hover:bg-red-500/30 shrink-0"
-                  >
-                    <Trash2 className="w-3.5 h-3.5" />
-                  </button>
-                )}
-              </>
-            )}
-          </div>
-
-          {selectedMusic && onChangeMusicMeta && (
-            <div className="flex items-center gap-3 bg-[#16171b] rounded-2xl px-3.5 py-2">
-              <span className="text-xs font-medium text-zinc-400 shrink-0">
-                Şarkı Kesimi
-              </span>
-              <input
-                type="range"
-                min={0}
-                max={120}
-                step={0.5}
-                value={selectedMusic.startTime || 0}
-                onChange={(e) => {
-                  const nextOffset = Number(e.target.value);
-                  onChangeMusicMeta({
-                    ...selectedMusic,
-                    startTime: nextOffset,
-                  });
-                }}
-                className="flex-1 h-1.5 bg-white/15 rounded-lg appearance-none cursor-pointer accent-white"
-              />
-              <span className="text-xs font-semibold text-white w-10 text-right tabular-nums">
-                {(selectedMusic.startTime || 0).toFixed(1)}s
-              </span>
-            </div>
           )}
-        </div>
-      )}
 
-      {/* 3. Görseldeki Gibi Ferah Yuvarlatılmış Kutu İkonlu Alt Araç Barı */}
-      <div className="flex items-start justify-between gap-2.5 overflow-x-auto no-scrollbar px-4 pt-1">
-        <button
-          type="button"
-          onClick={() => {
-            if (!selectedMusic) {
-              onOpenMusicPicker();
-            } else {
-              toggleStrip("audio");
-            }
-          }}
-          className="flex flex-col items-center gap-1.5 shrink-0 group"
-        >
-          <div
-            className={`w-16 h-12 rounded-2xl flex items-center justify-center transition-all active:scale-95 ${
-              activeStrip === "audio" || selectedMusic
-                ? "bg-white text-black"
-                : "bg-[#1c1c1e] group-hover:bg-[#26262a] text-white"
-            }`}
-          >
-            <Music className="w-5 h-5" />
-          </div>
-          <span className="text-[11px] font-medium text-zinc-200">Ses</span>
-        </button>
-
-        <button
-          type="button"
-          onClick={onOpenTextEditor}
-          className="flex flex-col items-center gap-1.5 shrink-0 group"
-        >
-          <div className="w-16 h-12 rounded-2xl bg-[#1c1c1e] group-hover:bg-[#26262a] flex items-center justify-center text-white text-base font-bold transition-all active:scale-95">
-            Aa
-          </div>
-          <span className="text-[11px] font-medium text-zinc-200">Metin</span>
-        </button>
-
-        <button
-          type="button"
-          onClick={() => toggleStrip("effects")}
-          className="flex flex-col items-center gap-1.5 shrink-0 group"
-        >
-          <div
-            className={`w-16 h-12 rounded-2xl flex items-center justify-center transition-all active:scale-95 ${
-              activeStrip === "effects" ||
-              activeReelsEffect !== "none" ||
-              effectClips.length > 0
-                ? "bg-white text-black"
-                : "bg-[#1c1c1e] group-hover:bg-[#26262a] text-white"
-            }`}
-          >
-            <Sparkles className="w-5 h-5" />
-          </div>
-          <span className="text-[11px] font-medium text-zinc-200">Efektler</span>
-        </button>
-
-        <button
-          type="button"
-          onClick={handleSplitAtPlayhead}
-          className="flex flex-col items-center gap-1.5 shrink-0 group"
-        >
-          <div className="w-16 h-12 rounded-2xl bg-[#1c1c1e] group-hover:bg-[#26262a] flex items-center justify-center text-white transition-all active:scale-95">
-            <Scissors className="w-5 h-5" />
-          </div>
-          <span className="text-[11px] font-medium text-zinc-200">Kes</span>
-        </button>
-
-        {onOpenStickerSheet && (
           <button
             type="button"
-            onClick={onOpenStickerSheet}
-            className="flex flex-col items-center gap-1.5 shrink-0 group"
+            onClick={handleDeleteSelected}
+            disabled={selectedItemType === "video" && clips.length <= 1}
+            className="flex-1 flex flex-col items-center gap-1 disabled:opacity-35 group"
           >
-            <div className="w-16 h-12 rounded-2xl bg-[#1c1c1e] group-hover:bg-[#26262a] flex items-center justify-center text-white transition-all active:scale-95">
-              <Sticker className="w-5 h-5" />
+            <div className="w-full h-11 rounded-2xl bg-red-500/15 hover:bg-red-500/25 border border-red-500/25 flex items-center justify-center text-red-400 transition-all active:scale-95">
+              <Trash2 className="w-4 h-4" />
             </div>
-            <span className="text-[11px] font-medium text-zinc-200">Çıkartmalar</span>
+            <span className="text-[11px] font-medium text-red-300">Sil</span>
           </button>
-        )}
 
-        <button
-          type="button"
-          onClick={() => toggleStrip("filters")}
-          className="flex flex-col items-center gap-1.5 shrink-0 group"
-        >
-          <div
-            className={`w-16 h-12 rounded-2xl flex items-center justify-center transition-all active:scale-95 ${
-              activeStrip === "filters" || activeFilterIndex > 0
-                ? "bg-white text-black"
-                : "bg-[#1c1c1e] group-hover:bg-[#26262a] text-white"
-            }`}
-          >
-            <Palette className="w-5 h-5" />
-          </div>
-          <span className="text-[11px] font-medium text-zinc-200">Filtreler</span>
-        </button>
+          {(selectedItemType === "video" || selectedItemType === "audio") && (
+            <button
+              type="button"
+              onClick={() =>
+                setActiveStrip((p) =>
+                  p === "audio_speed" ? "none" : "audio_speed"
+                )
+              }
+              className="flex-1 flex flex-col items-center gap-1 group"
+            >
+              <div
+                className={`w-full h-11 rounded-2xl flex items-center justify-center transition-all active:scale-95 ${
+                  activeStrip === "audio_speed"
+                    ? "bg-amber-400 text-black"
+                    : "bg-[#1c1c1e] group-hover:bg-[#26262a] text-white"
+                }`}
+              >
+                <Gauge className="w-4 h-4" />
+              </div>
+              <span className="text-[11px] font-medium text-zinc-200">
+                Ses / Hız
+              </span>
+            </button>
+          )}
 
-        <button
-          type="button"
-          onClick={() => toggleStrip("speed")}
-          className="flex flex-col items-center gap-1.5 shrink-0 group"
-        >
-          <div
-            className={`w-16 h-12 rounded-2xl flex items-center justify-center transition-all active:scale-95 ${
-              activeStrip === "speed" || Math.abs(videoState.playbackRate - 1) > 0.01
-                ? "bg-white text-black"
-                : "bg-[#1c1c1e] group-hover:bg-[#26262a] text-white"
-            }`}
+          {selectedItemType !== "audio" && (
+            <button
+              type="button"
+              onClick={handleDuplicateSelected}
+              className="flex-1 flex flex-col items-center gap-1 group"
+            >
+              <div className="w-full h-11 rounded-2xl bg-[#1c1c1e] group-hover:bg-[#26262a] flex items-center justify-center text-white transition-all active:scale-95">
+                <Copy className="w-4 h-4" />
+              </div>
+              <span className="text-[11px] font-medium text-zinc-200">
+                Kopyala
+              </span>
+            </button>
+          )}
+
+          <button
+            type="button"
+            onClick={() => handleSelectItem(null, null)}
+            className="flex flex-col items-center gap-1 shrink-0 group"
           >
-            <Gauge className="w-5 h-5" />
-          </div>
-          <span className="text-[11px] font-medium text-zinc-200">Hız</span>
-        </button>
-      </div>
+            <div className="w-11 h-11 rounded-2xl bg-white/10 hover:bg-white/15 flex items-center justify-center text-zinc-300 transition-all active:scale-95">
+              <X className="w-4 h-4" />
+            </div>
+            <span className="text-[11px] font-medium text-zinc-400">Bitti</span>
+          </button>
+        </div>
+      ) : (
+        /* HİÇBİR ÖĞE SEÇİLİ DEĞİLKEN: [ 📝 Metin ] [ 🌟 Sticker ] [ 🖼️ Fotoğraf ] [ 🎵 Müzik ] [ ⚡ Efektler ] [ 🎨 Filtre ] */
+        <div className="flex items-start justify-between gap-2 overflow-x-auto no-scrollbar px-4 pt-0.5">
+          <button
+            type="button"
+            onClick={onOpenTextEditor}
+            className="flex flex-col items-center gap-1 shrink-0 group"
+          >
+            <div className="w-14 h-11 rounded-2xl bg-[#1c1c1e] group-hover:bg-[#26262a] flex items-center justify-center text-white transition-all active:scale-95">
+              <Type className="w-4 h-4" />
+            </div>
+            <span className="text-[11px] font-medium text-zinc-200">Metin</span>
+          </button>
+
+          {onOpenStickerSheet && (
+            <button
+              type="button"
+              onClick={onOpenStickerSheet}
+              className="flex flex-col items-center gap-1 shrink-0 group"
+            >
+              <div className="w-14 h-11 rounded-2xl bg-[#1c1c1e] group-hover:bg-[#26262a] flex items-center justify-center text-white transition-all active:scale-95">
+                <Sticker className="w-4 h-4" />
+              </div>
+              <span className="text-[11px] font-medium text-zinc-200">
+                Sticker
+              </span>
+            </button>
+          )}
+
+          {onOpenPhotoOverlay && (
+            <button
+              type="button"
+              onClick={onOpenPhotoOverlay}
+              className="flex flex-col items-center gap-1 shrink-0 group"
+            >
+              <div className="w-14 h-11 rounded-2xl bg-[#1c1c1e] group-hover:bg-[#26262a] flex items-center justify-center text-white transition-all active:scale-95">
+                <ImageIcon className="w-4 h-4" />
+              </div>
+              <span className="text-[11px] font-medium text-zinc-200">
+                Fotoğraf
+              </span>
+            </button>
+          )}
+
+          <button
+            type="button"
+            onClick={onOpenMusicPicker}
+            className="flex flex-col items-center gap-1 shrink-0 group"
+          >
+            <div
+              className={`w-14 h-11 rounded-2xl flex items-center justify-center transition-all active:scale-95 ${
+                selectedMusic
+                  ? "bg-white text-black"
+                  : "bg-[#1c1c1e] group-hover:bg-[#26262a] text-white"
+              }`}
+            >
+              <Music className="w-4 h-4" />
+            </div>
+            <span className="text-[11px] font-medium text-zinc-200">Müzik</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() =>
+              setActiveStrip((p) => (p === "effects" ? "none" : "effects"))
+            }
+            className="flex flex-col items-center gap-1 shrink-0 group"
+          >
+            <div
+              className={`w-14 h-11 rounded-2xl flex items-center justify-center transition-all active:scale-95 ${
+                activeStrip === "effects" ||
+                activeReelsEffect !== "none" ||
+                effectClips.length > 0
+                  ? "bg-white text-black"
+                  : "bg-[#1c1c1e] group-hover:bg-[#26262a] text-white"
+              }`}
+            >
+              <Sparkles className="w-4 h-4" />
+            </div>
+            <span className="text-[11px] font-medium text-zinc-200">
+              Efektler
+            </span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() =>
+              setActiveStrip((p) => (p === "filters" ? "none" : "filters"))
+            }
+            className="flex flex-col items-center gap-1 shrink-0 group"
+          >
+            <div
+              className={`w-14 h-11 rounded-2xl flex items-center justify-center transition-all active:scale-95 ${
+                activeStrip === "filters" || activeFilterIndex > 0
+                  ? "bg-white text-black"
+                  : "bg-[#1c1c1e] group-hover:bg-[#26262a] text-white"
+              }`}
+            >
+              <Palette className="w-4 h-4" />
+            </div>
+            <span className="text-[11px] font-medium text-zinc-200">
+              Filtre
+            </span>
+          </button>
+        </div>
+      )}
     </div>
   );
 }
 // [END] CREATED BY Bedirhan
-
-

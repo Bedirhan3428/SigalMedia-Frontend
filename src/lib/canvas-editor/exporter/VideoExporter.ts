@@ -138,7 +138,12 @@ export class VideoExporter {
 
     const state = engine.getVideoState();
     const media = engine.getMedia();
-    const hasVideoAudio = !state.muted && state.volume > 0;
+    const isReelsNle =
+      engine.getShareMode() === 'reels' && engine.getVideoClips().length > 0;
+    const clips = engine.getVideoClips();
+    const hasVideoAudio = isReelsNle
+      ? !state.isMotionPhoto && clips.some((c) => !c.muted && c.volume > 0)
+      : !state.muted && state.volume > 0;
     const hasMusicAudio = Boolean(music && music.streamUrl && musicVolume > 0);
 
     if (!hasVideoAudio && !hasMusicAudio) {
@@ -169,19 +174,43 @@ export class VideoExporter {
 
         if (arrayBuf && arrayBuf.byteLength > 0) {
           const decodedVideoAudio = await offlineCtx.decodeAudioData(arrayBuf.slice(0));
-          const sourceNode = offlineCtx.createBufferSource();
-          sourceNode.buffer = decodedVideoAudio;
-          sourceNode.playbackRate.value = playbackRate;
 
-          const gainNode = offlineCtx.createGain();
-          gainNode.gain.value = Math.max(0, Math.min(1, state.volume));
+          if (isReelsNle) {
+            let accOutTime = 0;
+            for (const clip of clips) {
+              const clipOutDur = Math.max(0.1, clip.duration);
+              if (!clip.muted && clip.volume > 0) {
+                const sourceNode = offlineCtx.createBufferSource();
+                sourceNode.buffer = decodedVideoAudio;
+                sourceNode.playbackRate.value = clip.playbackRate || 1.0;
 
-          sourceNode.connect(gainNode);
-          gainNode.connect(offlineCtx.destination);
+                const gainNode = offlineCtx.createGain();
+                gainNode.gain.value = Math.max(0, Math.min(1, clip.volume));
 
-          const trimDur = Math.max(0.1, trimEnd - trimStart);
-          sourceNode.start(0, trimStart, trimDur);
-          hasAnySource = true;
+                sourceNode.connect(gainNode);
+                gainNode.connect(offlineCtx.destination);
+
+                const sourceDur = Math.max(0.1, clip.sourceEnd - clip.sourceStart);
+                sourceNode.start(accOutTime, clip.sourceStart, sourceDur);
+                hasAnySource = true;
+              }
+              accOutTime += clipOutDur;
+            }
+          } else {
+            const sourceNode = offlineCtx.createBufferSource();
+            sourceNode.buffer = decodedVideoAudio;
+            sourceNode.playbackRate.value = playbackRate;
+
+            const gainNode = offlineCtx.createGain();
+            gainNode.gain.value = Math.max(0, Math.min(1, state.volume));
+
+            sourceNode.connect(gainNode);
+            gainNode.connect(offlineCtx.destination);
+
+            const trimDur = Math.max(0.1, trimEnd - trimStart);
+            sourceNode.start(0, trimStart, trimDur);
+            hasAnySource = true;
+          }
         }
       } catch {
         // Video might not have an audio track; continue gracefully
@@ -215,10 +244,11 @@ export class VideoExporter {
             const activeEnd = Math.min(trimEnd, clipEnd);
 
             if (activeEnd > activeStart) {
-              const delayInOutSec = Math.max(0, (activeStart - trimStart) / playbackRate);
+              const effectiveRate = isReelsNle ? 1.0 : playbackRate;
+              const delayInOutSec = Math.max(0, (activeStart - trimStart) / effectiveRate);
               const playDurInOutSec = Math.max(
                 0.05,
-                Math.min(outputDuration - delayInOutSec, (activeEnd - activeStart) / playbackRate)
+                Math.min(outputDuration - delayInOutSec, (activeEnd - activeStart) / effectiveRate)
               );
               const songOffsetSec =
                 Math.max(0, music.startTime || 0) + Math.max(0, trimStart - clipStart);
@@ -285,11 +315,15 @@ export class VideoExporter {
       height: exportHeight,
       fps,
     } = supportedVideo;
+    const isReelsNle =
+      engine.getShareMode() === 'reels' && engine.getVideoClips().length > 0;
     const trimStart = state.trimStart;
     const trimEnd = state.trimEnd > trimStart ? state.trimEnd : state.duration;
     const playbackRate = state.playbackRate || 1.0;
     const sourceTrimDuration = Math.max(0.1, Math.min(60, trimEnd - trimStart));
-    const outputDuration = Math.max(0.1, sourceTrimDuration / playbackRate);
+    const outputDuration = isReelsNle
+      ? Math.max(0.2, Math.min(60, engine.getTotalTimelineDuration()))
+      : Math.max(0.1, sourceTrimDuration / playbackRate);
     const totalFrames = Math.max(1, Math.round(outputDuration * fps));
 
     engine.setExportingVideo(true);
@@ -423,8 +457,12 @@ export class VideoExporter {
 
       const frameDurationUs = Math.round((1 / fps) * 1_000_000);
       const mediaLayer = engine.getMediaLayer();
+      const hasTimedOverlays = engine.getOverlayTrackItems().length > 0;
       const isStaticMotionPhoto = Boolean(
-        state.isMotionPhoto && mediaLayer && !mediaLayer.isTimeDependentEffect()
+        state.isMotionPhoto &&
+          mediaLayer &&
+          !mediaLayer.isTimeDependentEffect() &&
+          !hasTimedOverlays
       );
 
       // 5 saniyelik statik fotoğraf->video dönüşümünde tüm sahneyi döngü dışında 1 kez çiz ve önbelleğe al
@@ -443,7 +481,9 @@ export class VideoExporter {
 
         const outTimeSec = i / fps;
         if (!isStaticMotionPhoto) {
-          const sourceTimeSec = Math.min(trimEnd, trimStart + outTimeSec * playbackRate);
+          const sourceTimeSec = isReelsNle
+            ? Math.min(outputDuration, outTimeSec)
+            : Math.min(trimEnd, trimStart + outTimeSec * playbackRate);
           await engine.renderFrameAt(exportCtx, sourceTimeSec, exportWidth, exportHeight);
         }
 
