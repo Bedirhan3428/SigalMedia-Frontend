@@ -3,7 +3,7 @@
 "use client";
 
 import React, { useEffect, useRef, useState } from "react";
-import { VolumeX, ArrowLeftRight, Plus } from "lucide-react";
+import { VolumeX, ArrowLeftRight, Plus, Check } from "lucide-react";
 import { VideoTrackClip } from "@/lib/canvas-editor";
 
 export interface TimelineTrackClipsProps {
@@ -15,6 +15,7 @@ export interface TimelineTrackClipsProps {
   onSelectClip: (clipId: string) => void;
   onTrimClip: (clipId: string, newSourceStart: number, newSourceEnd: number) => void;
   onReorderClips: (fromIndex: number, toIndex: number) => void;
+  onReorderModeChange?: (isReordering: boolean) => void;
   onAppendClipClick?: () => void;
   onEdgeScroll?: (deltaPx: number) => void;
   onPauseVideo?: () => void;
@@ -43,7 +44,7 @@ type TrimPreviewState = {
   rightGapPx: number;
 };
 
-const TILE_SLOT_PX = 66; // 56px (w-14) + 10px (gap-2.5)
+const TILE_SLOT_PX = 74; // 64px (w-16) + 10px (gap-2.5)
 
 export default function TimelineTrackClips({
   clips,
@@ -54,6 +55,7 @@ export default function TimelineTrackClips({
   onSelectClip,
   onTrimClip,
   onReorderClips,
+  onReorderModeChange,
   onAppendClipClick,
   onEdgeScroll,
   onPauseVideo,
@@ -71,6 +73,7 @@ export default function TimelineTrackClips({
   } | null>(null);
 
   const [trimPreview, setTrimPreview] = useState<TrimPreviewState | null>(null);
+  const [isReorderMode, setIsReorderMode] = useState<boolean>(false);
   const [reorderingClipId, setReorderingClipId] = useState<string | null>(null);
   const [insertionIndex, setInsertionIndex] = useState<number | null>(null);
   const [reorderOffsetPx, setReorderOffsetPx] = useState<number>(0);
@@ -88,6 +91,21 @@ export default function TimelineTrackClips({
       clearLongPressTimer();
     };
   }, []);
+
+  const enterReorderMode = () => {
+    setIsReorderMode(true);
+    onReorderModeChange?.(true);
+  };
+
+  const exitReorderMode = () => {
+    clearLongPressTimer();
+    dragRef.current = null;
+    setIsReorderMode(false);
+    setReorderingClipId(null);
+    setInsertionIndex(null);
+    setReorderOffsetPx(0);
+    onReorderModeChange?.(false);
+  };
 
   const getClipTimelineStart = (index: number): number => {
     let acc = 0;
@@ -131,10 +149,41 @@ export default function TimelineTrackClips({
       trimPreviewRef.current = initialPreview;
       setTrimPreview(initialPreview);
     } else if (state.mode === "reorder") {
+      enterReorderMode();
       setReorderingClipId(state.clipId);
       setInsertionIndex(state.clipIndex);
       setReorderOffsetPx(0);
     }
+  };
+
+  // Sıralama modundayken herhangi bir 1:1 karoya dokunulduğunda 0ms gecikmeyle anında sürükleme başlatır
+  const handleTilePointerDown = (
+    e: React.PointerEvent,
+    clip: VideoTrackClip,
+    idx: number
+  ) => {
+    e.stopPropagation();
+    e.preventDefault();
+    onPauseVideo?.();
+    onCommitHistory?.();
+    onSelectClip(clip.id);
+    captureOnRoot(e.pointerId);
+
+    const state: ClipDragState = {
+      mode: "reorder",
+      clipId: clip.id,
+      clipIndex: idx,
+      startX: e.clientX,
+      initSourceStart: clip.sourceStart,
+      initSourceEnd: clip.sourceEnd,
+      clipTimelineStart: getClipTimelineStart(idx),
+      playbackRate: clip.playbackRate || 1,
+      isMotionPhoto: clip.isMotionPhoto,
+    };
+    dragRef.current = state;
+    setReorderingClipId(clip.id);
+    setInsertionIndex(idx);
+    setReorderOffsetPx(0);
   };
 
   const handleClipBodyPointerDown = (
@@ -152,7 +201,7 @@ export default function TimelineTrackClips({
     const startY = e.clientY;
     pressOriginRef.current = { x: startX, y: startY, pointerId };
 
-    // 260ms Basılı Tutma -> 1:1 Küçük Kareler (CapCut Tile Reorder Mode)
+    // 300ms Basılı Tutma -> Kalıcı 1:1 Küçük Kareler Sıralama Modu (Dedicated Reorder Mode)
     longPressTimerRef.current = setTimeout(() => {
       longPressTimerRef.current = null;
       onPauseVideo?.();
@@ -162,8 +211,8 @@ export default function TimelineTrackClips({
           navigator.vibrate(40);
         } catch {}
       }
-      // ÖNEMLİ: Unmount olmayan üst konteyner üzerinden pointer capture al!
       captureOnRoot(pointerId);
+      enterReorderMode();
       const state: ClipDragState = {
         mode: "reorder",
         clipId: clip.id,
@@ -179,7 +228,7 @@ export default function TimelineTrackClips({
       setReorderingClipId(clip.id);
       setInsertionIndex(idx);
       setReorderOffsetPx(0);
-    }, 260);
+    }, 300);
   };
 
   const handlePointerMove = (e: React.PointerEvent) => {
@@ -313,6 +362,7 @@ export default function TimelineTrackClips({
     dragRef.current = null;
     trimPreviewRef.current = null;
     setTrimPreview(null);
+    // ÖNEMLİ: Parmak bırakıldığında aktif tutulan karo yerleşir ancak isReorderMode KAPANMAZ!
     setReorderingClipId(null);
     setInsertionIndex(null);
     setReorderOffsetPx(0);
@@ -330,66 +380,87 @@ export default function TimelineTrackClips({
     }
   };
 
-  const isTileReorderMode = reorderingClipId !== null;
-
   return (
     <div
       ref={rootContainerRef}
-      className={`relative h-16 flex items-center select-none ${
-        isTileReorderMode ? "touch-none" : ""
+      className={`relative flex items-center select-none ${
+        isReorderMode ? "w-full touch-none py-1" : "h-16"
       }`}
       onClick={(e) => e.stopPropagation()}
       onPointerMove={handlePointerMove}
       onPointerUp={handlePointerEnd}
       onPointerCancel={handlePointerEnd}
     >
-      {/* 1:1 KÜÇÜK KARELER SIRALAMA MODU (Basılı Tutulduğunda Aktifleşir) */}
-      {isTileReorderMode ? (
-        <div className="flex items-center h-16 gap-2.5 px-2.5 py-1 bg-zinc-900/95 border border-white/20 rounded-2xl shadow-2xl touch-none">
-          {clips.map((clip, idx) => {
-            const isHeld = reorderingClipId === clip.id;
-            const thumbSrc =
-              clip.thumbnailUrl ||
-              (thumbnails.length > 0
-                ? thumbnails[Math.min(thumbnails.length - 1, idx * 2)]
-                : null);
+      {/* KALICI 1:1 KÜÇÜK KARELER SIRALAMA MODU (Kullanıcı [✓ Bitti] diyene kadar açık kalır) */}
+      {isReorderMode ? (
+        <div className="flex flex-col gap-2 w-full bg-zinc-900/95 border border-white/20 rounded-2xl p-2.5 shadow-2xl touch-none">
+          <div className="flex items-center justify-between gap-3 px-1">
+            <div className="flex items-center gap-1.5 text-xs font-bold text-amber-400">
+              <ArrowLeftRight className="w-3.5 h-3.5" />
+              <span>Sıralama</span>
+            </div>
 
-            return (
-              <div
-                key={clip.id}
-                style={{
-                  transform: isHeld
-                    ? `translate3d(${reorderOffsetPx}px, -4px, 0) scale(1.12)`
-                    : "translate3d(0, 0, 0) scale(1)",
-                }}
-                className={`relative w-14 h-14 rounded-xl overflow-hidden shrink-0 border-2 transition-transform duration-75 pointer-events-none ${
-                  isHeld
-                    ? "border-emerald-400 ring-2 ring-emerald-400/60 shadow-[0_12px_28px_rgba(0,0,0,0.85)] z-40"
-                    : insertionIndex === idx
-                      ? "border-amber-400 opacity-95 z-20"
-                      : "border-white/20 opacity-85 z-10"
-                }`}
-              >
-                {thumbSrc ? (
-                  <img
-                    src={thumbSrc}
-                    alt=""
-                    draggable={false}
-                    className="w-full h-full object-cover pointer-events-none select-none"
-                  />
-                ) : (
-                  <div className="w-full h-full bg-zinc-800" />
-                )}
-                <div className="absolute inset-0 bg-gradient-to-t from-black/75 via-transparent to-black/30 pointer-events-none" />
-                <span className="absolute top-1 left-1.5 px-1 py-0.2 rounded bg-black/70 text-[9px] font-extrabold text-amber-300 tabular-nums">
-                  #{idx + 1}
-                </span>
-                <span className="absolute bottom-1 right-1.5 text-[9px] font-bold text-white tabular-nums">
-                  {clip.duration.toFixed(1)}s
-                </span>
-              </div>
-            );
-          })}
+            <button
+              type="button"
+              onPointerDown={(e) => e.stopPropagation()}
+              onClick={(e) => {
+                e.stopPropagation();
+                exitReorderMode();
+              }}
+              className="h-8 px-3.5 rounded-xl bg-amber-400 hover:bg-amber-300 text-black font-bold text-xs flex items-center gap-1.5 shrink-0 active:scale-95 transition-all shadow-md"
+            >
+              <Check className="w-3.5 h-3.5 stroke-[2.5]" />
+              <span>Bitti</span>
+            </button>
+          </div>
+
+          <div className="flex items-center gap-2.5 overflow-x-auto no-scrollbar py-1 px-0.5 touch-none">
+            {clips.map((clip, idx) => {
+              const isHeld = reorderingClipId === clip.id;
+              const thumbSrc =
+                clip.thumbnailUrl ||
+                (thumbnails.length > 0
+                  ? thumbnails[Math.min(thumbnails.length - 1, idx * 2)]
+                  : null);
+
+              return (
+                <div
+                  key={clip.id}
+                  onPointerDown={(e) => handleTilePointerDown(e, clip, idx)}
+                  style={{
+                    transform: isHeld
+                      ? `translate3d(${reorderOffsetPx}px, -4px, 0) scale(1.1)`
+                      : "translate3d(0, 0, 0) scale(1)",
+                  }}
+                  className={`relative w-16 h-16 rounded-xl overflow-hidden shrink-0 border-2 transition-transform duration-75 cursor-grab active:cursor-grabbing touch-none select-none ${
+                    isHeld
+                      ? "border-emerald-400 ring-2 ring-emerald-400/60 shadow-[0_12px_28px_rgba(0,0,0,0.85)] z-40"
+                      : insertionIndex === idx
+                        ? "border-amber-400 opacity-95 z-20"
+                        : "border-white/25 opacity-90 hover:border-white/50 z-10"
+                  }`}
+                >
+                  {thumbSrc ? (
+                    <img
+                      src={thumbSrc}
+                      alt=""
+                      draggable={false}
+                      className="w-full h-full object-cover pointer-events-none select-none"
+                    />
+                  ) : (
+                    <div className="w-full h-full bg-zinc-800" />
+                  )}
+                  <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-transparent to-black/30 pointer-events-none" />
+                  <span className="absolute top-1 left-1.5 px-1 py-0.2 rounded bg-black/75 text-[10px] font-extrabold text-amber-300 tabular-nums pointer-events-none">
+                    #{idx + 1}
+                  </span>
+                  <span className="absolute bottom-1 right-1.5 text-[10px] font-bold text-white tabular-nums pointer-events-none">
+                    {clip.duration.toFixed(1)}s
+                  </span>
+                </div>
+              );
+            })}
+          </div>
         </div>
       ) : (
         /* NORMAL MANYETİK ANA VİDEO KANALI + SONDAKİ [+] KLİP EKLEME BUTONU */

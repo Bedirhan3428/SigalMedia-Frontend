@@ -1074,7 +1074,7 @@ export default function ShareStoryPage() {
       />
 
       {/* [MODIFIED BY Bedirhan] */}
-      {/* 3. TUVAL SAHNESİ: Hikaye için 9:16 Tam Ekran, Reels için Üst Yarı Yuvarlatılmış Önizleme (Kırpma modunda tam boy top-16 bottom-28), Gönderi için 4:3 Stüdyo Çerçevesi */}
+      {/* 3. TUVAL SAHNESİ: Hikaye için 9:16 Tam Ekran, Reels için Sabit Çerçeveli Güvenli Önizleme (top-16 bottom-[390px]), Gönderi için 4:3 Stüdyo Çerçevesi */}
       <div
         onPointerDown={(e) => {
           if (e.target === e.currentTarget) {
@@ -1085,8 +1085,8 @@ export default function ShareStoryPage() {
         className={
           shareMode === "reels" && hasMedia && !isTextEditing
             ? isReelsCropping
-              ? "fixed inset-x-0 top-16 bottom-28 flex items-center justify-center px-4 py-2 overflow-hidden select-none bg-black"
-              : "fixed inset-x-0 top-16 bottom-[345px] flex items-center justify-center px-6 py-2 overflow-hidden select-none bg-black"
+              ? "fixed inset-x-0 top-16 bottom-28 flex items-center justify-center p-3 overflow-hidden select-none bg-black z-20"
+              : "fixed inset-x-0 top-16 bottom-[390px] flex items-center justify-center p-3 overflow-hidden select-none bg-black z-20"
             : "fixed inset-0 w-full h-full flex items-center justify-center overflow-hidden select-none"
         }
         style={{
@@ -1105,7 +1105,7 @@ export default function ShareStoryPage() {
             shareMode === "post"
               ? "w-full max-w-md aspect-[4/3] mx-3 mb-40 rounded-2xl overflow-hidden border border-white/15 shadow-2xl bg-black"
               : shareMode === "reels" && hasMedia && !isTextEditing
-                ? "h-full aspect-[9/16] rounded-2xl overflow-hidden shadow-2xl bg-neutral-900"
+                ? "h-full max-h-full max-w-[85vw] aspect-[9/16] rounded-2xl overflow-hidden border border-white/20 shadow-[0_8px_32px_rgba(0,0,0,0.85)] bg-neutral-950 flex items-center justify-center shrink-0"
                 : "w-full h-full"
           }
         >

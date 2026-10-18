@@ -102,6 +102,7 @@ export default function VideoTimelineNLE({
 }: VideoTimelineNLEProps) {
   // Varsayılan sabit ölçek: 1 saniye = 60 piksel (40px - 100px arası zoom destekli)
   const [pps, setPps] = useState<number>(60);
+  const [isClipReordering, setIsClipReordering] = useState<boolean>(false);
   const scrollContainerRef = useRef<HTMLDivElement | null>(null);
   const timeLabelRef = useRef<HTMLSpanElement | null>(null);
   const userScrollingRef = useRef<boolean>(false);
@@ -311,36 +312,48 @@ export default function VideoTimelineNLE({
       {/* 2. Sabit Merkez İbreli (Fixed Center Playhead) ve 50vw Boşluklu 60 FPS Analog Kayar Konteyner */}
       <div className="relative w-full bg-[#0b0c0e] border-y border-white/10 py-2">
         {/* SABİT MERKEZ PLAYHEAD (left: 50%, üstte yuvarlak başlık + dikey beyaz ibre) */}
-        <div className="pointer-events-none absolute top-0 bottom-0 left-1/2 -translate-x-1/2 z-40 flex flex-col items-center">
-          <div className="w-2.5 h-2.5 rounded-full bg-white shadow-[0_0_8px_rgba(255,255,255,0.95)]" />
-          <div className="w-[2px] flex-1 bg-white shadow-[0_0_10px_rgba(255,255,255,0.95)]" />
-        </div>
+        {!isClipReordering && (
+          <div className="pointer-events-none absolute top-0 bottom-0 left-1/2 -translate-x-1/2 z-40 flex flex-col items-center">
+            <div className="w-2.5 h-2.5 rounded-full bg-white shadow-[0_0_8px_rgba(255,255,255,0.95)]" />
+            <div className="w-[2px] flex-1 bg-white shadow-[0_0_10px_rgba(255,255,255,0.95)]" />
+          </div>
+        )}
 
         {/* Yatay Kaydırılabilir 50vw Sol / 50vw Sağ Boşluklu Çok Kanallı Alan */}
         <div
           ref={scrollContainerRef}
-          onScroll={handleScroll}
+          onScroll={isClipReordering ? undefined : handleScroll}
           onPointerDown={() => {
             if (isPlaying) onPauseVideo?.();
           }}
           onTouchStart={() => {
             if (isPlaying) onPauseVideo?.();
           }}
-          className="w-full overflow-x-auto no-scrollbar"
+          className={`w-full no-scrollbar ${
+            isClipReordering ? "overflow-x-hidden px-4" : "overflow-x-auto"
+          }`}
           style={{ WebkitOverflowScrolling: "touch" }}
         >
-          <div className="inline-flex items-stretch">
+          <div
+            className={
+              isClipReordering
+                ? "w-full flex items-stretch"
+                : "inline-flex items-stretch"
+            }
+          >
             {/* 50vw Sol Boşluk (Videonun 0.00s karesi tam merkez ibreye oturur) */}
-            <div className="w-[50vw] shrink-0" />
+            {!isClipReordering && <div className="w-[50vw] shrink-0" />}
 
             {/* Kanallar Yığını */}
-            <div className="flex flex-col gap-2">
+            <div className={`flex flex-col gap-2 ${isClipReordering ? "w-full" : ""}`}>
               {/* 1. Sabit PPS Zaman Cetveli (Ruler) */}
-              <TimelineRuler
-                totalDuration={safeTotal}
-                pps={pps}
-                onSeekToTime={handleSeekAndScroll}
-              />
+              {!isClipReordering && (
+                <TimelineRuler
+                  totalDuration={safeTotal}
+                  pps={pps}
+                  onSeekToTime={handleSeekAndScroll}
+                />
+              )}
 
               {/* 2. Manyetik Ana Video Kanalı (Clips[] + Sondaki [+] Klip Ekle Butonu) */}
               <TimelineTrackClips
@@ -352,6 +365,20 @@ export default function VideoTimelineNLE({
                 onSelectClip={(clipId) => onSelectItem(clipId, "video")}
                 onTrimClip={onTrimClip}
                 onReorderClips={onReorderClips}
+                onReorderModeChange={(active) => {
+                  setIsClipReordering(active);
+                  if (active) {
+                    if (scrollContainerRef.current) {
+                      programmaticScrollRef.current = true;
+                      scrollContainerRef.current.scrollLeft = 0;
+                    }
+                  } else {
+                    requestAnimationFrame(() => {
+                      const live = getCurrentTime ? getCurrentTime() : currentTime;
+                      syncScrollToTimeAnalog(live);
+                    });
+                  }
+                }}
                 onAppendClipClick={onAppendClipClick}
                 onEdgeScroll={handleEdgeScroll}
                 onPauseVideo={onPauseVideo}
@@ -360,31 +387,33 @@ export default function VideoTimelineNLE({
               />
 
               {/* 3. Serbest Zamanlı Çok Katmanlı Overlay Kanalları (PIP, Metin, Sticker, FX, Ses) */}
-              <TimelineOverlayTracks
-                totalDuration={safeTotal}
-                pps={pps}
-                overlayItems={overlayItems}
-                effectClips={effectClips}
-                musicClip={musicClip}
-                selectedItemId={selectedItemId}
-                selectedItemType={selectedItemType}
-                onSelectItem={onSelectItem}
-                onChangeOverlayTiming={onChangeOverlayTiming}
-                onReorderOverlayLayer={onReorderOverlayLayer}
-                onChangeEffectClips={onChangeEffectClips}
-                onChangeMusicTimeline={onChangeMusicTimeline}
-                onPauseVideo={onPauseVideo}
-                onSeek={handleSeekWithoutScroll}
-                onEdgeScroll={handleEdgeScroll}
-                onOpenMusicPicker={onOpenMusicPicker}
-                onOpenTextEditor={onOpenTextEditor}
-                onQuickAddEffect={onQuickAddEffect}
-                onCommitHistory={onCommitHistory}
-              />
+              {!isClipReordering && (
+                <TimelineOverlayTracks
+                  totalDuration={safeTotal}
+                  pps={pps}
+                  overlayItems={overlayItems}
+                  effectClips={effectClips}
+                  musicClip={musicClip}
+                  selectedItemId={selectedItemId}
+                  selectedItemType={selectedItemType}
+                  onSelectItem={onSelectItem}
+                  onChangeOverlayTiming={onChangeOverlayTiming}
+                  onReorderOverlayLayer={onReorderOverlayLayer}
+                  onChangeEffectClips={onChangeEffectClips}
+                  onChangeMusicTimeline={onChangeMusicTimeline}
+                  onPauseVideo={onPauseVideo}
+                  onSeek={handleSeekWithoutScroll}
+                  onEdgeScroll={handleEdgeScroll}
+                  onOpenMusicPicker={onOpenMusicPicker}
+                  onOpenTextEditor={onOpenTextEditor}
+                  onQuickAddEffect={onQuickAddEffect}
+                  onCommitHistory={onCommitHistory}
+                />
+              )}
             </div>
 
             {/* 50vw Sağ Boşluk (Videonun son karesi tam merkez ibreye oturur) */}
-            <div className="w-[50vw] shrink-0" />
+            {!isClipReordering && <div className="w-[50vw] shrink-0" />}
           </div>
         </div>
       </div>

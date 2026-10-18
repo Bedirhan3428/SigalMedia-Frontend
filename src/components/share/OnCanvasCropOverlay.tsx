@@ -140,14 +140,14 @@ export default function OnCanvasCropOverlay({
   const bottomMaskHeightPct = `${Math.max(0, (1 - safeRect.y - safeRect.height) * 100)}%`;
 
   return (
-    <div className="fixed inset-x-0 top-16 bottom-28 z-50 flex items-center justify-center px-4 py-2 pointer-events-none select-none">
+    <div className="fixed inset-x-0 top-16 bottom-28 z-50 flex items-center justify-center p-3 pointer-events-none select-none">
       {/* 9:16 Tam Boyut Önizleme Çerçevesi (page.tsx tuvaliyle 1:1 milimetrik çakışır) */}
       <div
         ref={stageRef}
         onPointerMove={handlePointerMove}
         onPointerUp={handlePointerEnd}
         onPointerCancel={handlePointerEnd}
-        className="relative h-full max-w-full aspect-[9/16] pointer-events-auto touch-none overflow-visible rounded-2xl"
+        className="relative h-full max-h-full max-w-[85vw] aspect-[9/16] pointer-events-auto touch-none overflow-visible rounded-2xl shrink-0"
       >
         {/* Kırpma Dışı Karartma Maskesi (4 Bölge: Üst, Alt, Sol, Sağ - %65 Karartma) */}
         <div
