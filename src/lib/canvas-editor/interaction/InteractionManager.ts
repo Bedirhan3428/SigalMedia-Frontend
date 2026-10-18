@@ -14,6 +14,7 @@ export class InteractionManager {
   private onSnapGuide?: (snap: { x: boolean; y: boolean }) => void;
   private onDragMove?: (info: { layer: BaseLayer; clientX: number; clientY: number; isDragging: boolean }) => void;
   private onDragEnd?: (info: { layer: BaseLayer; clientX: number; clientY: number }) => void;
+  private onPointerDownCapture?: () => void;
 
   private selectedLayer: BaseLayer | null = null;
   private transformingLayer: BaseLayer | null = null;
@@ -55,6 +56,7 @@ export class InteractionManager {
     onSnapGuide?: (snap: { x: boolean; y: boolean }) => void;
     onDragMove?: (info: { layer: BaseLayer; clientX: number; clientY: number; isDragging: boolean }) => void;
     onDragEnd?: (info: { layer: BaseLayer; clientX: number; clientY: number }) => void;
+    onPointerDownCapture?: () => void;
   }) {
     this.canvas = options.canvas;
     this.getLayers = options.getLayers;
@@ -68,6 +70,7 @@ export class InteractionManager {
     this.onSnapGuide = options.onSnapGuide;
     this.onDragMove = options.onDragMove;
     this.onDragEnd = options.onDragEnd;
+    this.onPointerDownCapture = options.onPointerDownCapture;
 
     // Dokunmatik varsayılan kaydırmaları engelle
     this.canvas.style.touchAction = 'none';
@@ -158,6 +161,7 @@ export class InteractionManager {
   }
 
   private onPointerDown = (e: PointerEvent) => {
+    this.onPointerDownCapture?.();
     try {
       this.canvas.setPointerCapture(e.pointerId);
     } catch {
@@ -571,6 +575,7 @@ export class InteractionManager {
   // Masaüstü fare tekerleği desteği (Ölçekleme ve serbest döndürme)
   private onWheel = (e: WheelEvent) => {
     e.preventDefault();
+    this.onPointerDownCapture?.();
     const pt = this.getCanvasPoint(e.clientX, e.clientY);
     const hit = this.findHitLayer(pt);
     const target = (hit && hit.type !== 'media')

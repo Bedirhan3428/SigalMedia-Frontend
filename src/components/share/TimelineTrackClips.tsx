@@ -2,7 +2,7 @@
 // [MODIFIED BY Bedirhan]
 "use client";
 
-import React, { useRef, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { VolumeX, ArrowLeftRight, Plus } from "lucide-react";
 import { VideoTrackClip } from "@/lib/canvas-editor";
 
@@ -43,6 +43,8 @@ type TrimPreviewState = {
   rightGapPx: number;
 };
 
+const TILE_SLOT_PX = 66; // 56px (w-14) + 10px (gap-2.5)
+
 export default function TimelineTrackClips({
   clips,
   maxSourceDuration,
@@ -58,6 +60,7 @@ export default function TimelineTrackClips({
   onSeek,
   onCommitHistory,
 }: TimelineTrackClipsProps) {
+  const rootContainerRef = useRef<HTMLDivElement | null>(null);
   const dragRef = useRef<ClipDragState | null>(null);
   const trimPreviewRef = useRef<TrimPreviewState | null>(null);
   const longPressTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -65,7 +68,6 @@ export default function TimelineTrackClips({
     x: number;
     y: number;
     pointerId: number;
-    target: HTMLElement;
   } | null>(null);
 
   const [trimPreview, setTrimPreview] = useState<TrimPreviewState | null>(null);
@@ -81,6 +83,12 @@ export default function TimelineTrackClips({
     pressOriginRef.current = null;
   };
 
+  useEffect(() => {
+    return () => {
+      clearLongPressTimer();
+    };
+  }, []);
+
   const getClipTimelineStart = (index: number): number => {
     let acc = 0;
     for (let i = 0; i < index && i < clips.length; i++) {
@@ -89,13 +97,24 @@ export default function TimelineTrackClips({
     return acc;
   };
 
+  const captureOnRoot = (pointerId: number) => {
+    try {
+      rootContainerRef.current?.setPointerCapture(pointerId);
+    } catch {}
+  };
+
+  const releaseOnRoot = (pointerId: number) => {
+    try {
+      rootContainerRef.current?.releasePointerCapture(pointerId);
+    } catch {}
+  };
+
   const beginClipDrag = (e: React.PointerEvent, state: ClipDragState) => {
     e.stopPropagation();
+    e.preventDefault();
     clearLongPressTimer();
     onPauseVideo?.();
-    try {
-      (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
-    } catch {}
+    captureOnRoot(e.pointerId);
     onCommitHistory?.();
     onSelectClip(state.clipId);
     dragRef.current = state;
@@ -123,16 +142,17 @@ export default function TimelineTrackClips({
     clip: VideoTrackClip,
     idx: number
   ) => {
+    e.stopPropagation();
+    onPauseVideo?.();
     onSelectClip(clip.id);
 
     clearLongPressTimer();
-    const targetEl = e.currentTarget as HTMLElement;
     const pointerId = e.pointerId;
     const startX = e.clientX;
     const startY = e.clientY;
-    pressOriginRef.current = { x: startX, y: startY, pointerId, target: targetEl };
+    pressOriginRef.current = { x: startX, y: startY, pointerId };
 
-    // 300ms Basılı Tutma -> 1:1 Küçük Kareler (CapCut Tile Reorder Mode)
+    // 260ms Basılı Tutma -> 1:1 Küçük Kareler (CapCut Tile Reorder Mode)
     longPressTimerRef.current = setTimeout(() => {
       longPressTimerRef.current = null;
       onPauseVideo?.();
@@ -142,9 +162,8 @@ export default function TimelineTrackClips({
           navigator.vibrate(40);
         } catch {}
       }
-      try {
-        targetEl.setPointerCapture(pointerId);
-      } catch {}
+      // ÖNEMLİ: Unmount olmayan üst konteyner üzerinden pointer capture al!
+      captureOnRoot(pointerId);
       const state: ClipDragState = {
         mode: "reorder",
         clipId: clip.id,
@@ -160,7 +179,7 @@ export default function TimelineTrackClips({
       setReorderingClipId(clip.id);
       setInsertionIndex(idx);
       setReorderOffsetPx(0);
-    }, 300);
+    }, 260);
   };
 
   const handlePointerMove = (e: React.PointerEvent) => {
@@ -169,7 +188,7 @@ export default function TimelineTrackClips({
         e.clientX - pressOriginRef.current.x,
         e.clientY - pressOriginRef.current.y
       );
-      if (moveDist > 8) {
+      if (moveDist > 10) {
         clearLongPressTimer();
       }
     }
@@ -177,9 +196,14 @@ export default function TimelineTrackClips({
     const st = dragRef.current;
     if (!st) return;
     e.stopPropagation();
+    e.preventDefault();
 
     // Ekran kenarlarına yaklaşıldığında otomatik yatay kaydırma (Edge Auto-Scroll)
-    if (typeof window !== "undefined" && onEdgeScroll) {
+    if (
+      st.mode !== "reorder" &&
+      typeof window !== "undefined" &&
+      onEdgeScroll
+    ) {
       const edgeZone = 48;
       if (e.clientX > window.innerWidth - edgeZone) {
         onEdgeScroll(10);
@@ -253,31 +277,28 @@ export default function TimelineTrackClips({
     }
 
     if (st.mode === "reorder") {
-      // 1:1 Küçük Kareler Modunda (64px kare + 10px boşluk = 74px slot adımı)
-      const tileSlotPx = 68;
-      setReorderOffsetPx(dxPx);
-
-      if (dxPx > tileSlotPx && st.clipIndex < clips.length - 1) {
-        const nextIdx = st.clipIndex + 1;
-        onReorderClips(st.clipIndex, nextIdx);
-        setInsertionIndex(nextIdx);
-        dragRef.current = {
-          ...st,
-          clipIndex: nextIdx,
-          startX: e.clientX,
-        };
-        setReorderOffsetPx(0);
-      } else if (dxPx < -tileSlotPx && st.clipIndex > 0) {
-        const prevIdx = st.clipIndex - 1;
-        onReorderClips(st.clipIndex, prevIdx);
-        setInsertionIndex(prevIdx);
-        dragRef.current = {
-          ...st,
-          clipIndex: prevIdx,
-          startX: e.clientX,
-        };
-        setReorderOffsetPx(0);
+      // 1:1 Küçük Kareler Modunda canlı slot değişimi
+      const slotSteps = Math.trunc(dxPx / TILE_SLOT_PX);
+      if (slotSteps !== 0) {
+        const targetIdx = Math.max(
+          0,
+          Math.min(clips.length - 1, st.clipIndex + slotSteps)
+        );
+        if (targetIdx !== st.clipIndex) {
+          const movedSlots = targetIdx - st.clipIndex;
+          onReorderClips(st.clipIndex, targetIdx);
+          setInsertionIndex(targetIdx);
+          const nextStartX = st.startX + movedSlots * TILE_SLOT_PX;
+          dragRef.current = {
+            ...st,
+            clipIndex: targetIdx,
+            startX: nextStartX,
+          };
+          setReorderOffsetPx(e.clientX - nextStartX);
+          return;
+        }
       }
+      setReorderOffsetPx(dxPx);
     }
   };
 
@@ -285,9 +306,8 @@ export default function TimelineTrackClips({
     clearLongPressTimer();
     const st = dragRef.current;
     if (!st) return;
-    try {
-      (e.currentTarget as HTMLElement).releasePointerCapture(e.pointerId);
-    } catch {}
+    e.stopPropagation();
+    releaseOnRoot(e.pointerId);
 
     const activePreview = trimPreviewRef.current;
     dragRef.current = null;
@@ -314,14 +334,18 @@ export default function TimelineTrackClips({
 
   return (
     <div
-      className="relative h-16 flex items-center select-none"
+      ref={rootContainerRef}
+      className={`relative h-16 flex items-center select-none ${
+        isTileReorderMode ? "touch-none" : ""
+      }`}
+      onClick={(e) => e.stopPropagation()}
       onPointerMove={handlePointerMove}
       onPointerUp={handlePointerEnd}
       onPointerCancel={handlePointerEnd}
     >
       {/* 1:1 KÜÇÜK KARELER SIRALAMA MODU (Basılı Tutulduğunda Aktifleşir) */}
       {isTileReorderMode ? (
-        <div className="flex items-center h-16 gap-2.5 px-2 py-1 bg-zinc-900/90 border border-white/15 rounded-2xl shadow-2xl transition-all duration-200">
+        <div className="flex items-center h-16 gap-2.5 px-2.5 py-1 bg-zinc-900/95 border border-white/20 rounded-2xl shadow-2xl touch-none">
           {clips.map((clip, idx) => {
             const isHeld = reorderingClipId === clip.id;
             const thumbSrc =
@@ -335,10 +359,10 @@ export default function TimelineTrackClips({
                 key={clip.id}
                 style={{
                   transform: isHeld
-                    ? `translateX(${reorderOffsetPx}px) scale(1.12)`
-                    : "scale(1)",
+                    ? `translate3d(${reorderOffsetPx}px, -4px, 0) scale(1.12)`
+                    : "translate3d(0, 0, 0) scale(1)",
                 }}
-                className={`relative w-14 h-14 rounded-xl overflow-hidden shrink-0 border-2 transition-transform duration-150 ${
+                className={`relative w-14 h-14 rounded-xl overflow-hidden shrink-0 border-2 transition-transform duration-75 pointer-events-none ${
                   isHeld
                     ? "border-emerald-400 ring-2 ring-emerald-400/60 shadow-[0_12px_28px_rgba(0,0,0,0.85)] z-40"
                     : insertionIndex === idx
@@ -476,6 +500,7 @@ export default function TimelineTrackClips({
                       {/* Çoklu klip varsa sıra değiştirme tutamacı */}
                       {isSelected && clips.length > 1 && (
                         <div
+                          onClick={(e) => e.stopPropagation()}
                           onPointerDown={(e) =>
                             beginClipDrag(e, {
                               mode: "reorder",
@@ -489,7 +514,7 @@ export default function TimelineTrackClips({
                               isMotionPhoto: clip.isMotionPhoto,
                             })
                           }
-                          className="absolute top-1 right-2.5 px-1.5 py-0.5 rounded bg-black/75 border border-white/20 text-[9px] font-semibold text-zinc-200 flex items-center gap-1 cursor-grab active:cursor-grabbing z-20"
+                          className="absolute top-1 right-2.5 px-1.5 py-0.5 rounded bg-black/75 border border-white/20 text-[9px] font-semibold text-zinc-200 flex items-center gap-1 cursor-grab active:cursor-grabbing z-20 touch-none"
                         >
                           <ArrowLeftRight className="w-2.5 h-2.5 text-amber-400" />
                           <span>Sırala</span>
@@ -553,6 +578,7 @@ export default function TimelineTrackClips({
               type="button"
               onClick={(e) => {
                 e.stopPropagation();
+                onPauseVideo?.();
                 onAppendClipClick();
               }}
               className="ml-2.5 w-11 h-11 rounded-xl bg-[#1c1c1e] hover:bg-[#28282d] border border-white/15 active:scale-95 transition-all flex items-center justify-center text-white shadow-md shrink-0"

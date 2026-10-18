@@ -154,6 +154,7 @@ export default function ShareStoryPage() {
   const [musicVolume, setMusicVolume] = useState<number>(0.85);
   const [isExportingVideo, setIsExportingVideo] = useState<boolean>(false);
   const [exportProgress, setExportProgress] = useState<number>(0);
+  const [isReelsCropping, setIsReelsCropping] = useState<boolean>(false);
   const exportAbortRef = useRef<AbortController | null>(null);
   const thumbAbortRef = useRef<AbortController | null>(null);
   // [END] CREATED BY Bedirhan
@@ -258,6 +259,7 @@ export default function ShareStoryPage() {
     setVideoThumbnails([]);
     setMusicVolume(0.85);
     setIsExportingVideo(false);
+    setIsReelsCropping(false);
     setExportProgress(0);
     setPostAdjustments(DEFAULT_POST_ADJUSTMENTS);
     setActiveFilterIndex(0);
@@ -1072,11 +1074,19 @@ export default function ShareStoryPage() {
       />
 
       {/* [MODIFIED BY Bedirhan] */}
-      {/* 3. TUVAL SAHNESİ: Hikaye için 9:16 Tam Ekran, Reels için Üst Yarı Yuvarlatılmış Önizleme, Gönderi için 4:3 Stüdyo Çerçevesi */}
+      {/* 3. TUVAL SAHNESİ: Hikaye için 9:16 Tam Ekran, Reels için Üst Yarı Yuvarlatılmış Önizleme (Kırpma modunda tam boy top-16 bottom-28), Gönderi için 4:3 Stüdyo Çerçevesi */}
       <div
+        onPointerDown={(e) => {
+          if (e.target === e.currentTarget) {
+            engineRef.current?.pauseVideo();
+            engineRef.current?.selectLayerById(null);
+          }
+        }}
         className={
           shareMode === "reels" && hasMedia && !isTextEditing
-            ? "fixed inset-x-0 top-16 bottom-[345px] flex items-center justify-center px-6 py-2 overflow-hidden select-none bg-black"
+            ? isReelsCropping
+              ? "fixed inset-x-0 top-16 bottom-28 flex items-center justify-center px-4 py-2 overflow-hidden select-none bg-black"
+              : "fixed inset-x-0 top-16 bottom-[345px] flex items-center justify-center px-6 py-2 overflow-hidden select-none bg-black"
             : "fixed inset-0 w-full h-full flex items-center justify-center overflow-hidden select-none"
         }
         style={{
@@ -1253,6 +1263,7 @@ export default function ShareStoryPage() {
           onChangeMusicVolume={(vol) => setMusicVolume(vol)}
           onChangeMusicMeta={(nextMusic) => setSelectedMusic(nextMusic)}
           onChangeEffectClips={handleChangeEffectClips}
+          onCropModeChange={setIsReelsCropping}
           onSeek={(t) => engineRef.current?.seekVideo(t)}
           onTogglePlay={() => engineRef.current?.toggleVideoPlay()}
           onOpenTextEditor={() => openTextEditor()}

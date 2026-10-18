@@ -359,112 +359,152 @@ export default function TimelineOverlayTracks({
         </div>
       )}
 
-      {/* 2. Efekt (FX) Serbest Zamanlı Kanalı */}
-      <div className="relative h-8 w-full">
-        {effectClips.length > 0 ? (
-          effectClips.map((fx) => {
-            const preset = REELS_EFFECT_PRESETS.find((p) => p.id === fx.effect);
-            const leftPx = Math.max(0, fx.startTime * pps);
-            const widthPx = Math.max(28, (fx.endTime - fx.startTime) * pps);
-            const isSelected =
-              selectedItemId === fx.id && selectedItemType === "effect";
-            const isElevated = elevatedItemId === fx.id;
-
-            return (
-              <div
-                key={fx.id}
+      {/* 2. Efekt (FX) Çok Şeritli (Multi-Lane) Serbest Zamanlı Kanalı */}
+      {(() => {
+        if (effectClips.length === 0) {
+          return (
+            <div className="relative h-7 w-full">
+              <button
+                type="button"
                 onClick={(e) => {
                   e.stopPropagation();
-                  onSelectItem(fx.id, "effect");
+                  onPauseVideo?.();
+                  onQuickAddEffect?.();
                 }}
-                onPointerDown={(e) =>
-                  beginDrag(e, {
-                    targetKind: "effect",
-                    mode: "move",
-                    id: fx.id,
-                    itemType: "effect",
-                    startX: e.clientX,
-                    startY: e.clientY,
-                    initStart: fx.startTime,
-                    initEnd: fx.endTime,
-                  })
-                }
-                className={`absolute top-0 bottom-0 rounded-lg flex items-center px-2.5 gap-1.5 cursor-grab active:cursor-grabbing touch-none transition-transform duration-150 ${
-                  isElevated
-                    ? "scale-[1.03] ring-2 ring-blue-400 shadow-2xl z-30"
-                    : isSelected
-                      ? "ring-2 ring-white shadow-lg z-20"
-                      : "border border-white/20 opacity-90 z-10"
-                }`}
-                style={{
-                  left: `${leftPx}px`,
-                  width: `${widthPx}px`,
-                  backgroundColor: preset?.color ? `${preset.color}cc` : "#ec4899cc",
-                }}
+                style={{ width: `${Math.max(120, totalDuration * pps)}px` }}
+                className="h-7 rounded-lg bg-[#16171b] hover:bg-[#1e2026] border border-white/5 px-3 flex items-center gap-1.5 text-zinc-400 text-[11px] font-medium transition-colors"
               >
-                <Sparkles className="w-3 h-3 text-white shrink-0 pointer-events-none" />
-                <span className="text-[11px] font-bold text-white truncate pointer-events-none">
-                  {preset?.name || fx.effect}
-                </span>
+                <Sparkles className="w-3.5 h-3.5 text-pink-400 shrink-0" />
+                <span>+ Efekt ekle</span>
+              </button>
+            </div>
+          );
+        }
 
-                {isSelected && (
-                  <>
-                    <div
-                      onClick={(e) => e.stopPropagation()}
-                      onPointerDown={(e) =>
-                        beginDrag(e, {
-                          targetKind: "effect",
-                          mode: "left",
-                          id: fx.id,
-                          itemType: "effect",
-                          startX: e.clientX,
-                          startY: e.clientY,
-                          initStart: fx.startTime,
-                          initEnd: fx.endTime,
-                        })
-                      }
-                      className="absolute -left-1.5 top-0 bottom-0 w-3.5 rounded-l-lg bg-white flex items-center justify-center cursor-ew-resize z-30 shadow"
-                    >
-                      <div className="w-[1.5px] h-3.5 rounded-full bg-black" />
-                    </div>
-                    <div
-                      onClick={(e) => e.stopPropagation()}
-                      onPointerDown={(e) =>
-                        beginDrag(e, {
-                          targetKind: "effect",
-                          mode: "right",
-                          id: fx.id,
-                          itemType: "effect",
-                          startX: e.clientX,
-                          startY: e.clientY,
-                          initStart: fx.startTime,
-                          initEnd: fx.endTime,
-                        })
-                      }
-                      className="absolute -right-1.5 top-0 bottom-0 w-3.5 rounded-r-lg bg-white flex items-center justify-center cursor-ew-resize z-30 shadow"
-                    >
-                      <div className="w-[1.5px] h-3.5 rounded-full bg-black" />
-                    </div>
-                  </>
-                )}
-              </div>
+        // Çakışan efektleri otomatik alt şeritlere (Multi-Lane) ayır
+        const lanes: ReelsEffectClip[][] = [];
+        for (const fx of effectClips) {
+          let placed = false;
+          for (const lane of lanes) {
+            const hasOverlap = lane.some(
+              (existing) =>
+                !(
+                  fx.endTime <= existing.startTime + 0.02 ||
+                  fx.startTime >= existing.endTime - 0.02
+                )
             );
-          })
-        ) : (
-          <button
-            type="button"
-            onClick={(e) => {
-              e.stopPropagation();
-              onQuickAddEffect?.();
-            }}
-            style={{ width: `${Math.max(120, totalDuration * pps)}px` }}
-            className="h-7 rounded-lg bg-[#16171b] hover:bg-[#1e2026] border border-white/5 px-3 flex items-center gap-1.5 text-zinc-400 text-[11px] font-medium transition-colors"
-          >
-            <Sparkles className="w-3.5 h-3.5 text-pink-400 shrink-0" />
-            <span>+ Efekt ekle</span>
-          </button>
-        )}
-      </div>
+            if (!hasOverlap) {
+              lane.push(fx);
+              placed = true;
+              break;
+            }
+          }
+          if (!placed) {
+            lanes.push([fx]);
+          }
+        }
+
+        return (
+          <div className="flex flex-col gap-1">
+            {lanes.map((laneClips, laneIdx) => (
+              <div key={`fx_lane_${laneIdx}`} className="relative h-8 w-full">
+                {laneClips.map((fx) => {
+                  const preset = REELS_EFFECT_PRESETS.find(
+                    (p) => p.id === fx.effect
+                  );
+                  const leftPx = Math.max(0, fx.startTime * pps);
+                  const widthPx = Math.max(28, (fx.endTime - fx.startTime) * pps);
+                  const isSelected =
+                    selectedItemId === fx.id && selectedItemType === "effect";
+                  const isElevated = elevatedItemId === fx.id;
+
+                  return (
+                    <div
+                      key={fx.id}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onSelectItem(fx.id, "effect");
+                      }}
+                      onPointerDown={(e) =>
+                        beginDrag(e, {
+                          targetKind: "effect",
+                          mode: "move",
+                          id: fx.id,
+                          itemType: "effect",
+                          startX: e.clientX,
+                          startY: e.clientY,
+                          initStart: fx.startTime,
+                          initEnd: fx.endTime,
+                        })
+                      }
+                      className={`absolute top-0 bottom-0 rounded-lg flex items-center px-2.5 gap-1.5 cursor-grab active:cursor-grabbing touch-none transition-transform duration-150 ${
+                        isElevated
+                          ? "scale-[1.03] ring-2 ring-blue-400 shadow-2xl z-30"
+                          : isSelected
+                            ? "ring-2 ring-white shadow-lg z-20"
+                            : "border border-white/20 opacity-90 z-10"
+                      }`}
+                      style={{
+                        left: `${leftPx}px`,
+                        width: `${widthPx}px`,
+                        backgroundColor: preset?.color
+                          ? `${preset.color}cc`
+                          : "#ec4899cc",
+                      }}
+                    >
+                      <Sparkles className="w-3 h-3 text-white shrink-0 pointer-events-none" />
+                      <span className="text-[11px] font-bold text-white truncate pointer-events-none">
+                        {preset?.name || fx.effect}
+                      </span>
+
+                      {isSelected && (
+                        <>
+                          <div
+                            onClick={(e) => e.stopPropagation()}
+                            onPointerDown={(e) =>
+                              beginDrag(e, {
+                                targetKind: "effect",
+                                mode: "left",
+                                id: fx.id,
+                                itemType: "effect",
+                                startX: e.clientX,
+                                startY: e.clientY,
+                                initStart: fx.startTime,
+                                initEnd: fx.endTime,
+                              })
+                            }
+                            className="absolute -left-1.5 top-0 bottom-0 w-4 rounded-l-lg bg-white flex items-center justify-center cursor-ew-resize z-30 shadow touch-none"
+                          >
+                            <div className="w-[1.5px] h-3.5 rounded-full bg-black" />
+                          </div>
+                          <div
+                            onClick={(e) => e.stopPropagation()}
+                            onPointerDown={(e) =>
+                              beginDrag(e, {
+                                targetKind: "effect",
+                                mode: "right",
+                                id: fx.id,
+                                itemType: "effect",
+                                startX: e.clientX,
+                                startY: e.clientY,
+                                initStart: fx.startTime,
+                                initEnd: fx.endTime,
+                              })
+                            }
+                            className="absolute -right-1.5 top-0 bottom-0 w-4 rounded-r-lg bg-white flex items-center justify-center cursor-ew-resize z-30 shadow touch-none"
+                          >
+                            <div className="w-[1.5px] h-3.5 rounded-full bg-black" />
+                          </div>
+                        </>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            ))}
+          </div>
+        );
+      })()}
 
       {/* 3. Ses / Müzik (Waveform) Serbest Zamanlı Kanalı */}
       <div className="relative h-8 w-full">

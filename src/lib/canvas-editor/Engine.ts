@@ -73,6 +73,8 @@ export class CanvasEngine {
   private lastVirtualTickTime: number = 0;
   private videoClips: VideoTrackClip[] = [];
   private nleTimelineTime: number = 0;
+  private isNlePlaying: boolean = false;
+  private activePlayingClipId: string | null = null;
 
   // 5sn Fotoğraf->Video Statik Katman Offscreen Önbelleği (Tek Seferlik Tahsis)
   private staticSceneCacheCanvas: HTMLCanvasElement | null = null;
@@ -100,12 +102,17 @@ export class CanvasEngine {
       canvas: this.canvas,
       getLayers: () => this.getAllLayers(),
       getContext: () => this.ctx,
+      onPointerDownCapture: () => {
+        if (this.shareMode === 'reels' && (this.isNlePlaying || this.videoLoopId !== null)) {
+          this.pauseVideo();
+        }
+      },
       onStateChange: () => {
         if (this.shareMode === 'reels' && this.mediaLayer && this.videoClips.length > 0) {
           const active = this.getActiveClipAtTime(this.nleTimelineTime);
           if (active) {
             this.videoClips[active.index] = {
-              ...active.clip,
+              ...this.videoClips[active.index],
               transform: { ...this.mediaLayer.transform },
               fitMode: this.mediaLayer.fitMode,
             };
@@ -928,7 +935,8 @@ export class CanvasEngine {
       const clip = this.videoClips[i];
       const dur = Math.max(0.2, clip.duration);
       const end = acc + dur;
-      if (clampedT <= end + 0.001 || i === this.videoClips.length - 1) {
+      const isLast = i === this.videoClips.length - 1;
+      if (clampedT < end - 0.0005 || isLast) {
         const localOffset = Math.max(0, Math.min(dur, clampedT - acc));
         const localSourceTime = Math.max(
           clip.sourceStart,
@@ -1120,7 +1128,7 @@ export class CanvasEngine {
       changed = true;
     }
 
-    if (clip.transform) {
+    if (clip.transform && !ml.isInteracting) {
       const t = clip.transform;
       if (
         Math.abs(ml.transform.x - t.x) > 0.0005 ||
@@ -1140,18 +1148,26 @@ export class CanvasEngine {
     return changed;
   }
 
+  public setCropOverlayOpen(open: boolean): void {
+    if (!this.mediaLayer) return;
+    if (this.mediaLayer.isCropOverlayOpen !== open) {
+      this.mediaLayer.isCropOverlayOpen = open;
+      this.invalidateStaticCache();
+      this.requestRender();
+    }
+  }
+
   public updateClipCropRect(
     clipId: string,
     cropRect: { x: number; y: number; width: number; height: number }
   ): void {
     const idx = this.videoClips.findIndex((c) => c.id === clipId);
     if (idx === -1) return;
-    const clamped = {
-      x: Math.max(0, Math.min(0.85, Number(cropRect.x.toFixed(4)))),
-      y: Math.max(0, Math.min(0.85, Number(cropRect.y.toFixed(4)))),
-      width: Math.max(0.15, Math.min(1, Number(cropRect.width.toFixed(4)))),
-      height: Math.max(0.15, Math.min(1, Number(cropRect.height.toFixed(4)))),
-    };
+    const x = Math.max(0, Math.min(0.85, Number(cropRect.x.toFixed(4))));
+    const y = Math.max(0, Math.min(0.85, Number(cropRect.y.toFixed(4))));
+    const width = Math.max(0.15, Math.min(1 - x, Number(cropRect.width.toFixed(4))));
+    const height = Math.max(0.15, Math.min(1 - y, Number(cropRect.height.toFixed(4))));
+    const clamped = { x, y, width, height };
     this.videoClips[idx] = {
       ...this.videoClips[idx],
       cropRect: clamped,
@@ -1484,22 +1500,18 @@ export class CanvasEngine {
       const active = this.getActiveClipAtTime(this.nleTimelineTime) || {
         clip: this.videoClips[0],
       };
-      const video = ml.getVideoElement();
-      const isPlaying = ml.isMotionPhoto
-        ? ml.virtualPlaying
-        : Boolean(video && !video.paused && !video.ended);
 
       return {
         isVideo: true,
-        isMotionPhoto: ml.isMotionPhoto,
+        isMotionPhoto: Boolean(active.clip.isMotionPhoto),
         duration: totalDur,
         trimStart: 0,
         trimEnd: totalDur,
         playbackRate: active.clip.playbackRate || 1.0,
-        volume: ml.isMotionPhoto ? 0 : active.clip.volume,
-        muted: ml.isMotionPhoto ? true : active.clip.muted,
+        volume: active.clip.isMotionPhoto ? 0 : active.clip.volume,
+        muted: active.clip.isMotionPhoto ? true : active.clip.muted,
         currentTime: this.nleTimelineTime,
-        isPlaying,
+        isPlaying: this.isNlePlaying,
       };
     }
 
@@ -1596,7 +1608,7 @@ export class CanvasEngine {
       if (active) {
         this.applyClipTransformToMediaLayer(active.clip);
         if (this.mediaLayer.isMotionPhoto) {
-          this.mediaLayer.virtualTime = this.nleTimelineTime;
+          this.mediaLayer.virtualTime = active.localSourceTime;
         } else {
           await this.mediaLayer.seek(active.localSourceTime);
         }
@@ -1612,47 +1624,66 @@ export class CanvasEngine {
     this.emit('video-progress', this.mediaLayer.getCurrentTime());
   }
 
+  private activateClipForPlayback(active: {
+    clip: VideoTrackClip;
+    localSourceTime: number;
+  }): void {
+    const ml = this.mediaLayer;
+    if (!ml) return;
+
+    this.activePlayingClipId = active.clip.id;
+    this.applyClipTransformToMediaLayer(active.clip);
+
+    if (ml.isMotionPhoto) {
+      ml.virtualTime = active.localSourceTime;
+      ml.virtualPlaying = true;
+      return;
+    }
+
+    ml.virtualPlaying = false;
+    const video = ml.getVideoElement();
+    if (!video) return;
+
+    const targetRate = active.clip.playbackRate || 1.0;
+    try {
+      video.playbackRate = targetRate;
+      video.volume = active.clip.volume;
+      video.muted = active.clip.muted;
+      if (Math.abs(video.currentTime - active.localSourceTime) > 0.05) {
+        video.currentTime = active.localSourceTime;
+      }
+    } catch {}
+
+    if (video.paused || video.ended) {
+      video.play().catch(() => {
+        video.muted = true;
+        ml.muted = true;
+        video.play().catch(() => {});
+      });
+    }
+  }
+
   public async playVideo(): Promise<void> {
     if (!this.mediaLayer) return;
+
+    // Oynatma başladığında tüm etkileşim bayraklarını sıfırla (Transform sonrası kilitlenmeyi önler)
+    this.mediaLayer.isInteracting = false;
+    for (let i = 0; i < this.overlayLayers.length; i++) {
+      this.overlayLayers[i].isInteracting = false;
+    }
 
     if (this.shareMode === 'reels' && this.videoClips.length > 0) {
       const totalDur = this.getTotalTimelineDuration();
       if (this.nleTimelineTime < 0 || this.nleTimelineTime >= totalDur - 0.04) {
         this.nleTimelineTime = 0;
       }
+      this.isNlePlaying = true;
+      this.activePlayingClipId = null;
+      this.lastVirtualTickTime = performance.now();
+
       const active = this.getActiveClipAtTime(this.nleTimelineTime);
-
-      if (this.mediaLayer.isMotionPhoto) {
-        if (active) {
-          this.applyClipTransformToMediaLayer(active.clip);
-        }
-        this.mediaLayer.virtualTime = this.nleTimelineTime;
-        this.mediaLayer.virtualPlaying = true;
-        this.lastVirtualTickTime = performance.now();
-        this.startVideoLoop();
-        this.emit('video-time', this.getVideoState());
-        return;
-      }
-
-      const video = this.mediaLayer.getVideoElement();
-      if (!video) return;
-
       if (active) {
-        this.applyClipTransformToMediaLayer(active.clip);
-        video.currentTime = active.localSourceTime;
-        video.playbackRate = active.clip.playbackRate || 1.0;
-        video.volume = active.clip.volume;
-        video.muted = active.clip.muted;
-      }
-
-      try {
-        await video.play();
-      } catch {
-        video.muted = true;
-        this.mediaLayer.muted = true;
-        try {
-          await video.play();
-        } catch {}
+        this.activateClipForPlayback(active);
       }
 
       this.startVideoLoop();
@@ -1699,21 +1730,45 @@ export class CanvasEngine {
   }
 
   public pauseVideo(): void {
-    if (this.mediaLayer?.isMotionPhoto) {
+    this.isNlePlaying = false;
+    this.activePlayingClipId = null;
+
+    if (this.mediaLayer) {
       this.mediaLayer.virtualPlaying = false;
-      this.stopVideoLoop();
-      this.emit('video-time', this.getVideoState());
-      return;
+      const activeVideo = this.mediaLayer.getVideoElement();
+      if (activeVideo && !activeVideo.paused) {
+        try {
+          activeVideo.pause();
+        } catch {}
+      }
     }
-    const video = this.mediaLayer?.getVideoElement();
-    if (video && !video.paused) {
-      video.pause();
+
+    for (let i = 0; i < this.videoClips.length; i++) {
+      const cMedia = this.videoClips[i].media;
+      if (cMedia && cMedia.type === 'video' && cMedia.element instanceof HTMLVideoElement) {
+        if (!cMedia.element.paused) {
+          try {
+            cMedia.element.pause();
+          } catch {}
+        }
+      }
     }
+
     this.stopVideoLoop();
     this.emit('video-time', this.getVideoState());
   }
 
   public async toggleVideoPlay(): Promise<boolean> {
+    if (this.shareMode === 'reels' && this.videoClips.length > 0) {
+      if (this.isNlePlaying) {
+        this.pauseVideo();
+        return false;
+      } else {
+        await this.playVideo();
+        return true;
+      }
+    }
+
     if (this.mediaLayer?.isMotionPhoto) {
       if (this.mediaLayer.virtualPlaying) {
         this.pauseVideo();
@@ -1762,97 +1817,66 @@ export class CanvasEngine {
       }
 
       if (this.shareMode === 'reels' && this.videoClips.length > 0) {
-        const now = performance.now();
-        const dt = Math.max(0, (now - this.lastVirtualTickTime) / 1000);
-        this.lastVirtualTickTime = now;
-        const totalDur = this.getTotalTimelineDuration();
-
-        if (ml.isMotionPhoto) {
-          if (!ml.virtualPlaying) {
-            this.videoLoopId = null;
-            this.emit('video-time', this.getVideoState());
-            return;
-          }
-          const active = this.getActiveClipAtTime(this.nleTimelineTime);
-          this.nleTimelineTime += dt;
-          if (this.nleTimelineTime >= totalDur) {
-            this.nleTimelineTime = 0;
-          }
-          const transformChanged = active ? this.applyClipTransformToMediaLayer(active.clip) : false;
-          ml.virtualTime = active ? active.localSourceTime : this.nleTimelineTime;
-          const visChanged = this.syncTemporalVisibility(this.nleTimelineTime);
-          if (ml.isTimeDependentEffect() || this.staticSceneCacheDirty || visChanged || transformChanged) {
-            this.render();
-          }
-          this.emit('video-progress', this.nleTimelineTime);
-          this.videoLoopId = requestAnimationFrame(tick);
-          return;
-        }
-
-        const video = ml.getVideoElement();
-        if (!video) {
-          this.videoLoopId = null;
-          return;
-        }
-
-        if (!video.paused) {
-          this.nleTimelineTime += dt;
-          if (this.nleTimelineTime >= totalDur) {
-            this.nleTimelineTime = 0;
-          }
-          const active = this.getActiveClipAtTime(this.nleTimelineTime);
-          if (active) {
-            this.applyClipTransformToMediaLayer(active.clip);
-            const targetRate = active.clip.playbackRate || 1.0;
-            if (Math.abs(video.playbackRate - targetRate) > 0.01) {
-              video.playbackRate = targetRate;
-            }
-            if (Math.abs(video.volume - active.clip.volume) > 0.01) {
-              video.volume = active.clip.volume;
-            }
-            if (video.muted !== active.clip.muted) {
-              video.muted = active.clip.muted;
-            }
-            if (Math.abs(video.currentTime - active.localSourceTime) > 0.24 || video.ended) {
-              video.currentTime = active.localSourceTime;
-              video.play().catch(() => {});
-            } else {
-              // Donanım video saatine senkronla
-              const syncedOffset = Math.max(
-                0,
-                (video.currentTime - active.clip.sourceStart) / targetRate
-              );
-              this.nleTimelineTime = Math.min(
-                active.clipTimelineEnd,
-                active.clipTimelineStart + syncedOffset
-              );
-            }
-          }
-          this.syncTemporalVisibility(this.nleTimelineTime);
-          this.render();
-          this.emit('video-progress', this.nleTimelineTime);
-          this.videoLoopId = requestAnimationFrame(tick);
-          return;
-        } else {
-          if (video.ended) {
-            this.nleTimelineTime = 0;
-            const first = this.getActiveClipAtTime(0);
-            if (first) video.currentTime = first.localSourceTime;
-            video
-              .play()
-              .then(() => {
-                this.videoLoopId = requestAnimationFrame(tick);
-              })
-              .catch(() => {
-                this.videoLoopId = null;
-                this.emit('video-time', this.getVideoState());
-              });
-            return;
-          }
+        if (!this.isNlePlaying) {
           this.videoLoopId = null;
           this.emit('video-time', this.getVideoState());
           return;
         }
+
+        const now = performance.now();
+        const dt = Math.min(0.1, Math.max(0, (now - this.lastVirtualTickTime) / 1000));
+        this.lastVirtualTickTime = now;
+        const totalDur = this.getTotalTimelineDuration();
+
+        this.nleTimelineTime += dt;
+        if (this.nleTimelineTime >= totalDur) {
+          this.nleTimelineTime = 0;
+          this.activePlayingClipId = null;
+        }
+
+        const active = this.getActiveClipAtTime(this.nleTimelineTime);
+        if (active) {
+          if (this.activePlayingClipId !== active.clip.id) {
+            // Yeni klibe (Fotoğraf -> Video veya Video -> Fotoğraf veya Video1 -> Video2) kesintisiz geçiş
+            this.activateClipForPlayback(active);
+          } else {
+            this.applyClipTransformToMediaLayer(active.clip);
+            if (ml.isMotionPhoto) {
+              ml.virtualTime = active.localSourceTime;
+            } else {
+              const video = ml.getVideoElement();
+              if (video) {
+                const targetRate = active.clip.playbackRate || 1.0;
+                if (Math.abs(video.playbackRate - targetRate) > 0.01) {
+                  video.playbackRate = targetRate;
+                }
+                if (Math.abs(video.volume - active.clip.volume) > 0.01) {
+                  video.volume = active.clip.volume;
+                }
+                if (video.muted !== active.clip.muted) {
+                  video.muted = active.clip.muted;
+                }
+                if (video.paused && !video.seeking) {
+                  video.play().catch(() => {
+                    video.muted = true;
+                    video.play().catch(() => {});
+                  });
+                }
+                if (Math.abs(video.currentTime - active.localSourceTime) > 0.28 && !video.seeking) {
+                  try {
+                    video.currentTime = active.localSourceTime;
+                  } catch {}
+                }
+              }
+            }
+          }
+        }
+
+        this.syncTemporalVisibility(this.nleTimelineTime);
+        this.render();
+        this.emit('video-progress', this.nleTimelineTime);
+        this.videoLoopId = requestAnimationFrame(tick);
+        return;
       }
 
       if (ml.isMotionPhoto) {

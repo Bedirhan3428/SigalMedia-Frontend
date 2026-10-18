@@ -55,6 +55,7 @@ export class MediaLayer extends BaseLayer {
   public reelsEffect: ReelsEffectId = 'none';
   public effectClips: ReelsEffectClip[] = [];
   public cropRect?: { x: number; y: number; width: number; height: number };
+  public isCropOverlayOpen: boolean = false;
   // [END] CREATED BY Bedirhan
 
   private animFrameId: number | null = null;
@@ -238,6 +239,7 @@ export class MediaLayer extends BaseLayer {
 
     ctx.save();
     if (
+      !this.isCropOverlayOpen &&
       this.cropRect &&
       (this.cropRect.x > 0.002 ||
         this.cropRect.y > 0.002 ||

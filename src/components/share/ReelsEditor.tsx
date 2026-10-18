@@ -23,6 +23,7 @@ import {
   RotateCcw,
   Maximize2,
   Minimize2,
+  Check,
   X,
 } from "lucide-react";
 import {
@@ -60,6 +61,7 @@ export interface ReelsEditorProps {
   onChangeMusicVolume: (volume: number) => void;
   onChangeMusicMeta?: (music: StoryAudioMeta | null) => void;
   onChangeEffectClips?: (clips: ReelsEffectClip[]) => void;
+  onCropModeChange?: (isCropping: boolean) => void;
   onSeek: (time: number) => void;
   onTogglePlay: () => void;
   onOpenTextEditor: () => void;
@@ -98,6 +100,7 @@ export default function ReelsEditor({
   onChangeMusicVolume,
   onChangeMusicMeta,
   onChangeEffectClips,
+  onCropModeChange,
   onSeek,
   onTogglePlay,
   onOpenTextEditor,
@@ -115,6 +118,7 @@ export default function ReelsEditor({
   const [historyStack, setHistoryStack] = useState<NLEHistorySnapshot[]>([]);
   const [redoStack, setRedoStack] = useState<NLEHistorySnapshot[]>([]);
   const appendClipInputRef = useRef<HTMLInputElement | null>(null);
+  const isInternalLayerSyncRef = useRef(false);
 
   const syncFromEngine = useCallback(() => {
     if (!engine) return;
@@ -128,11 +132,21 @@ export default function ReelsEditor({
     const handleEngineChange = () => {
       syncFromEngine();
     };
+    const handleCanvasSelect = (layer: BaseLayer | null) => {
+      if (isInternalLayerSyncRef.current) return;
+      if (!layer) {
+        setSelectedItemId(null);
+        setSelectedItemType(null);
+        setActiveStrip("none");
+      }
+    };
     engine.on("change", handleEngineChange);
     engine.on("video-time", handleEngineChange);
+    engine.on("select", handleCanvasSelect);
     return () => {
       engine.off("change", handleEngineChange);
       engine.off("video-time", handleEngineChange);
+      engine.off("select", handleCanvasSelect);
     };
   }, [engine, syncFromEngine]);
 
@@ -235,18 +249,23 @@ export default function ReelsEditor({
   };
 
   const handleSelectItem = (id: string | null, type: NLESelectedType) => {
+    engine?.pauseVideo();
     setSelectedItemId(id);
     setSelectedItemType(type);
     if (!id) {
       setActiveStrip("none");
+      isInternalLayerSyncRef.current = true;
       engine?.selectLayerById(null);
+      isInternalLayerSyncRef.current = false;
       return;
     }
+    isInternalLayerSyncRef.current = true;
     if (type === "text" || type === "sticker" || type === "photo") {
       engine?.selectLayerById(id);
     } else {
       engine?.selectLayerById(null);
     }
+    isInternalLayerSyncRef.current = false;
     if (type === "video" && engine) {
       const targetClip = clips.find((c) => c.id === id);
       if (targetClip) {
@@ -263,6 +282,19 @@ export default function ReelsEditor({
     selectedItemType === "video"
       ? clips.find((c) => c.id === selectedItemId) || null
       : null;
+
+  const isFullScreenCrop =
+    activeStrip === "crop" &&
+    selectedItemType === "video" &&
+    Boolean(selectedVideoClip);
+
+  useEffect(() => {
+    engine?.setCropOverlayOpen(isFullScreenCrop);
+    onCropModeChange?.(isFullScreenCrop);
+    return () => {
+      engine?.setCropOverlayOpen(false);
+    };
+  }, [engine, isFullScreenCrop, onCropModeChange]);
 
   const selectedEffectClip =
     selectedItemType === "effect"
@@ -485,32 +517,62 @@ export default function ReelsEditor({
   };
 
   const handleSelectEffectPreset = (effectId: ReelsEffectId) => {
+    engine?.pauseVideo();
     if (!onChangeEffectClips) {
       onSelectReelsEffect(effectId);
       return;
     }
     if (effectId === "none") {
-      if (selectedEffectClip) {
-        commitHistory();
-        onChangeEffectClips(effectClips.filter((c) => c.id !== selectedEffectClip.id));
-        setSelectedItemId(null);
-        setSelectedItemType(null);
-      } else {
-        onChangeEffectClips([]);
-        onSelectReelsEffect("none");
-      }
+      commitHistory();
+      onChangeEffectClips([]);
+      onSelectReelsEffect("none");
+      setSelectedItemId(null);
+      setSelectedItemType(null);
       return;
     }
-    if (selectedEffectClip) {
-      commitHistory();
-      onChangeEffectClips(
-        effectClips.map((c) =>
-          c.id === selectedEffectClip.id ? { ...c, effect: effectId } : c
-        )
-      );
-    } else {
-      addEffectClipAtPlayhead(effectId);
+    // Her tıklamada ibre konumuna yeni efekt eklenir (aynı anda veya farklı zamanlarda çoklu efekt desteği)
+    addEffectClipAtPlayhead(effectId);
+  };
+
+  const applyCropAspectPreset = (
+    preset: "free" | "9:16" | "1:1" | "4:5" | "16:9"
+  ) => {
+    if (!selectedVideoClip || !engine) return;
+    engine.pauseVideo();
+    commitHistory();
+    if (preset === "free" || preset === "9:16") {
+      engine.updateClipCropRect(selectedVideoClip.id, {
+        x: 0,
+        y: 0,
+        width: 1,
+        height: 1,
+      });
+    } else if (preset === "1:1") {
+      const h = 9 / 16; // 0.5625
+      engine.updateClipCropRect(selectedVideoClip.id, {
+        x: 0,
+        y: Number(((1 - h) / 2).toFixed(4)),
+        width: 1,
+        height: Number(h.toFixed(4)),
+      });
+    } else if (preset === "4:5") {
+      const h = (9 / 16) * (5 / 4); // 0.703125
+      engine.updateClipCropRect(selectedVideoClip.id, {
+        x: 0,
+        y: Number(((1 - h) / 2).toFixed(4)),
+        width: 1,
+        height: Number(h.toFixed(4)),
+      });
+    } else if (preset === "16:9") {
+      const h = (9 / 16) * (9 / 16); // 0.3164
+      engine.updateClipCropRect(selectedVideoClip.id, {
+        x: 0,
+        y: Number(((1 - h) / 2).toFixed(4)),
+        width: 1,
+        height: Number(h.toFixed(4)),
+      });
     }
+    syncFromEngine();
   };
 
   const handleMusicTimelineChange = (
@@ -573,669 +635,784 @@ export default function ReelsEditor({
         onChange={handleAppendClipFile}
       />
 
-      {/* Ekranda 8 Tutamaçlı ve 9 Eşit Parçalı (3x3 Rule of Thirds) İnteraktif Kırpma Katmanı */}
-      {activeStrip === "crop" &&
-        selectedItemType === "video" &&
-        selectedVideoClip &&
-        engine && (
+      {/* TAM EKRAN 8 TUTAMAÇLI KIRPMA MODU (Timeline gizlenir, video büyür, kırpma kutusu en üstte) */}
+      {isFullScreenCrop && selectedVideoClip && engine ? (
+        <>
           <OnCanvasCropOverlay
             cropRect={
               selectedVideoClip.cropRect || { x: 0, y: 0, width: 1, height: 1 }
             }
             onCommitHistory={commitHistory}
             onChangeCropRect={(nextRect) => {
+              engine.pauseVideo();
               engine.updateClipCropRect(selectedVideoClip.id, nextRect);
               syncFromEngine();
             }}
           />
-        )}
 
-      <div className="fixed inset-x-0 bottom-0 z-40 bg-black pt-1.5 pb-5 flex flex-col gap-2.5 pointer-events-auto select-none">
-        {/* 1. Sabit PPS (60px/s) ve Dinamik Gezen İbreli NLE Zaman Çizelgesi */}
-        <VideoTimelineNLE
-          clips={clips}
-          overlayItems={overlayItems}
-          effectClips={effectClips}
-          musicClip={selectedMusic}
-          totalDuration={totalDuration}
-          maxSourceDuration={maxSourceDuration}
-          currentTime={videoState.currentTime}
-          isPlaying={videoState.isPlaying}
-          thumbnails={thumbnails}
-          selectedItemId={selectedItemId}
-          selectedItemType={selectedItemType}
-          canUndo={historyStack.length > 0}
-          canRedo={redoStack.length > 0}
-          getCurrentTime={getCurrentTime}
-          onSelectItem={handleSelectItem}
-          onTrimClip={(clipId, newStart, newEnd) => {
-            engine?.updateClipTrim(clipId, newStart, newEnd);
-            syncFromEngine();
-          }}
-          onReorderClips={(fromIdx, toIdx) => {
-            engine?.reorderClips(fromIdx, toIdx);
-            syncFromEngine();
-          }}
-          onAppendClipClick={() => appendClipInputRef.current?.click()}
-          onChangeOverlayTiming={(layerId, start, end) => {
-            engine?.updateOverlayTrackTiming(layerId, start, end);
-            syncFromEngine();
-          }}
-          onReorderOverlayLayer={(layerId, direction) => {
-            commitHistory();
-            engine?.reorderOverlayLayer(layerId, direction);
-            syncFromEngine();
-          }}
-          onChangeEffectClips={onChangeEffectClips}
-          onChangeMusicTimeline={handleMusicTimelineChange}
-          onSeek={onSeek}
-          onPauseVideo={() => engine?.pauseVideo()}
-          onTogglePlay={onTogglePlay}
-          onUndo={handleUndo}
-          onRedo={handleRedo}
-          onOpenMusicPicker={onOpenMusicPicker}
-          onOpenTextEditor={onOpenTextEditor}
-          onQuickAddEffect={() => {
-            setActiveStrip("effects");
-          }}
-          onCommitHistory={commitHistory}
-        />
+          <div
+            onPointerDownCapture={() => engine.pauseVideo()}
+            onWheelCapture={() => engine.pauseVideo()}
+            className="fixed inset-x-0 bottom-0 h-28 z-50 bg-black/95 border-t border-white/10 px-4 py-2.5 flex flex-col justify-between pointer-events-auto select-none"
+          >
+            {/* Üst Satır: Oran Presetleri + Döndür + Aynala + Sıfırla */}
+            <div className="flex items-center gap-1.5 overflow-x-auto no-scrollbar">
+              {(["free", "9:16", "1:1", "4:5", "16:9"] as const).map((ratio) => (
+                <button
+                  key={ratio}
+                  type="button"
+                  onClick={() => applyCropAspectPreset(ratio)}
+                  className="px-3 py-1.5 rounded-xl text-xs font-semibold shrink-0 bg-[#1c1c1e] hover:bg-[#28282d] text-zinc-200 border border-white/10 active:scale-95 transition-all"
+                >
+                  {ratio === "free" ? "Serbest" : ratio}
+                </button>
+              ))}
 
-      {/* 2. Açılır Alt Ayar Şeridi (Kırp & Kadraj / Efektler / Ses & Hız / Filtreler) */}
-      {activeStrip === "crop" &&
-        (selectedItemType === "video" || selectedItemType === "photo") && (
-          <div className="flex flex-col gap-2 px-4">
-            <div className="flex items-center gap-2 overflow-x-auto no-scrollbar">
-              {selectedItemType === "video" && selectedVideoClip && engine && (
-                <>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      commitHistory();
-                      engine.updateClipTransform(selectedVideoClip.id, undefined, "cover");
-                      syncFromEngine();
-                    }}
-                    className={`px-3 py-1.5 rounded-xl text-xs font-semibold flex items-center gap-1.5 shrink-0 border transition-all active:scale-95 ${
-                      activeClipFitMode === "cover"
-                        ? "bg-amber-400 text-black border-amber-400"
-                        : "bg-[#1c1c1e] text-zinc-200 border-white/10"
-                    }`}
-                  >
-                    <Maximize2 className="w-3.5 h-3.5" />
-                    <span>9:16 Doldur</span>
-                  </button>
+              <button
+                type="button"
+                onClick={() => {
+                  commitHistory();
+                  engine.updateClipTransform(
+                    selectedVideoClip.id,
+                    undefined,
+                    activeClipFitMode === "cover" ? "contain" : "cover"
+                  );
+                  syncFromEngine();
+                }}
+                className="px-3 py-1.5 rounded-xl text-xs font-semibold flex items-center gap-1 shrink-0 bg-[#1c1c1e] text-zinc-200 border border-white/10 active:scale-95"
+              >
+                {activeClipFitMode === "cover" ? (
+                  <>
+                    <Minimize2 className="w-3.5 h-3.5 text-amber-400" />
+                    <span>Sığdır</span>
+                  </>
+                ) : (
+                  <>
+                    <Maximize2 className="w-3.5 h-3.5 text-amber-400" />
+                    <span>Doldur</span>
+                  </>
+                )}
+              </button>
 
-                  <button
-                    type="button"
-                    onClick={() => {
-                      commitHistory();
-                      engine.updateClipTransform(selectedVideoClip.id, undefined, "contain");
-                      syncFromEngine();
-                    }}
-                    className={`px-3 py-1.5 rounded-xl text-xs font-semibold flex items-center gap-1.5 shrink-0 border transition-all active:scale-95 ${
-                      activeClipFitMode === "contain"
-                        ? "bg-amber-400 text-black border-amber-400"
-                        : "bg-[#1c1c1e] text-zinc-200 border-white/10"
-                    }`}
-                  >
-                    <Minimize2 className="w-3.5 h-3.5" />
-                    <span>9:16 Sığdır</span>
-                  </button>
+              <button
+                type="button"
+                onClick={() => {
+                  commitHistory();
+                  const curRot = selectedVideoClip.transform?.rotation ?? 0;
+                  engine.updateClipTransform(selectedVideoClip.id, {
+                    rotation: (curRot + 90) % 360,
+                  });
+                  syncFromEngine();
+                }}
+                className="px-3 py-1.5 rounded-xl text-xs font-semibold flex items-center gap-1 shrink-0 bg-[#1c1c1e] text-zinc-200 border border-white/10 active:scale-95"
+              >
+                <RotateCw className="w-3.5 h-3.5" />
+                <span>90°</span>
+              </button>
 
-                  <button
-                    type="button"
-                    onClick={() => {
-                      commitHistory();
-                      const curRot = selectedVideoClip.transform?.rotation ?? 0;
-                      engine.updateClipTransform(selectedVideoClip.id, {
-                        rotation: (curRot + 90) % 360,
-                      });
-                      syncFromEngine();
-                    }}
-                    className="px-3 py-1.5 rounded-xl text-xs font-semibold flex items-center gap-1.5 shrink-0 bg-[#1c1c1e] text-zinc-200 border border-white/10 active:scale-95"
-                  >
-                    <RotateCw className="w-3.5 h-3.5" />
-                    <span>90° Döndür</span>
-                  </button>
+              <button
+                type="button"
+                onClick={() => {
+                  commitHistory();
+                  const curFlip = Boolean(selectedVideoClip.transform?.flipH);
+                  engine.updateClipTransform(selectedVideoClip.id, {
+                    flipH: !curFlip,
+                  });
+                  syncFromEngine();
+                }}
+                className={`px-3 py-1.5 rounded-xl text-xs font-semibold flex items-center gap-1 shrink-0 border transition-all active:scale-95 ${
+                  selectedVideoClip.transform?.flipH
+                    ? "bg-amber-400 text-black border-amber-400"
+                    : "bg-[#1c1c1e] text-zinc-200 border-white/10"
+                }`}
+              >
+                <FlipHorizontal2 className="w-3.5 h-3.5" />
+                <span>Aynala</span>
+              </button>
 
-                  <button
-                    type="button"
-                    onClick={() => {
-                      commitHistory();
-                      const curFlip = Boolean(selectedVideoClip.transform?.flipH);
-                      engine.updateClipTransform(selectedVideoClip.id, {
-                        flipH: !curFlip,
-                      });
-                      syncFromEngine();
-                    }}
-                    className={`px-3 py-1.5 rounded-xl text-xs font-semibold flex items-center gap-1.5 shrink-0 border transition-all active:scale-95 ${
-                      selectedVideoClip.transform?.flipH
-                        ? "bg-amber-400 text-black border-amber-400"
-                        : "bg-[#1c1c1e] text-zinc-200 border-white/10"
-                    }`}
-                  >
-                    <FlipHorizontal2 className="w-3.5 h-3.5" />
-                    <span>Aynala</span>
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={() => {
-                      commitHistory();
-                      engine.resetClipTransform(selectedVideoClip.id);
-                      syncFromEngine();
-                    }}
-                    className="px-3 py-1.5 rounded-xl text-xs font-semibold flex items-center gap-1.5 shrink-0 bg-[#1c1c1e] text-zinc-300 border border-white/10 active:scale-95"
-                  >
-                    <RotateCcw className="w-3.5 h-3.5" />
-                    <span>Sıfırla</span>
-                  </button>
-                </>
-              )}
-
-              {selectedItemType === "photo" && selectedPhotoLayer && engine && (
-                <>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      selectedPhotoLayer.cycleShapeMode();
-                      engine.requestRender();
-                    }}
-                    className="px-3 py-1.5 rounded-xl text-xs font-semibold flex items-center gap-1.5 shrink-0 bg-[#1c1c1e] text-zinc-200 border border-white/10 active:scale-95"
-                  >
-                    <Crop className="w-3.5 h-3.5 text-amber-400" />
-                    <span>Çerçeve Şekli</span>
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={() => {
-                      selectedPhotoLayer.transform.rotation =
-                        (selectedPhotoLayer.transform.rotation + 90) % 360;
-                      engine.requestRender();
-                    }}
-                    className="px-3 py-1.5 rounded-xl text-xs font-semibold flex items-center gap-1.5 shrink-0 bg-[#1c1c1e] text-zinc-200 border border-white/10 active:scale-95"
-                  >
-                    <RotateCw className="w-3.5 h-3.5" />
-                    <span>90° Döndür</span>
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={() => {
-                      selectedPhotoLayer.transform = {
-                        x: 0.5,
-                        y: 0.5,
-                        scale: 1,
-                        rotation: 0,
-                      };
-                      engine.requestRender();
-                    }}
-                    className="px-3 py-1.5 rounded-xl text-xs font-semibold flex items-center gap-1.5 shrink-0 bg-[#1c1c1e] text-zinc-300 border border-white/10 active:scale-95"
-                  >
-                    <RotateCcw className="w-3.5 h-3.5" />
-                    <span>Sıfırla</span>
-                  </button>
-                </>
-              )}
+              <button
+                type="button"
+                onClick={() => {
+                  commitHistory();
+                  engine.resetClipTransform(selectedVideoClip.id);
+                  syncFromEngine();
+                }}
+                className="px-3 py-1.5 rounded-xl text-xs font-semibold flex items-center gap-1 shrink-0 bg-[#1c1c1e] text-zinc-300 border border-white/10 active:scale-95"
+              >
+                <RotateCcw className="w-3.5 h-3.5" />
+                <span>Sıfırla</span>
+              </button>
             </div>
 
-            {/* Yakınlaştırma (Zoom / Scale 1.0x - 3.0x) Slider */}
-            <div className="flex items-center gap-3 bg-[#16171b] rounded-2xl px-3.5 py-2 border border-white/5">
-              <span className="text-xs font-medium text-zinc-400 shrink-0">
-                Yakınlaştır
-              </span>
-              <input
-                type="range"
-                min={50}
-                max={300}
-                value={Math.round(activeClipScale * 100)}
-                onChange={(e) => {
-                  const nextScale = Number((Number(e.target.value) / 100).toFixed(2));
-                  if (selectedItemType === "video" && selectedVideoClip && engine) {
+            {/* Alt Satır: Yakınlaştırma (Zoom) + [ ✓ Bitti ] Butonu */}
+            <div className="flex items-center gap-2.5">
+              <div className="flex-1 flex items-center gap-2.5 bg-[#16171b] rounded-xl px-3 py-1.5 border border-white/5">
+                <span className="text-[11px] font-medium text-zinc-400 shrink-0">
+                  Yakınlaştır
+                </span>
+                <input
+                  type="range"
+                  min={50}
+                  max={300}
+                  value={Math.round(activeClipScale * 100)}
+                  onChange={(e) => {
+                    const nextScale = Number(
+                      (Number(e.target.value) / 100).toFixed(2)
+                    );
                     engine.updateClipTransform(selectedVideoClip.id, {
                       scale: nextScale,
                     });
                     syncFromEngine();
-                  } else if (selectedItemType === "photo" && selectedPhotoLayer && engine) {
-                    selectedPhotoLayer.transform.scale = nextScale;
-                    engine.requestRender();
-                    syncFromEngine();
-                  }
-                }}
-                className="flex-1 h-1.5 bg-white/15 rounded-lg appearance-none cursor-pointer accent-amber-400"
-              />
-              <span className="text-xs font-semibold text-white w-10 text-right tabular-nums">
-                {activeClipScale.toFixed(1)}x
-              </span>
-            </div>
-          </div>
-        )}
+                  }}
+                  className="flex-1 h-1.5 bg-white/15 rounded-lg appearance-none cursor-pointer accent-amber-400"
+                />
+                <span className="text-xs font-semibold text-white w-9 text-right tabular-nums">
+                  {activeClipScale.toFixed(1)}x
+                </span>
+              </div>
 
-      {activeStrip === "effects" && (
-        <div className="flex flex-col gap-2 px-4">
-          <div className="flex items-center gap-2 overflow-x-auto no-scrollbar">
-            {REELS_EFFECT_PRESETS.map((eff) => {
-              const active = selectedEffectClip
-                ? selectedEffectClip.effect === eff.id
-                : eff.id === "none"
-                  ? effectClips.length === 0 && activeReelsEffect === "none"
-                  : activeReelsEffect === eff.id;
-
-              return (
-                <button
-                  key={eff.id}
-                  type="button"
-                  onClick={() => handleSelectEffectPreset(eff.id)}
-                  className={`px-3.5 py-2 rounded-2xl text-xs font-semibold shrink-0 border transition-all active:scale-95 flex items-center gap-1.5 ${
-                    active
-                      ? "bg-white text-black border-white"
-                      : "bg-[#1c1c1e] text-zinc-300 border-white/5 hover:bg-[#26262a]"
-                  }`}
-                >
-                  {eff.id !== "none" && (
-                    <span
-                      className="w-2 h-2 rounded-full shrink-0"
-                      style={{ backgroundColor: eff.color }}
-                    />
-                  )}
-                  <span>{eff.name}</span>
-                </button>
-              );
-            })}
-
-            {selectedEffectClip && (
               <button
                 type="button"
-                onClick={() => {
-                  setSelectedItemId(null);
-                  setSelectedItemType(null);
-                }}
-                className="px-3.5 py-2 rounded-2xl text-xs font-semibold shrink-0 border border-white/15 text-white bg-[#1c1c1e] hover:bg-[#26262a] active:scale-95 flex items-center gap-1"
+                onClick={() => setActiveStrip("none")}
+                className="h-9 px-4 rounded-xl bg-amber-400 hover:bg-amber-300 text-black font-bold text-xs flex items-center gap-1.5 shrink-0 active:scale-95 transition-all shadow-lg"
               >
-                <Plus className="w-3.5 h-3.5" />
-                <span>Yeni Efekt Seç</span>
+                <Check className="w-4 h-4 stroke-[2.5]" />
+                <span>Bitti</span>
               </button>
-            )}
+            </div>
           </div>
+        </>
+      ) : (
+        <div className="fixed inset-x-0 bottom-0 z-40 bg-black pt-1.5 pb-5 flex flex-col gap-2.5 pointer-events-auto select-none">
+          {/* 1. Sabit Merkez İbreli (Fixed Center Playhead) ve 60 FPS Analog Kayar NLE Zaman Çizelgesi */}
+          <VideoTimelineNLE
+            clips={clips}
+            overlayItems={overlayItems}
+            effectClips={effectClips}
+            musicClip={selectedMusic}
+            totalDuration={totalDuration}
+            maxSourceDuration={maxSourceDuration}
+            currentTime={videoState.currentTime}
+            isPlaying={videoState.isPlaying}
+            thumbnails={thumbnails}
+            selectedItemId={selectedItemId}
+            selectedItemType={selectedItemType}
+            canUndo={historyStack.length > 0}
+            canRedo={redoStack.length > 0}
+            getCurrentTime={getCurrentTime}
+            onSelectItem={handleSelectItem}
+            onTrimClip={(clipId, newStart, newEnd) => {
+              engine?.updateClipTrim(clipId, newStart, newEnd);
+              syncFromEngine();
+            }}
+            onReorderClips={(fromIdx, toIdx) => {
+              engine?.reorderClips(fromIdx, toIdx);
+              syncFromEngine();
+            }}
+            onAppendClipClick={() => appendClipInputRef.current?.click()}
+            onChangeOverlayTiming={(layerId, start, end) => {
+              engine?.updateOverlayTrackTiming(layerId, start, end);
+              syncFromEngine();
+            }}
+            onReorderOverlayLayer={(layerId, direction) => {
+              commitHistory();
+              engine?.reorderOverlayLayer(layerId, direction);
+              syncFromEngine();
+            }}
+            onChangeEffectClips={onChangeEffectClips}
+            onChangeMusicTimeline={handleMusicTimelineChange}
+            onSeek={onSeek}
+            onPauseVideo={() => engine?.pauseVideo()}
+            onTogglePlay={onTogglePlay}
+            onUndo={handleUndo}
+            onRedo={handleRedo}
+            onOpenMusicPicker={onOpenMusicPicker}
+            onOpenTextEditor={onOpenTextEditor}
+            onQuickAddEffect={() => {
+              engine?.pauseVideo();
+              setActiveStrip("effects");
+            }}
+            onCommitHistory={commitHistory}
+          />
 
-          {selectedEffectClip && onChangeEffectClips && (
-            <div className="flex items-center gap-3 bg-[#16171b] rounded-2xl px-3.5 py-2 border border-white/5">
-              <span className="text-xs font-medium text-zinc-400 shrink-0">
-                Yoğunluk
-              </span>
-              <input
-                type="range"
-                min={15}
-                max={100}
-                value={selectedEffectClip.intensity}
-                onChange={(e) => {
-                  const val = Number(e.target.value);
-                  onChangeEffectClips(
-                    effectClips.map((c) =>
-                      c.id === selectedEffectClip.id
-                        ? { ...c, intensity: val }
-                        : c
-                    )
-                  );
-                }}
-                className="flex-1 h-1.5 bg-white/15 rounded-lg appearance-none cursor-pointer accent-white"
-              />
-              <span className="text-xs font-semibold text-white w-9 text-right tabular-nums">
-                {selectedEffectClip.intensity}%
-              </span>
-            </div>
-          )}
-        </div>
-      )}
-
-      {activeStrip === "audio_speed" && (
-        <div className="flex flex-col gap-2 px-4">
-          {selectedItemType === "audio" && selectedMusic ? (
-            <div className="flex items-center gap-3 bg-[#16171b] rounded-2xl px-3.5 py-2">
-              <Music className="w-4 h-4 text-sky-400 shrink-0" />
-              <span className="text-xs font-medium text-zinc-300 w-16 truncate shrink-0">
-                {selectedMusic.title}
-              </span>
-              <input
-                type="range"
-                min={0}
-                max={100}
-                value={effectiveMusicVolume}
-                onChange={(e) =>
-                  onChangeMusicVolume(Number(e.target.value) / 100)
-                }
-                className="flex-1 h-1.5 bg-white/15 rounded-lg appearance-none cursor-pointer accent-white"
-              />
-              <span className="text-xs font-semibold text-white w-9 text-right tabular-nums">
-                {effectiveMusicVolume}%
-              </span>
-            </div>
-          ) : (
-            <>
-              {/* Klip Hız Seçenekleri (0.5x - 2x) */}
-              <div className="grid grid-cols-4 gap-2">
-                {SPEED_OPTIONS.map((rate) => {
-                  const active = Math.abs(activeClipSpeed - rate) < 0.01;
-                  return (
+          {/* Alt Araç Şeritleri ve Butonlar: Dokunulduğunda veya kaydırıldığında videoyu otomatik durdurur */}
+          <div
+            onPointerDownCapture={() => engine?.pauseVideo()}
+            onWheelCapture={() => engine?.pauseVideo()}
+            className="flex flex-col gap-2.5"
+          >
+            {/* 2. Açılır Alt Ayar Şeridi (Fotoğraf Kırp / Efektler / Ses & Hız / Filtreler) */}
+            {activeStrip === "crop" &&
+              selectedItemType === "photo" &&
+              selectedPhotoLayer &&
+              engine && (
+                <div className="flex flex-col gap-2 px-4">
+                  <div className="flex items-center gap-2 overflow-x-auto no-scrollbar">
                     <button
-                      key={rate}
                       type="button"
                       onClick={() => {
-                        commitHistory();
-                        if (selectedVideoClip && engine) {
-                          engine.updateClipSpeed(selectedVideoClip.id, rate);
-                          syncFromEngine();
-                        } else {
-                          onChangeSpeed(rate);
-                        }
+                        selectedPhotoLayer.cycleShapeMode();
+                        engine.requestRender();
                       }}
-                      className={`py-1.5 rounded-xl text-xs font-bold border transition-all active:scale-95 ${
+                      className="px-3 py-1.5 rounded-xl text-xs font-semibold flex items-center gap-1.5 shrink-0 bg-[#1c1c1e] text-zinc-200 border border-white/10 active:scale-95"
+                    >
+                      <Crop className="w-3.5 h-3.5 text-amber-400" />
+                      <span>Çerçeve Şekli</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => {
+                        selectedPhotoLayer.transform.rotation =
+                          (selectedPhotoLayer.transform.rotation + 90) % 360;
+                        engine.requestRender();
+                      }}
+                      className="px-3 py-1.5 rounded-xl text-xs font-semibold flex items-center gap-1.5 shrink-0 bg-[#1c1c1e] text-zinc-200 border border-white/10 active:scale-95"
+                    >
+                      <RotateCw className="w-3.5 h-3.5" />
+                      <span>90° Döndür</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => {
+                        selectedPhotoLayer.transform = {
+                          x: 0.5,
+                          y: 0.5,
+                          scale: 1,
+                          rotation: 0,
+                        };
+                        engine.requestRender();
+                      }}
+                      className="px-3 py-1.5 rounded-xl text-xs font-semibold flex items-center gap-1.5 shrink-0 bg-[#1c1c1e] text-zinc-300 border border-white/10 active:scale-95"
+                    >
+                      <RotateCcw className="w-3.5 h-3.5" />
+                      <span>Sıfırla</span>
+                    </button>
+                  </div>
+
+                  <div className="flex items-center gap-3 bg-[#16171b] rounded-2xl px-3.5 py-2 border border-white/5">
+                    <span className="text-xs font-medium text-zinc-400 shrink-0">
+                      Yakınlaştır
+                    </span>
+                    <input
+                      type="range"
+                      min={50}
+                      max={300}
+                      value={Math.round(activeClipScale * 100)}
+                      onChange={(e) => {
+                        const nextScale = Number(
+                          (Number(e.target.value) / 100).toFixed(2)
+                        );
+                        selectedPhotoLayer.transform.scale = nextScale;
+                        engine.requestRender();
+                        syncFromEngine();
+                      }}
+                      className="flex-1 h-1.5 bg-white/15 rounded-lg appearance-none cursor-pointer accent-amber-400"
+                    />
+                    <span className="text-xs font-semibold text-white w-10 text-right tabular-nums">
+                      {activeClipScale.toFixed(1)}x
+                    </span>
+                  </div>
+                </div>
+              )}
+
+            {activeStrip === "effects" && (
+              <div className="flex flex-col gap-2 px-4">
+                {/* Eklenen Efektler Şeridi (Aynı anda veya farklı zamanlarda eklenen tüm efektler) */}
+                {effectClips.length > 0 && (
+                  <div className="flex items-center gap-1.5 overflow-x-auto no-scrollbar pb-0.5">
+                    {effectClips.map((fx) => {
+                      const preset = REELS_EFFECT_PRESETS.find(
+                        (p) => p.id === fx.effect
+                      );
+                      const isSel =
+                        selectedItemType === "effect" &&
+                        selectedItemId === fx.id;
+                      return (
+                        <div
+                          key={fx.id}
+                          className={`flex items-center gap-1.5 pl-2.5 pr-1.5 py-1 rounded-xl text-[11px] font-semibold shrink-0 border transition-all ${
+                            isSel
+                              ? "bg-amber-400 text-black border-amber-400"
+                              : "bg-[#16171b] text-zinc-200 border-white/15"
+                          }`}
+                        >
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setSelectedItemId(fx.id);
+                              setSelectedItemType("effect");
+                            }}
+                            className="flex items-center gap-1.5"
+                          >
+                            <span
+                              className="w-2 h-2 rounded-full shrink-0"
+                              style={{
+                                backgroundColor: preset?.color || "#a855f7",
+                              }}
+                            />
+                            <span>{preset?.name || fx.effect}</span>
+                            <span
+                              className={`text-[10px] tabular-nums ${
+                                isSel ? "text-black/70" : "text-zinc-400"
+                              }`}
+                            >
+                              {fx.startTime.toFixed(1)}s–{fx.endTime.toFixed(1)}s
+                            </span>
+                          </button>
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              commitHistory();
+                              onChangeEffectClips?.(
+                                effectClips.filter((c) => c.id !== fx.id)
+                              );
+                              if (selectedItemId === fx.id) {
+                                setSelectedItemId(null);
+                                setSelectedItemType(null);
+                              }
+                            }}
+                            className={`w-4 h-4 rounded-full flex items-center justify-center ${
+                              isSel
+                                ? "hover:bg-black/15 text-black"
+                                : "hover:bg-white/15 text-zinc-400"
+                            }`}
+                          >
+                            <X className="w-3 h-3" />
+                          </button>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+
+                {/* Efekt Ekleme Şeridi (Her dokunuşta ibre konumuna yeni efekt ekler) */}
+                <div className="flex items-center gap-2 overflow-x-auto no-scrollbar">
+                  {REELS_EFFECT_PRESETS.map((eff) => {
+                    const isNone = eff.id === "none";
+                    const active = isNone
+                      ? effectClips.length === 0 && activeReelsEffect === "none"
+                      : selectedEffectClip?.effect === eff.id;
+
+                    return (
+                      <button
+                        key={eff.id}
+                        type="button"
+                        onClick={() => handleSelectEffectPreset(eff.id)}
+                        className={`px-3.5 py-2 rounded-2xl text-xs font-semibold shrink-0 border transition-all active:scale-95 flex items-center gap-1.5 ${
+                          active
+                            ? "bg-white text-black border-white"
+                            : "bg-[#1c1c1e] text-zinc-300 border-white/5 hover:bg-[#26262a]"
+                        }`}
+                      >
+                        {!isNone && (
+                          <span
+                            className="w-2 h-2 rounded-full shrink-0"
+                            style={{ backgroundColor: eff.color }}
+                          />
+                        )}
+                        <span>{isNone ? "Temizle" : `+ ${eff.name}`}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+
+                {selectedEffectClip && onChangeEffectClips && (
+                  <div className="flex items-center gap-3 bg-[#16171b] rounded-2xl px-3.5 py-2 border border-white/5">
+                    <span className="text-xs font-medium text-zinc-400 shrink-0">
+                      Yoğunluk
+                    </span>
+                    <input
+                      type="range"
+                      min={15}
+                      max={100}
+                      value={selectedEffectClip.intensity}
+                      onChange={(e) => {
+                        const val = Number(e.target.value);
+                        onChangeEffectClips(
+                          effectClips.map((c) =>
+                            c.id === selectedEffectClip.id
+                              ? { ...c, intensity: val }
+                              : c
+                          )
+                        );
+                      }}
+                      className="flex-1 h-1.5 bg-white/15 rounded-lg appearance-none cursor-pointer accent-white"
+                    />
+                    <span className="text-xs font-semibold text-white w-9 text-right tabular-nums">
+                      {selectedEffectClip.intensity}%
+                    </span>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {activeStrip === "audio_speed" && (
+              <div className="flex flex-col gap-2 px-4">
+                {selectedItemType === "audio" && selectedMusic ? (
+                  <div className="flex items-center gap-3 bg-[#16171b] rounded-2xl px-3.5 py-2">
+                    <Music className="w-4 h-4 text-sky-400 shrink-0" />
+                    <span className="text-xs font-medium text-zinc-300 w-16 truncate shrink-0">
+                      {selectedMusic.title}
+                    </span>
+                    <input
+                      type="range"
+                      min={0}
+                      max={100}
+                      value={effectiveMusicVolume}
+                      onChange={(e) =>
+                        onChangeMusicVolume(Number(e.target.value) / 100)
+                      }
+                      className="flex-1 h-1.5 bg-white/15 rounded-lg appearance-none cursor-pointer accent-white"
+                    />
+                    <span className="text-xs font-semibold text-white w-9 text-right tabular-nums">
+                      {effectiveMusicVolume}%
+                    </span>
+                  </div>
+                ) : (
+                  <>
+                    {/* Klip Hız Seçenekleri (0.5x - 2x) */}
+                    <div className="grid grid-cols-4 gap-2">
+                      {SPEED_OPTIONS.map((rate) => {
+                        const active = Math.abs(activeClipSpeed - rate) < 0.01;
+                        return (
+                          <button
+                            key={rate}
+                            type="button"
+                            onClick={() => {
+                              commitHistory();
+                              if (selectedVideoClip && engine) {
+                                engine.updateClipSpeed(
+                                  selectedVideoClip.id,
+                                  rate
+                                );
+                                syncFromEngine();
+                              } else {
+                                onChangeSpeed(rate);
+                              }
+                            }}
+                            className={`py-1.5 rounded-xl text-xs font-bold border transition-all active:scale-95 ${
+                              active
+                                ? "bg-amber-400 text-black border-amber-400"
+                                : "bg-[#1c1c1e] text-white border-white/5 hover:bg-[#26262a]"
+                            }`}
+                          >
+                            {rate}x
+                          </button>
+                        );
+                      })}
+                    </div>
+
+                    {/* Klip Ses Seviyesi (0 - 100) */}
+                    {!videoState.isMotionPhoto && (
+                      <div className="flex items-center gap-3 bg-[#16171b] rounded-2xl px-3.5 py-2">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            commitHistory();
+                            const nextMuted = activeClipVolume > 0;
+                            const nextVol = nextMuted ? 0 : 1;
+                            if (selectedVideoClip && engine) {
+                              engine.updateClipVolume(
+                                selectedVideoClip.id,
+                                nextVol,
+                                nextMuted
+                              );
+                              syncFromEngine();
+                            } else {
+                              onChangeVolume(nextVol, nextMuted);
+                            }
+                          }}
+                          className="text-white shrink-0"
+                        >
+                          {activeClipVolume === 0 ? (
+                            <VolumeX className="w-4 h-4 text-red-400" />
+                          ) : (
+                            <Volume2 className="w-4 h-4 text-zinc-300" />
+                          )}
+                        </button>
+                        <span className="text-xs font-medium text-zinc-400 w-14 shrink-0">
+                          Klip Sesi
+                        </span>
+                        <input
+                          type="range"
+                          min={0}
+                          max={100}
+                          value={activeClipVolume}
+                          onChange={(e) => {
+                            const val = Number(e.target.value) / 100;
+                            if (selectedVideoClip && engine) {
+                              engine.updateClipVolume(
+                                selectedVideoClip.id,
+                                val,
+                                val === 0
+                              );
+                              syncFromEngine();
+                            } else {
+                              onChangeVolume(val, val === 0);
+                            }
+                          }}
+                          className="flex-1 h-1.5 bg-white/15 rounded-lg appearance-none cursor-pointer accent-white"
+                        />
+                        <span className="text-xs font-semibold text-white w-9 text-right tabular-nums">
+                          {activeClipVolume}%
+                        </span>
+                      </div>
+                    )}
+                  </>
+                )}
+              </div>
+            )}
+
+            {activeStrip === "filters" && (
+              <div className="flex items-center gap-2 overflow-x-auto no-scrollbar px-4">
+                {FILTER_PRESETS.map((preset, idx) => {
+                  const active = activeFilterIndex === idx;
+                  return (
+                    <button
+                      key={preset.id}
+                      type="button"
+                      onClick={() => onSelectFilterIndex(idx)}
+                      className={`px-4 py-2 rounded-2xl text-xs font-semibold shrink-0 border transition-all active:scale-95 ${
                         active
-                          ? "bg-amber-400 text-black border-amber-400"
-                          : "bg-[#1c1c1e] text-white border-white/5 hover:bg-[#26262a]"
+                          ? "bg-white text-black border-white"
+                          : "bg-[#1c1c1e] text-zinc-300 border-white/5 hover:bg-[#26262a]"
                       }`}
                     >
-                      {rate}x
+                      {preset.name}
                     </button>
                   );
                 })}
               </div>
+            )}
 
-              {/* Klip Ses Seviyesi (0 - 100) */}
-              {!videoState.isMotionPhoto && (
-                <div className="flex items-center gap-3 bg-[#16171b] rounded-2xl px-3.5 py-2">
+            {/* 3. DİNAMİK ALT ARAÇ ÇUBUĞU (Contextual Action Toolbar) */}
+            {selectedItemId && selectedItemType ? (
+              /* BİR KLİP VEYA KATMAN SEÇİLİYKEN: [ ✂️ Böl ] [ 🗑️ Sil ] [ 📐 Kırp ] [ 🔊 Ses / Hız ] [ 📑 Kopyala ] */
+              <div className="flex items-center justify-between gap-2 px-4 pt-0.5">
+                {selectedItemType !== "audio" && (
                   <button
                     type="button"
-                    onClick={() => {
-                      commitHistory();
-                      const nextMuted = activeClipVolume > 0;
-                      const nextVol = nextMuted ? 0 : 1;
-                      if (selectedVideoClip && engine) {
-                        engine.updateClipVolume(
-                          selectedVideoClip.id,
-                          nextVol,
-                          nextMuted
-                        );
-                        syncFromEngine();
-                      } else {
-                        onChangeVolume(nextVol, nextMuted);
-                      }
-                    }}
-                    className="text-white shrink-0"
+                    onClick={handleSplitSelected}
+                    disabled={!canSplitSelected}
+                    className="flex-1 flex flex-col items-center gap-1 disabled:opacity-35 group"
                   >
-                    {activeClipVolume === 0 ? (
-                      <VolumeX className="w-4 h-4 text-red-400" />
-                    ) : (
-                      <Volume2 className="w-4 h-4 text-zinc-300" />
-                    )}
+                    <div className="w-full h-11 rounded-2xl bg-[#1c1c1e] group-hover:bg-[#26262a] flex items-center justify-center text-white transition-all active:scale-95">
+                      <Scissors className="w-4 h-4" />
+                    </div>
+                    <span className="text-[11px] font-medium text-zinc-200">
+                      Böl
+                    </span>
                   </button>
-                  <span className="text-xs font-medium text-zinc-400 w-14 shrink-0">
-                    Klip Sesi
+                )}
+
+                <button
+                  type="button"
+                  onClick={handleDeleteSelected}
+                  disabled={selectedItemType === "video" && clips.length <= 1}
+                  className="flex-1 flex flex-col items-center gap-1 disabled:opacity-35 group"
+                >
+                  <div className="w-full h-11 rounded-2xl bg-red-500/15 hover:bg-red-500/25 border border-red-500/25 flex items-center justify-center text-red-400 transition-all active:scale-95">
+                    <Trash2 className="w-4 h-4" />
+                  </div>
+                  <span className="text-[11px] font-medium text-red-300">
+                    Sil
                   </span>
-                  <input
-                    type="range"
-                    min={0}
-                    max={100}
-                    value={activeClipVolume}
-                    onChange={(e) => {
-                      const val = Number(e.target.value) / 100;
-                      if (selectedVideoClip && engine) {
-                        engine.updateClipVolume(
-                          selectedVideoClip.id,
-                          val,
-                          val === 0
-                        );
-                        syncFromEngine();
-                      } else {
-                        onChangeVolume(val, val === 0);
-                      }
-                    }}
-                    className="flex-1 h-1.5 bg-white/15 rounded-lg appearance-none cursor-pointer accent-white"
-                  />
-                  <span className="text-xs font-semibold text-white w-9 text-right tabular-nums">
-                    {activeClipVolume}%
+                </button>
+
+                {(selectedItemType === "video" ||
+                  selectedItemType === "photo") && (
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setActiveStrip((p) => (p === "crop" ? "none" : "crop"))
+                    }
+                    className="flex-1 flex flex-col items-center gap-1 group"
+                  >
+                    <div
+                      className={`w-full h-11 rounded-2xl flex items-center justify-center transition-all active:scale-95 ${
+                        activeStrip === "crop"
+                          ? "bg-amber-400 text-black"
+                          : "bg-[#1c1c1e] group-hover:bg-[#26262a] text-white"
+                      }`}
+                    >
+                      <Crop className="w-4 h-4" />
+                    </div>
+                    <span className="text-[11px] font-medium text-zinc-200">
+                      Kırp
+                    </span>
+                  </button>
+                )}
+
+                {(selectedItemType === "video" ||
+                  selectedItemType === "audio") && (
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setActiveStrip((p) =>
+                        p === "audio_speed" ? "none" : "audio_speed"
+                      )
+                    }
+                    className="flex-1 flex flex-col items-center gap-1 group"
+                  >
+                    <div
+                      className={`w-full h-11 rounded-2xl flex items-center justify-center transition-all active:scale-95 ${
+                        activeStrip === "audio_speed"
+                          ? "bg-amber-400 text-black"
+                          : "bg-[#1c1c1e] group-hover:bg-[#26262a] text-white"
+                      }`}
+                    >
+                      <Gauge className="w-4 h-4" />
+                    </div>
+                    <span className="text-[11px] font-medium text-zinc-200">
+                      Ses / Hız
+                    </span>
+                  </button>
+                )}
+
+                {selectedItemType !== "audio" && (
+                  <button
+                    type="button"
+                    onClick={handleDuplicateSelected}
+                    className="flex-1 flex flex-col items-center gap-1 group"
+                  >
+                    <div className="w-full h-11 rounded-2xl bg-[#1c1c1e] group-hover:bg-[#26262a] flex items-center justify-center text-white transition-all active:scale-95">
+                      <Copy className="w-4 h-4" />
+                    </div>
+                    <span className="text-[11px] font-medium text-zinc-200">
+                      Kopyala
+                    </span>
+                  </button>
+                )}
+
+                <button
+                  type="button"
+                  onClick={() => handleSelectItem(null, null)}
+                  className="flex flex-col items-center gap-1 shrink-0 group"
+                >
+                  <div className="w-11 h-11 rounded-2xl bg-white/10 hover:bg-white/15 flex items-center justify-center text-zinc-300 transition-all active:scale-95">
+                    <X className="w-4 h-4" />
+                  </div>
+                  <span className="text-[11px] font-medium text-zinc-400">
+                    Bitti
                   </span>
-                </div>
-              )}
-            </>
-          )}
+                </button>
+              </div>
+            ) : (
+              /* HİÇBİR ÖĞE SEÇİLİ DEĞİLKEN: [ 📝 Metin ] [ 🌟 Sticker ] [ 🖼️ Fotoğraf ] [ 🎵 Müzik ] [ ⚡ Efektler ] [ 🎨 Filtre ] */
+              <div className="flex items-start justify-between gap-2 overflow-x-auto no-scrollbar px-4 pt-0.5">
+                <button
+                  type="button"
+                  onClick={onOpenTextEditor}
+                  className="flex flex-col items-center gap-1 shrink-0 group"
+                >
+                  <div className="w-14 h-11 rounded-2xl bg-[#1c1c1e] group-hover:bg-[#26262a] flex items-center justify-center text-white transition-all active:scale-95">
+                    <Type className="w-4 h-4" />
+                  </div>
+                  <span className="text-[11px] font-medium text-zinc-200">
+                    Metin
+                  </span>
+                </button>
+
+                {onOpenStickerSheet && (
+                  <button
+                    type="button"
+                    onClick={onOpenStickerSheet}
+                    className="flex flex-col items-center gap-1 shrink-0 group"
+                  >
+                    <div className="w-14 h-11 rounded-2xl bg-[#1c1c1e] group-hover:bg-[#26262a] flex items-center justify-center text-white transition-all active:scale-95">
+                      <Sticker className="w-4 h-4" />
+                    </div>
+                    <span className="text-[11px] font-medium text-zinc-200">
+                      Sticker
+                    </span>
+                  </button>
+                )}
+
+                {onOpenPhotoOverlay && (
+                  <button
+                    type="button"
+                    onClick={onOpenPhotoOverlay}
+                    className="flex flex-col items-center gap-1 shrink-0 group"
+                  >
+                    <div className="w-14 h-11 rounded-2xl bg-[#1c1c1e] group-hover:bg-[#26262a] flex items-center justify-center text-white transition-all active:scale-95">
+                      <ImageIcon className="w-4 h-4" />
+                    </div>
+                    <span className="text-[11px] font-medium text-zinc-200">
+                      Fotoğraf
+                    </span>
+                  </button>
+                )}
+
+                <button
+                  type="button"
+                  onClick={onOpenMusicPicker}
+                  className="flex flex-col items-center gap-1 shrink-0 group"
+                >
+                  <div
+                    className={`w-14 h-11 rounded-2xl flex items-center justify-center transition-all active:scale-95 ${
+                      selectedMusic
+                        ? "bg-white text-black"
+                        : "bg-[#1c1c1e] group-hover:bg-[#26262a] text-white"
+                    }`}
+                  >
+                    <Music className="w-4 h-4" />
+                  </div>
+                  <span className="text-[11px] font-medium text-zinc-200">
+                    Müzik
+                  </span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() =>
+                    setActiveStrip((p) => (p === "effects" ? "none" : "effects"))
+                  }
+                  className="flex flex-col items-center gap-1 shrink-0 group"
+                >
+                  <div
+                    className={`w-14 h-11 rounded-2xl flex items-center justify-center transition-all active:scale-95 ${
+                      activeStrip === "effects" ||
+                      activeReelsEffect !== "none" ||
+                      effectClips.length > 0
+                        ? "bg-white text-black"
+                        : "bg-[#1c1c1e] group-hover:bg-[#26262a] text-white"
+                    }`}
+                  >
+                    <Sparkles className="w-4 h-4" />
+                  </div>
+                  <span className="text-[11px] font-medium text-zinc-200">
+                    Efektler
+                  </span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() =>
+                    setActiveStrip((p) => (p === "filters" ? "none" : "filters"))
+                  }
+                  className="flex flex-col items-center gap-1 shrink-0 group"
+                >
+                  <div
+                    className={`w-14 h-11 rounded-2xl flex items-center justify-center transition-all active:scale-95 ${
+                      activeStrip === "filters" || activeFilterIndex > 0
+                        ? "bg-white text-black"
+                        : "bg-[#1c1c1e] group-hover:bg-[#26262a] text-white"
+                    }`}
+                  >
+                    <Palette className="w-4 h-4" />
+                  </div>
+                  <span className="text-[11px] font-medium text-zinc-200">
+                    Filtre
+                  </span>
+                </button>
+              </div>
+            )}
+          </div>
         </div>
       )}
-
-      {activeStrip === "filters" && (
-        <div className="flex items-center gap-2 overflow-x-auto no-scrollbar px-4">
-          {FILTER_PRESETS.map((preset, idx) => {
-            const active = activeFilterIndex === idx;
-            return (
-              <button
-                key={preset.id}
-                type="button"
-                onClick={() => onSelectFilterIndex(idx)}
-                className={`px-4 py-2 rounded-2xl text-xs font-semibold shrink-0 border transition-all active:scale-95 ${
-                  active
-                    ? "bg-white text-black border-white"
-                    : "bg-[#1c1c1e] text-zinc-300 border-white/5 hover:bg-[#26262a]"
-                }`}
-              >
-                {preset.name}
-              </button>
-            );
-          })}
-        </div>
-      )}
-
-      {/* 3. DİNAMİK ALT ARAÇ ÇUBUĞU (Contextual Action Toolbar) */}
-      {selectedItemId && selectedItemType ? (
-        /* BİR KLİP VEYA KATMAN SEÇİLİYKEN: [ ✂️ Böl ] [ 🗑️ Sil ] [ 📐 Kırp ] [ 🔊 Ses / Hız ] [ 📑 Kopyala ] */
-        <div className="flex items-center justify-between gap-2 px-4 pt-0.5">
-          {selectedItemType !== "audio" && (
-            <button
-              type="button"
-              onClick={handleSplitSelected}
-              disabled={!canSplitSelected}
-              className="flex-1 flex flex-col items-center gap-1 disabled:opacity-35 group"
-            >
-              <div className="w-full h-11 rounded-2xl bg-[#1c1c1e] group-hover:bg-[#26262a] flex items-center justify-center text-white transition-all active:scale-95">
-                <Scissors className="w-4 h-4" />
-              </div>
-              <span className="text-[11px] font-medium text-zinc-200">Böl</span>
-            </button>
-          )}
-
-          <button
-            type="button"
-            onClick={handleDeleteSelected}
-            disabled={selectedItemType === "video" && clips.length <= 1}
-            className="flex-1 flex flex-col items-center gap-1 disabled:opacity-35 group"
-          >
-            <div className="w-full h-11 rounded-2xl bg-red-500/15 hover:bg-red-500/25 border border-red-500/25 flex items-center justify-center text-red-400 transition-all active:scale-95">
-              <Trash2 className="w-4 h-4" />
-            </div>
-            <span className="text-[11px] font-medium text-red-300">Sil</span>
-          </button>
-
-          {(selectedItemType === "video" || selectedItemType === "photo") && (
-            <button
-              type="button"
-              onClick={() =>
-                setActiveStrip((p) => (p === "crop" ? "none" : "crop"))
-              }
-              className="flex-1 flex flex-col items-center gap-1 group"
-            >
-              <div
-                className={`w-full h-11 rounded-2xl flex items-center justify-center transition-all active:scale-95 ${
-                  activeStrip === "crop"
-                    ? "bg-amber-400 text-black"
-                    : "bg-[#1c1c1e] group-hover:bg-[#26262a] text-white"
-                }`}
-              >
-                <Crop className="w-4 h-4" />
-              </div>
-              <span className="text-[11px] font-medium text-zinc-200">
-                Kırp
-              </span>
-            </button>
-          )}
-
-          {(selectedItemType === "video" || selectedItemType === "audio") && (
-            <button
-              type="button"
-              onClick={() =>
-                setActiveStrip((p) =>
-                  p === "audio_speed" ? "none" : "audio_speed"
-                )
-              }
-              className="flex-1 flex flex-col items-center gap-1 group"
-            >
-              <div
-                className={`w-full h-11 rounded-2xl flex items-center justify-center transition-all active:scale-95 ${
-                  activeStrip === "audio_speed"
-                    ? "bg-amber-400 text-black"
-                    : "bg-[#1c1c1e] group-hover:bg-[#26262a] text-white"
-                }`}
-              >
-                <Gauge className="w-4 h-4" />
-              </div>
-              <span className="text-[11px] font-medium text-zinc-200">
-                Ses / Hız
-              </span>
-            </button>
-          )}
-
-          {selectedItemType !== "audio" && (
-            <button
-              type="button"
-              onClick={handleDuplicateSelected}
-              className="flex-1 flex flex-col items-center gap-1 group"
-            >
-              <div className="w-full h-11 rounded-2xl bg-[#1c1c1e] group-hover:bg-[#26262a] flex items-center justify-center text-white transition-all active:scale-95">
-                <Copy className="w-4 h-4" />
-              </div>
-              <span className="text-[11px] font-medium text-zinc-200">
-                Kopyala
-              </span>
-            </button>
-          )}
-
-          <button
-            type="button"
-            onClick={() => handleSelectItem(null, null)}
-            className="flex flex-col items-center gap-1 shrink-0 group"
-          >
-            <div className="w-11 h-11 rounded-2xl bg-white/10 hover:bg-white/15 flex items-center justify-center text-zinc-300 transition-all active:scale-95">
-              <X className="w-4 h-4" />
-            </div>
-            <span className="text-[11px] font-medium text-zinc-400">Bitti</span>
-          </button>
-        </div>
-      ) : (
-        /* HİÇBİR ÖĞE SEÇİLİ DEĞİLKEN: [ 📝 Metin ] [ 🌟 Sticker ] [ 🖼️ Fotoğraf ] [ 🎵 Müzik ] [ ⚡ Efektler ] [ 🎨 Filtre ] */
-        <div className="flex items-start justify-between gap-2 overflow-x-auto no-scrollbar px-4 pt-0.5">
-          <button
-            type="button"
-            onClick={onOpenTextEditor}
-            className="flex flex-col items-center gap-1 shrink-0 group"
-          >
-            <div className="w-14 h-11 rounded-2xl bg-[#1c1c1e] group-hover:bg-[#26262a] flex items-center justify-center text-white transition-all active:scale-95">
-              <Type className="w-4 h-4" />
-            </div>
-            <span className="text-[11px] font-medium text-zinc-200">Metin</span>
-          </button>
-
-          {onOpenStickerSheet && (
-            <button
-              type="button"
-              onClick={onOpenStickerSheet}
-              className="flex flex-col items-center gap-1 shrink-0 group"
-            >
-              <div className="w-14 h-11 rounded-2xl bg-[#1c1c1e] group-hover:bg-[#26262a] flex items-center justify-center text-white transition-all active:scale-95">
-                <Sticker className="w-4 h-4" />
-              </div>
-              <span className="text-[11px] font-medium text-zinc-200">
-                Sticker
-              </span>
-            </button>
-          )}
-
-          {onOpenPhotoOverlay && (
-            <button
-              type="button"
-              onClick={onOpenPhotoOverlay}
-              className="flex flex-col items-center gap-1 shrink-0 group"
-            >
-              <div className="w-14 h-11 rounded-2xl bg-[#1c1c1e] group-hover:bg-[#26262a] flex items-center justify-center text-white transition-all active:scale-95">
-                <ImageIcon className="w-4 h-4" />
-              </div>
-              <span className="text-[11px] font-medium text-zinc-200">
-                Fotoğraf
-              </span>
-            </button>
-          )}
-
-          <button
-            type="button"
-            onClick={onOpenMusicPicker}
-            className="flex flex-col items-center gap-1 shrink-0 group"
-          >
-            <div
-              className={`w-14 h-11 rounded-2xl flex items-center justify-center transition-all active:scale-95 ${
-                selectedMusic
-                  ? "bg-white text-black"
-                  : "bg-[#1c1c1e] group-hover:bg-[#26262a] text-white"
-              }`}
-            >
-              <Music className="w-4 h-4" />
-            </div>
-            <span className="text-[11px] font-medium text-zinc-200">Müzik</span>
-          </button>
-
-          <button
-            type="button"
-            onClick={() =>
-              setActiveStrip((p) => (p === "effects" ? "none" : "effects"))
-            }
-            className="flex flex-col items-center gap-1 shrink-0 group"
-          >
-            <div
-              className={`w-14 h-11 rounded-2xl flex items-center justify-center transition-all active:scale-95 ${
-                activeStrip === "effects" ||
-                activeReelsEffect !== "none" ||
-                effectClips.length > 0
-                  ? "bg-white text-black"
-                  : "bg-[#1c1c1e] group-hover:bg-[#26262a] text-white"
-              }`}
-            >
-              <Sparkles className="w-4 h-4" />
-            </div>
-            <span className="text-[11px] font-medium text-zinc-200">
-              Efektler
-            </span>
-          </button>
-
-          <button
-            type="button"
-            onClick={() =>
-              setActiveStrip((p) => (p === "filters" ? "none" : "filters"))
-            }
-            className="flex flex-col items-center gap-1 shrink-0 group"
-          >
-            <div
-              className={`w-14 h-11 rounded-2xl flex items-center justify-center transition-all active:scale-95 ${
-                activeStrip === "filters" || activeFilterIndex > 0
-                  ? "bg-white text-black"
-                  : "bg-[#1c1c1e] group-hover:bg-[#26262a] text-white"
-              }`}
-            >
-              <Palette className="w-4 h-4" />
-            </div>
-            <span className="text-[11px] font-medium text-zinc-200">
-              Filtre
-            </span>
-          </button>
-        </div>
-      )}
-      </div>
     </>
   );
 }
