@@ -11,6 +11,7 @@ import {
   OverlayEffect,
   PostAdjustmentState,
   Rect,
+  ReelsEffectClip,
   ReelsEffectId,
 } from '../types';
 import { ImageAdjustmentsEngine } from '../image-adjustments';
@@ -52,38 +53,24 @@ export class MediaLayer extends BaseLayer {
   public virtualPlaying: boolean = false;
   public postAdjustments: PostAdjustmentState = { ...DEFAULT_POST_ADJUSTMENTS };
   public reelsEffect: ReelsEffectId = 'none';
+  public effectClips: ReelsEffectClip[] = [];
   // [END] CREATED BY Bedirhan
 
   private animFrameId: number | null = null;
   private onRenderCallback: (() => void) | null = null;
-
-  private static noiseCanvas: HTMLCanvasElement | null = null;
   private pixelCanvas: HTMLCanvasElement | null = null;
 
-  private static getNoiseCanvas(): HTMLCanvasElement | null {
-    if (MediaLayer.noiseCanvas) return MediaLayer.noiseCanvas;
-    if (typeof document === 'undefined') return null;
-
-    const noiseCanvas = document.createElement('canvas');
-    noiseCanvas.width = 128;
-    noiseCanvas.height = 128;
-    const nCtx = noiseCanvas.getContext('2d');
-    if (!nCtx) return null;
-
-    const imgData = nCtx.createImageData(128, 128);
-    const data = imgData.data;
-    for (let i = 0; i < data.length; i += 4) {
-      const val = (Math.random() * 255) | 0;
-      data[i] = val;
-      data[i + 1] = val;
-      data[i + 2] = val;
-      data[i + 3] = 255;
-    }
-    nCtx.putImageData(imgData, 0, 0);
-
-    MediaLayer.noiseCanvas = noiseCanvas;
-    return MediaLayer.noiseCanvas;
+  // [START] CREATED BY Bedirhan
+  public isTimeDependentEffect(): boolean {
+    return (
+      this.effectClips.length > 0 ||
+      this.reelsEffect === 'zoom_pulse' ||
+      this.reelsEffect === 'glitch' ||
+      this.reelsEffect === 'flash' ||
+      this.reelsEffect === 'shake'
+    );
   }
+  // [END] CREATED BY Bedirhan
 
   // [MODIFIED BY Bedirhan]
   constructor(media: EditorMedia, options?: { fitMode?: FitMode; filters?: Partial<MediaFilters> }) {
@@ -277,7 +264,6 @@ export class MediaLayer extends BaseLayer {
     }
 
     const filterStr = this.getFilterString();
-    ctx.filter = filterStr;
 
     // A. Taban Çizim Kaynağı (Lo-Res: 1/6 oranında küçültülüp yumuşatma kapalı tekrar büyütülür)
     let drawSource: CanvasImageSource = this.media.element;
@@ -290,12 +276,15 @@ export class MediaLayer extends BaseLayer {
       if (!this.pixelCanvas) {
         this.pixelCanvas = document.createElement('canvas');
       }
-      this.pixelCanvas.width = offW;
-      this.pixelCanvas.height = offH;
+      if (this.pixelCanvas.width !== offW || this.pixelCanvas.height !== offH) {
+        this.pixelCanvas.width = offW;
+        this.pixelCanvas.height = offH;
+      }
 
       const offCtx = this.pixelCanvas.getContext('2d');
       if (offCtx) {
         offCtx.imageSmoothingEnabled = false;
+        offCtx.clearRect(0, 0, offW, offH);
         offCtx.drawImage(this.media.element, 0, 0, offW, offH);
         drawSource = this.pixelCanvas;
         usePixelated = true;
@@ -310,7 +299,8 @@ export class MediaLayer extends BaseLayer {
     // [MODIFIED BY Bedirhan]
     const hasCustomAdjustments =
       !ImageAdjustmentsEngine.isDefaultAdjustments(this.postAdjustments) ||
-      this.reelsEffect !== 'none';
+      this.reelsEffect !== 'none' ||
+      this.effectClips.length > 0;
 
     if (hasCustomAdjustments) {
       ImageAdjustmentsEngine.renderAdjustedMedia(
@@ -324,10 +314,13 @@ export class MediaLayer extends BaseLayer {
         },
         this.postAdjustments,
         this.reelsEffect,
-        this.getCurrentTime()
+        this.getCurrentTime(),
+        filterStr,
+        this.effectClips
       );
     } else {
       // Ana çizim
+      ctx.filter = filterStr;
       ctx.drawImage(
         drawSource,
         -dims.width / 2,
@@ -335,6 +328,7 @@ export class MediaLayer extends BaseLayer {
         dims.width,
         dims.height
       );
+      ctx.filter = 'none';
     }
 
     if (usePixelated) {
@@ -400,19 +394,15 @@ export class MediaLayer extends BaseLayer {
     // Filtre stringini sıfırla (gren dokusu filtrelenmesin)
     ctx.filter = 'none';
 
-    // E. Grainy (128x128 film kumu deseni %12 opaklıkla döşenir)
+    // E. Grainy (Önceden üretilmiş tek offscreen noise canvas overlay olarak basılır)
     if (this.activeEffect === 'grain') {
-      const nCanvas = MediaLayer.getNoiseCanvas();
+      const nCanvas = ImageAdjustmentsEngine.getGrainCanvas();
       if (nCanvas) {
-        const pattern = ctx.createPattern(nCanvas, 'repeat');
-        if (pattern) {
-          ctx.save();
-          ctx.globalCompositeOperation = 'overlay';
-          ctx.globalAlpha = 0.12; // Tam %12 analog film kumu
-          ctx.fillStyle = pattern;
-          ctx.fillRect(-dims.width / 2, -dims.height / 2, dims.width, dims.height);
-          ctx.restore();
-        }
+        ctx.save();
+        ctx.globalCompositeOperation = 'overlay';
+        ctx.globalAlpha = 0.22;
+        ctx.drawImage(nCanvas, -dims.width / 2, -dims.height / 2, dims.width, dims.height);
+        ctx.restore();
       }
     }
 
@@ -450,6 +440,14 @@ export class MediaLayer extends BaseLayer {
 
   public setReelsEffect(effect: ReelsEffectId): void {
     this.reelsEffect = effect;
+  }
+
+  public setEffectClips(clips: ReelsEffectClip[]): void {
+    this.effectClips = clips.map((c) => ({ ...c }));
+  }
+
+  public getEffectClips(): ReelsEffectClip[] {
+    return this.effectClips.map((c) => ({ ...c }));
   }
 
   public getVideoElement(): HTMLVideoElement | null {
@@ -539,28 +537,19 @@ export class MediaLayer extends BaseLayer {
     const video = this.getVideoElement();
     if (!video) return;
 
-    if (Math.abs(video.currentTime - clamped) < 0.002 && video.readyState >= 2 && !video.seeking) {
+    // 60 FPS export sırasında aynı kaynak kare içindeysek (10ms tolerans) gereksiz GOP seek yapma
+    if (Math.abs(video.currentTime - clamped) < 0.01 && video.readyState >= 2 && !video.seeking) {
       return;
     }
 
     return new Promise<void>((resolve) => {
       let settled = false;
-      let rvfcId: number | null = null;
-      const anyVideo = video as HTMLVideoElement & {
-        requestVideoFrameCallback?: (cb: () => void) => number;
-        cancelVideoFrameCallback?: (id: number) => void;
-      };
 
       const finish = () => {
         if (settled) return;
         settled = true;
         clearTimeout(timer);
         video.removeEventListener('seeked', onSeeked);
-        if (rvfcId !== null && typeof anyVideo.cancelVideoFrameCallback === 'function') {
-          try {
-            anyVideo.cancelVideoFrameCallback(rvfcId);
-          } catch {}
-        }
         resolve();
       };
 
@@ -568,13 +557,8 @@ export class MediaLayer extends BaseLayer {
         finish();
       };
 
-      const timer = setTimeout(finish, 250);
+      const timer = setTimeout(finish, 110);
       video.addEventListener('seeked', onSeeked, { once: true });
-      if (typeof anyVideo.requestVideoFrameCallback === 'function') {
-        rvfcId = anyVideo.requestVideoFrameCallback(() => {
-          if (!video.seeking) finish();
-        });
-      }
       video.currentTime = clamped;
     });
   }

@@ -41,10 +41,10 @@ export class MediaRecorderFallback {
       throw new Error('Aktif medya bir video değil');
     }
 
-    const width = options?.width || 720;
-    const height = options?.height || 1280;
-    const fps = options?.fps || 30;
-    const bitrate = options?.bitrate || 4_000_000;
+    const width = options?.width || 1080;
+    const height = options?.height || 1920;
+    const fps = options?.fps || 60;
+    const bitrate = options?.bitrate || 12_000_000;
     const signal = options?.signal;
 
     const exportCanvas = document.createElement('canvas');

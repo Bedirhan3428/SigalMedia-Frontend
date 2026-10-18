@@ -1,8 +1,10 @@
 // [START] CREATED BY Bedirhan
+// [MODIFIED BY Bedirhan]
 import {
   DEFAULT_POST_ADJUSTMENTS,
   PostAdjustmentState,
   PostStudioFilterId,
+  ReelsEffectClip,
   ReelsEffectId,
   Rect,
 } from './types';
@@ -72,40 +74,65 @@ export const POST_STUDIO_FILTERS: PostStudioFilterConfig[] = [
 export interface ReelsEffectConfig {
   id: ReelsEffectId;
   name: string;
+  color: string;
 }
 
 export const REELS_EFFECT_PRESETS: ReelsEffectConfig[] = [
-  { id: 'none', name: 'Yok' },
-  { id: 'glitch', name: 'Glitch' },
-  { id: 'zoom_pulse', name: 'Zoom' },
-  { id: 'flash', name: 'Flash' },
-  { id: 'rgb_shift', name: 'RGB Kayma' },
-  { id: 'vhs_grain', name: 'VHS Gren' },
+  { id: 'none', name: 'Yok', color: '#71717a' },
+  { id: 'glitch', name: 'Glitch', color: '#ec4899' },
+  { id: 'zoom_pulse', name: 'Zoom Darbe', color: '#8b5cf6' },
+  { id: 'flash', name: 'Flaş Vuruş', color: '#f59e0b' },
+  { id: 'shake', name: 'Sarsıntı', color: '#10b981' },
+  { id: 'rgb_shift', name: 'RGB Kayma', color: '#06b6d4' },
+  { id: 'cyber_neon', name: 'Cyber Neon', color: '#d946ef' },
+  { id: 'cinema_warm', name: 'Sinema', color: '#f97316' },
+  { id: 'vhs_grain', name: 'VHS Gren', color: '#a855f7' },
 ];
 
+// [MODIFIED BY Bedirhan]
 export class ImageAdjustmentsEngine {
   private static grainCanvas: HTMLCanvasElement | null = null;
 
-  private static getGrainCanvas(): HTMLCanvasElement | null {
+  /**
+   * Önceden üretilmiş (pre-rendered) tek bir offscreen noise canvas döndürür.
+   * getImageData / putImageData CPU piksel döngüsü kullanmadan GPU 2D primitifleriyle bir kez üretilir ve önbelleğe alınır.
+   */
+  public static getGrainCanvas(): HTMLCanvasElement | null {
     if (this.grainCanvas) return this.grainCanvas;
     if (typeof document === 'undefined') return null;
 
+    const size = 160;
     const canvas = document.createElement('canvas');
-    canvas.width = 128;
-    canvas.height = 128;
+    canvas.width = size;
+    canvas.height = size;
     const ctx = canvas.getContext('2d');
     if (!ctx) return null;
 
-    const imgData = ctx.createImageData(128, 128);
-    const d = imgData.data;
-    for (let i = 0; i < d.length; i += 4) {
-      const v = (Math.random() * 255) | 0;
-      d[i] = v;
-      d[i + 1] = v;
-      d[i + 2] = v;
-      d[i + 3] = 255;
+    // Nötr %50 gri taban (overlay modunda nötr görünmez taban)
+    ctx.fillStyle = 'rgb(128,128,128)';
+    ctx.fillRect(0, 0, size, size);
+
+    // Tek seferlik deterministik film greni dokusu
+    let seed = 1337;
+    const nextRand = () => {
+      seed = (seed * 16807) % 2147483647;
+      return (seed - 1) / 2147483646;
+    };
+
+    ctx.fillStyle = 'rgba(255,255,255,0.28)';
+    for (let i = 0; i < 1800; i++) {
+      const x = (nextRand() * size) | 0;
+      const y = (nextRand() * size) | 0;
+      ctx.fillRect(x, y, 1, 1);
     }
-    ctx.putImageData(imgData, 0, 0);
+
+    ctx.fillStyle = 'rgba(0,0,0,0.28)';
+    for (let i = 0; i < 1800; i++) {
+      const x = (nextRand() * size) | 0;
+      const y = (nextRand() * size) | 0;
+      ctx.fillRect(x, y, 1, 1);
+    }
+
     this.grainCanvas = canvas;
     return canvas;
   }
@@ -126,23 +153,42 @@ export class ImageAdjustmentsEngine {
     );
   }
 
-  public static buildCssFilter(adj: PostAdjustmentState): string {
+  /**
+   * Parlaklık, kontrast, doygunluk ve sıcaklık (warmth) işlemlerini
+   * doğrudan GPU hızlandırmalı tek bir Canvas 2D `ctx.filter` string birleştirmesiyle üretir.
+   */
+  public static buildCssFilter(
+    adj: PostAdjustmentState,
+    baseFilter = 'none',
+    activeEffects: Array<{ effect: ReelsEffectId; weight: number }> = []
+  ): string {
     const parts: string[] = [];
+    if (baseFilter && baseFilter !== 'none') {
+      parts.push(baseFilter);
+    }
 
     const b = Math.max(0.2, 1 + adj.brightness / 150);
-    const c = Math.max(0.2, 1 + adj.contrast / 130 + adj.sharpness / 350);
-    const s = Math.max(0, 1 + adj.saturation / 100);
+    const c = Math.max(0.2, 1 + adj.contrast / 130 + adj.sharpness / 260);
+    const warmSatBoost = adj.warmth !== 0 ? (adj.warmth / 100) * 0.14 : 0;
+    const s = Math.max(0, 1 + adj.saturation / 100 + warmSatBoost);
 
     if (Math.abs(b - 1) > 0.005) parts.push(`brightness(${b.toFixed(3)})`);
     if (Math.abs(c - 1) > 0.005) parts.push(`contrast(${c.toFixed(3)})`);
     if (Math.abs(s - 1) > 0.005) parts.push(`saturate(${s.toFixed(3)})`);
 
-    if (adj.warmth > 0) {
-      const sepiaAmt = (adj.warmth / 100) * 0.28;
-      parts.push(`sepia(${sepiaAmt.toFixed(3)})`);
-    } else if (adj.warmth < 0) {
-      const hueShift = (adj.warmth / 100) * 18;
-      parts.push(`hue-rotate(${hueShift.toFixed(1)}deg)`);
+    // Sıcaklık (Warmth): GPU filter birleştirmesi (sepia + hue-rotate)
+    if (adj.warmth > 0.5) {
+      const sepiaAmt = (adj.warmth / 100) * 0.32;
+      const hueDeg = -(adj.warmth / 100) * 6;
+      parts.push(`sepia(${sepiaAmt.toFixed(3)}) hue-rotate(${hueDeg.toFixed(1)}deg)`);
+    } else if (adj.warmth < -0.5) {
+      const hueDeg = (adj.warmth / 100) * 22;
+      parts.push(`hue-rotate(${hueDeg.toFixed(1)}deg)`);
+    }
+
+    if (adj.bokehGlow > 2) {
+      const blurPx = ((adj.bokehGlow / 100) * 3.5).toFixed(2);
+      parts.push(`blur(${blurPx}px)`);
     }
 
     const studioPreset = POST_STUDIO_FILTERS.find((f) => f.id === adj.filterPreset);
@@ -150,7 +196,46 @@ export class ImageAdjustmentsEngine {
       parts.push(studioPreset.cssFilter);
     }
 
+    for (let i = 0; i < activeEffects.length; i++) {
+      const item = activeEffects[i];
+      if (item.effect === 'cyber_neon') {
+        parts.push(
+          `saturate(${(1 + 0.65 * item.weight).toFixed(2)}) contrast(${(1 + 0.22 * item.weight).toFixed(2)}) hue-rotate(${Math.round(-18 * item.weight)}deg)`
+        );
+      } else if (item.effect === 'cinema_warm') {
+        parts.push(
+          `sepia(${(0.26 * item.weight).toFixed(2)}) contrast(${(1 + 0.18 * item.weight).toFixed(2)}) saturate(${(1 + 0.2 * item.weight).toFixed(2)})`
+        );
+      }
+    }
+
     return parts.length > 0 ? parts.join(' ') : 'none';
+  }
+
+  public static resolveActiveEffects(
+    reelsEffect: ReelsEffectId,
+    effectClips: ReelsEffectClip[] | undefined,
+    timeSec: number
+  ): Array<{ effect: ReelsEffectId; weight: number }> {
+    const active: Array<{ effect: ReelsEffectId; weight: number }> = [];
+    if (effectClips && effectClips.length > 0) {
+      for (let i = 0; i < effectClips.length; i++) {
+        const clip = effectClips[i];
+        if (
+          clip.effect !== 'none' &&
+          timeSec >= clip.startTime - 0.01 &&
+          timeSec <= clip.endTime + 0.01
+        ) {
+          active.push({
+            effect: clip.effect,
+            weight: Math.max(0.1, Math.min(1, (clip.intensity ?? 80) / 100)),
+          });
+        }
+      }
+    } else if (reelsEffect !== 'none') {
+      active.push({ effect: reelsEffect, weight: 0.85 });
+    }
+    return active;
   }
 
   public static renderAdjustedMedia(
@@ -159,22 +244,31 @@ export class ImageAdjustmentsEngine {
     box: Rect,
     adjustments?: PostAdjustmentState | null,
     reelsEffect: ReelsEffectId = 'none',
-    timeSec = 0
+    timeSec = 0,
+    baseFilter = 'none',
+    effectClips?: ReelsEffectClip[]
   ): void {
     const adj = adjustments || DEFAULT_POST_ADJUSTMENTS;
-    const baseFilter = this.buildCssFilter(adj);
+    const activeEffects = this.resolveActiveEffects(reelsEffect, effectClips, timeSec);
+    const combinedFilter = this.buildCssFilter(adj, baseFilter, activeEffects);
 
     ctx.save();
-    if (baseFilter !== 'none') {
-      ctx.filter = baseFilter;
+    ctx.filter = combinedFilter;
+
+    // Reels Dinamik Hareket Efektleri (Zoom Pulse & Kamera Sarsıntısı)
+    for (let i = 0; i < activeEffects.length; i++) {
+      const { effect, weight } = activeEffects[i];
+      if (effect === 'zoom_pulse') {
+        const pulse = 1 + Math.sin(timeSec * Math.PI * 4.2) * (0.055 * weight);
+        ctx.scale(pulse, pulse);
+      } else if (effect === 'shake') {
+        const dx = Math.sin(timeSec * 46) * (14 * weight);
+        const dy = Math.cos(timeSec * 39) * (10 * weight);
+        ctx.translate(dx, dy);
+      }
     }
 
-    // Reels Dinamik Hareket Efektleri (Zoom Pulse)
-    if (reelsEffect === 'zoom_pulse') {
-      const pulse = 1 + Math.sin(timeSec * Math.PI * 3.5) * 0.035;
-      ctx.scale(pulse, pulse);
-    }
-
+    // Tek geçişli GPU hızlandırmalı ana çizim (parlaklık + kontrast + doygunluk + sıcaklık + filtre)
     ctx.drawImage(source, box.x, box.y, box.width, box.height);
     ctx.filter = 'none';
 
@@ -189,37 +283,7 @@ export class ImageAdjustmentsEngine {
       ctx.restore();
     }
 
-    // 2. Sıcaklık (Warmth / Temperature) Renk Katmanı
-    if (Math.abs(adj.warmth) > 1) {
-      ctx.save();
-      ctx.globalCompositeOperation = 'soft-light';
-      ctx.globalAlpha = (Math.abs(adj.warmth) / 100) * 0.28;
-      ctx.fillStyle = adj.warmth > 0 ? '#ff8a1e' : '#2589ff';
-      ctx.fillRect(box.x, box.y, box.width, box.height);
-      ctx.restore();
-    }
-
-    // 3. Keskinlik (Sharpness) Mikro Kontrast Katmanı
-    if (adj.sharpness > 2) {
-      ctx.save();
-      ctx.globalCompositeOperation = 'overlay';
-      ctx.globalAlpha = (adj.sharpness / 100) * 0.22;
-      ctx.filter = 'contrast(1.45) grayscale(1)';
-      ctx.drawImage(source, box.x, box.y, box.width, box.height);
-      ctx.restore();
-    }
-
-    // 4. Yumuşak Odak (Bokeh Glow)
-    if (adj.bokehGlow > 2) {
-      ctx.save();
-      ctx.globalCompositeOperation = 'screen';
-      ctx.globalAlpha = (adj.bokehGlow / 100) * 0.35;
-      ctx.filter = `blur(${Math.max(2, (adj.bokehGlow / 100) * 14).toFixed(1)}px) brightness(1.1)`;
-      ctx.drawImage(source, box.x, box.y, box.width, box.height);
-      ctx.restore();
-    }
-
-    // 5. Işık Sızıntısı (Light Leak)
+    // 2. Işık Sızıntısı (Light Leak)
     if (adj.lightLeak > 2) {
       ctx.save();
       ctx.globalCompositeOperation = 'screen';
@@ -239,7 +303,7 @@ export class ImageAdjustmentsEngine {
       ctx.restore();
     }
 
-    // 6. Vinyet (Kenar Karartma)
+    // 3. Vignette (radialGradient)
     if (adj.vignette > 2) {
       ctx.save();
       ctx.globalCompositeOperation = 'multiply';
@@ -253,39 +317,56 @@ export class ImageAdjustmentsEngine {
       ctx.restore();
     }
 
-    // 7. Film Greni (Grain) veya VHS Gren
-    const effectiveGrain = reelsEffect === 'vhs_grain' ? Math.max(adj.grain, 45) : adj.grain;
+    // 4. Grain: Önceden üretilmiş (pre-rendered) tek bir offscreen noise canvas'ı globalCompositeOperation = 'overlay' ile bas
+    let vhsWeight = 0;
+    for (let i = 0; i < activeEffects.length; i++) {
+      if (activeEffects[i].effect === 'vhs_grain') {
+        vhsWeight = Math.max(vhsWeight, activeEffects[i].weight);
+      }
+    }
+    const effectiveGrain = vhsWeight > 0 ? Math.max(adj.grain, Math.round(65 * vhsWeight)) : adj.grain;
     if (effectiveGrain > 2) {
       const gCanvas = this.getGrainCanvas();
       if (gCanvas) {
-        const pattern = ctx.createPattern(gCanvas, 'repeat');
-        if (pattern) {
-          ctx.save();
-          ctx.globalCompositeOperation = 'overlay';
-          ctx.globalAlpha = (effectiveGrain / 100) * 0.22;
-          ctx.fillStyle = pattern;
-          ctx.fillRect(box.x, box.y, box.width, box.height);
-          ctx.restore();
-        }
+        ctx.save();
+        ctx.globalCompositeOperation = 'overlay';
+        ctx.globalAlpha = (effectiveGrain / 100) * 0.35;
+        ctx.drawImage(gCanvas, box.x, box.y, box.width, box.height);
+        ctx.restore();
       }
     }
 
-    // 8. Reels Efektleri: Glitch / RGB Shift / Flash
-    if (reelsEffect === 'rgb_shift' || reelsEffect === 'glitch') {
-      const offset = reelsEffect === 'glitch'
-        ? Math.sin(timeSec * 28) * 10
-        : 6;
-      ctx.save();
-      ctx.globalCompositeOperation = 'screen';
-      ctx.globalAlpha = 0.28;
-      ctx.drawImage(source, box.x - offset, box.y, box.width, box.height);
-      ctx.drawImage(source, box.x + offset, box.y, box.width, box.height);
-      ctx.restore();
-    } else if (reelsEffect === 'flash') {
-      const flashAlpha = Math.max(0, Math.sin(timeSec * Math.PI * 4)) * 0.35;
-      if (flashAlpha > 0.02) {
+    // 5. Reels Efektleri: Glitch / RGB Shift / Flash / Cyber Neon
+    for (let i = 0; i < activeEffects.length; i++) {
+      const { effect, weight } = activeEffects[i];
+      if (effect === 'rgb_shift' || effect === 'glitch') {
+        const offset =
+          effect === 'glitch'
+            ? Math.sin(timeSec * 34) * (14 * weight)
+            : 8 * weight;
         ctx.save();
-        ctx.fillStyle = `rgba(255,255,255,${flashAlpha.toFixed(3)})`;
+        ctx.globalCompositeOperation = 'screen';
+        ctx.globalAlpha = 0.32 * weight;
+        ctx.drawImage(source, box.x - offset, box.y, box.width, box.height);
+        ctx.drawImage(source, box.x + offset, box.y, box.width, box.height);
+        ctx.restore();
+      } else if (effect === 'flash') {
+        const flashAlpha = Math.max(0, Math.sin(timeSec * Math.PI * 5)) * (0.48 * weight);
+        if (flashAlpha > 0.015) {
+          ctx.save();
+          ctx.fillStyle = `rgba(255,255,255,${flashAlpha.toFixed(3)})`;
+          ctx.fillRect(box.x, box.y, box.width, box.height);
+          ctx.restore();
+        }
+      } else if (effect === 'cyber_neon') {
+        ctx.save();
+        ctx.globalCompositeOperation = 'overlay';
+        ctx.globalAlpha = 0.22 * weight;
+        const neonGrad = ctx.createLinearGradient(box.x, box.y, box.x + box.width, box.y + box.height);
+        neonGrad.addColorStop(0, '#ec4899');
+        neonGrad.addColorStop(0.5, 'rgba(6, 182, 212, 0.4)');
+        neonGrad.addColorStop(1, '#8b5cf6');
+        ctx.fillStyle = neonGrad;
         ctx.fillRect(box.x, box.y, box.width, box.height);
         ctx.restore();
       }

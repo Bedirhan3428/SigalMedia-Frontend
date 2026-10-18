@@ -24,6 +24,7 @@ import {
   ShareMode,
   PostAdjustmentState,
   DEFAULT_POST_ADJUSTMENTS,
+  ReelsEffectClip,
   ReelsEffectId,
   FILTER_PRESETS,
 } from "@/lib/canvas-editor";
@@ -116,6 +117,8 @@ export default function ShareStoryPage() {
   const [postAdjustments, setPostAdjustments] = useState<PostAdjustmentState>(DEFAULT_POST_ADJUSTMENTS);
   const [activeFilterIndex, setActiveFilterIndex] = useState<number>(0);
   const [activeReelsEffect, setActiveReelsEffect] = useState<ReelsEffectId>("none");
+  const [effectClips, setEffectClips] = useState<ReelsEffectClip[]>([]);
+  const previewAudioRef = useRef<HTMLAudioElement | null>(null);
   // [END] CREATED BY Bedirhan
 
   // Editör Durumları
@@ -257,6 +260,11 @@ export default function ShareStoryPage() {
     setPostAdjustments(DEFAULT_POST_ADJUSTMENTS);
     setActiveFilterIndex(0);
     setActiveReelsEffect("none");
+    setEffectClips([]);
+    if (previewAudioRef.current) {
+      previewAudioRef.current.pause();
+      previewAudioRef.current.src = "";
+    }
     setShowExitConfirm(false);
   }, []);
 
@@ -265,8 +273,101 @@ export default function ShareStoryPage() {
     return () => {
       exportAbortRef.current?.abort();
       thumbAbortRef.current?.abort();
+      if (previewAudioRef.current) {
+        previewAudioRef.current.pause();
+        previewAudioRef.current.src = "";
+      }
     };
   }, []);
+
+  // [START] CREATED BY Bedirhan
+  // Canlı Önizleme Ses Senkronizasyonu: Timeline üzerindeki şarkı kesimi (timelineStart..timelineEnd) ile birebir senkronize çalar
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    if (!previewAudioRef.current) {
+      previewAudioRef.current = new Audio();
+      previewAudioRef.current.crossOrigin = "anonymous";
+      previewAudioRef.current.preload = "auto";
+    }
+    const audio = previewAudioRef.current;
+
+    if (!selectedMusic?.streamUrl || !hasMedia || isExportingVideo || isMusicDrawerOpen) {
+      if (!audio.paused) audio.pause();
+      return;
+    }
+
+    if (audio.src !== selectedMusic.streamUrl) {
+      audio.src = selectedMusic.streamUrl;
+    }
+    audio.volume = Math.max(0, Math.min(1, musicVolume));
+
+    let rafId: number | null = null;
+    const syncAudioTick = () => {
+      const eng = engineRef.current;
+      if (!eng || !selectedMusic) return;
+
+      if (!videoState.isVideo) {
+        if (audio.paused) {
+          audio.currentTime = selectedMusic.startTime || 0;
+          audio.play().catch(() => {});
+        }
+        return;
+      }
+
+      if (!videoState.isPlaying) {
+        if (!audio.paused) audio.pause();
+        return;
+      }
+
+      const cur = eng.getCurrentTime();
+      const clipStart =
+        typeof selectedMusic.timelineStart === "number"
+          ? selectedMusic.timelineStart
+          : videoState.trimStart;
+      const clipEnd =
+        typeof selectedMusic.timelineEnd === "number" &&
+        selectedMusic.timelineEnd > clipStart
+          ? selectedMusic.timelineEnd
+          : videoState.trimEnd || videoState.duration;
+
+      if (cur >= clipStart && cur <= clipEnd) {
+        const expectedSongTime =
+          Math.max(0, selectedMusic.startTime || 0) + Math.max(0, cur - clipStart);
+        if (Math.abs(audio.currentTime - expectedSongTime) > 0.35) {
+          try {
+            audio.currentTime = expectedSongTime;
+          } catch {}
+        }
+        if (audio.paused) {
+          audio.play().catch(() => {});
+        }
+      } else {
+        if (!audio.paused) audio.pause();
+      }
+
+      rafId = requestAnimationFrame(syncAudioTick);
+    };
+
+    rafId = requestAnimationFrame(syncAudioTick);
+    return () => {
+      if (rafId !== null) cancelAnimationFrame(rafId);
+      if (previewAudioRef.current && !previewAudioRef.current.paused) {
+        previewAudioRef.current.pause();
+      }
+    };
+  }, [
+    hasMedia,
+    isExportingVideo,
+    isMusicDrawerOpen,
+    musicVolume,
+    selectedMusic,
+    videoState.duration,
+    videoState.isPlaying,
+    videoState.isVideo,
+    videoState.trimEnd,
+    videoState.trimStart,
+  ]);
+  // [END] CREATED BY Bedirhan
   
 
   // Geri Butonu Tıklaması
@@ -515,6 +616,13 @@ export default function ShareStoryPage() {
     engine.setReelsEffect(effect);
     setActiveReelsEffect(effect);
   }, []);
+
+  const handleChangeEffectClips = useCallback((clips: ReelsEffectClip[]) => {
+    const engine = engineRef.current;
+    if (!engine) return;
+    engine.setEffectClips(clips);
+    setEffectClips(clips);
+  }, []);
   // [END] CREATED BY Bedirhan
 
   // [MODIFIED BY Bedirhan]
@@ -563,6 +671,7 @@ export default function ShareStoryPage() {
       setPostAdjustments(engine.getPostAdjustments());
       setActiveFilterIndex(engine.getCurrentFilterIndex());
       setActiveReelsEffect(engine.getReelsEffect());
+      setEffectClips(engine.getEffectClips());
       e.target.value = "";
 
       if (media.type === "video") {
@@ -737,10 +846,24 @@ export default function ShareStoryPage() {
 
   // Şarkıyı Seç ve Tuvale Çıkartma Olarak Ekle
   const handleSelectMusic = (meta: StoryAudioMeta) => {
-    setSelectedMusic(meta);
     const engine = getOrCreateEngine();
+    const vState = engine ? engine.getVideoState() : videoState;
+    const defaultStart = vState.isVideo ? vState.trimStart : 0;
+    const defaultEnd = vState.isVideo
+      ? vState.trimEnd || vState.duration || 15
+      : 15;
+    const enrichedMeta: StoryAudioMeta = {
+      ...meta,
+      timelineStart:
+        typeof meta.timelineStart === "number" ? meta.timelineStart : defaultStart,
+      timelineEnd:
+        typeof meta.timelineEnd === "number" && meta.timelineEnd > defaultStart
+          ? meta.timelineEnd
+          : defaultEnd,
+    };
+    setSelectedMusic(enrichedMeta);
     if (engine) {
-      engine.addMusicSticker(meta, 0.5, 0.65);
+      engine.addMusicSticker(enrichedMeta, 0.5, 0.65);
     }
   };
 
@@ -1082,11 +1205,15 @@ export default function ShareStoryPage() {
             musicVolume={musicVolume}
             activeFilterIndex={activeFilterIndex}
             activeReelsEffect={activeReelsEffect}
+            effectClips={effectClips}
             isPublishing={isPublishing}
+            getCurrentTime={() => engineRef.current?.getCurrentTime() || 0}
             onChangeTrim={(start, end) => engineRef.current?.setTrim(start, end)}
             onChangeSpeed={(rate) => engineRef.current?.setSpeed(rate)}
             onChangeVolume={(vol, muted) => engineRef.current?.setVolume(vol, muted)}
             onChangeMusicVolume={(vol) => setMusicVolume(vol)}
+            onChangeMusicMeta={(nextMusic) => setSelectedMusic(nextMusic)}
+            onChangeEffectClips={handleChangeEffectClips}
             onSeek={(t) => engineRef.current?.seekVideo(t)}
             onTogglePlay={() => engineRef.current?.toggleVideoPlay()}
             onOpenTextEditor={() => openTextEditor()}

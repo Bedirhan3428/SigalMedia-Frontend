@@ -29,7 +29,18 @@ export type ReelsEffectId =
   | 'zoom_pulse'
   | 'flash'
   | 'rgb_shift'
-  | 'vhs_grain';
+  | 'vhs_grain'
+  | 'shake'
+  | 'cyber_neon'
+  | 'cinema_warm';
+
+export interface ReelsEffectClip {
+  id: string;
+  effect: ReelsEffectId;
+  startTime: number;
+  endTime: number;
+  intensity: number; // 0 .. 100
+}
 
 export interface PostAdjustmentState {
   brightness: number;   // -100 .. +100 (0 default)
@@ -102,6 +113,7 @@ export type OverlayShapeMode = 'original' | 'rounded' | 'circle' | 'polaroid' | 
 export type FontPreset = 'modern' | 'classic' | 'neon' | 'typewriter' | 'heavy';
 export type TextBgPreset = 'none' | 'solid' | 'translucent' | 'neon';
 
+// [MODIFIED BY Bedirhan]
 export interface StoryAudioMeta {
   id: string;
   title: string;
@@ -113,6 +125,8 @@ export interface StoryAudioMeta {
   duration: number;
   totalDuration: number;
   lyricsSnippet?: string;
+  timelineStart?: number;
+  timelineEnd?: number;
 }
 
 export interface SnapGuideState {

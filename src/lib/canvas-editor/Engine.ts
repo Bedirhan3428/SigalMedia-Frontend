@@ -21,6 +21,7 @@ import {
   ShareMode,
   PostAdjustmentState,
   DEFAULT_POST_ADJUSTMENTS,
+  ReelsEffectClip,
   ReelsEffectId,
 } from './types';
 
@@ -36,6 +37,7 @@ export type EngineEventMap = {
   'drag-end': [info: { layer: BaseLayer; clientX: number; clientY: number }];
   'snap-guide': [snap: SnapGuideState];
   'video-time': [state: VideoState];
+  'video-progress': [currentTime: number];
 };
 
 export type EngineEvent = keyof EngineEventMap;
@@ -50,6 +52,7 @@ export class CanvasEngine {
 
   private mediaLayer: MediaLayer | null = null;
   private overlayLayers: BaseLayer[] = [];
+  private cachedAllLayers: BaseLayer[] = [];
   private interactionManager: InteractionManager;
 
   private isDirty = false;
@@ -65,6 +68,15 @@ export class CanvasEngine {
   private isExportingVideo = false;
   private shareMode: ShareMode = 'story';
   private lastVirtualTickTime: number = 0;
+
+  // 5sn Fotoğraf->Video Statik Katman Offscreen Önbelleği (Tek Seferlik Tahsis)
+  private staticSceneCacheCanvas: HTMLCanvasElement | null = null;
+  private staticSceneCacheCtx: CanvasRenderingContext2D | null = null;
+  private staticSceneCacheDirty = true;
+
+  private overlayCacheCanvas: HTMLCanvasElement | null = null;
+  private overlayCacheCtx: CanvasRenderingContext2D | null = null;
+  private overlayCacheDirty = true;
   // [END] CREATED BY Bedirhan
 
   constructor(options: EngineOptions) {
@@ -84,6 +96,7 @@ export class CanvasEngine {
       getLayers: () => this.getAllLayers(),
       getContext: () => this.ctx,
       onStateChange: () => {
+        this.invalidateStaticCache();
         this.requestRender();
         this.emit('change');
       },
@@ -94,6 +107,7 @@ export class CanvasEngine {
         this.emit('double-tap', layer);
       },
       onSingleTapLayer: (layer) => {
+        this.invalidateStaticCache();
         this.emit('single-tap', layer);
       },
       onFilterSwipe: (direction) => {
@@ -107,9 +121,11 @@ export class CanvasEngine {
         this.setSnapGuide(snap);
       },
       onDragMove: (info) => {
+        this.invalidateStaticCache();
         this.emit('drag-move', info);
       },
       onDragEnd: (info) => {
+        this.invalidateStaticCache();
         this.emit('drag-end', info);
       }
     });
@@ -117,13 +133,32 @@ export class CanvasEngine {
     this.requestRender();
   }
 
-  public updateCanvasResolution(width?: number, height?: number) {
-    if (width) this.width = width;
-    if (height) this.height = height;
+  // [START] CREATED BY Bedirhan
+  public invalidateStaticCache(): void {
+    this.staticSceneCacheDirty = true;
+    this.overlayCacheDirty = true;
+  }
+  // [END] CREATED BY Bedirhan
 
-    this.canvas.width = this.width;
-    this.canvas.height = this.height;
-    this.requestRender();
+  // [MODIFIED BY Bedirhan]
+  public updateCanvasResolution(width?: number, height?: number) {
+    const nextW = width || this.width;
+    const nextH = height || this.height;
+    const changed =
+      nextW !== this.width ||
+      nextH !== this.height ||
+      this.canvas.width !== nextW ||
+      this.canvas.height !== nextH;
+
+    this.width = nextW;
+    this.height = nextH;
+
+    if (changed) {
+      this.canvas.width = this.width;
+      this.canvas.height = this.height;
+      this.invalidateStaticCache();
+      this.requestRender();
+    }
   }
 
   public getWidth(): number {
@@ -134,16 +169,20 @@ export class CanvasEngine {
     return this.height;
   }
 
+  // [MODIFIED BY Bedirhan]
   public getAllLayers(): BaseLayer[] {
-    const list: BaseLayer[] = [];
-    if (this.mediaLayer) list.push(this.mediaLayer);
-    list.push(...this.overlayLayers);
-    return list;
+    this.cachedAllLayers.length = 0;
+    if (this.mediaLayer) this.cachedAllLayers.push(this.mediaLayer);
+    for (let i = 0; i < this.overlayLayers.length; i++) {
+      this.cachedAllLayers.push(this.overlayLayers[i]);
+    }
+    return this.cachedAllLayers;
   }
 
   // [START] CREATED BY Bedirhan
   public setShareMode(mode: ShareMode) {
     this.shareMode = mode;
+    this.invalidateStaticCache();
     if (mode === 'story' && this.mediaLayer && this.mediaLayer.media.type === 'video') {
       const dur = this.mediaLayer.getDuration();
       this.mediaLayer.trimStart = 0;
@@ -259,6 +298,7 @@ export class CanvasEngine {
   public setPostAdjustments(adj: Partial<PostAdjustmentState>) {
     if (!this.mediaLayer) return;
     this.mediaLayer.setPostAdjustments(adj);
+    this.invalidateStaticCache();
     this.render();
     this.requestRender();
     this.emit('change');
@@ -267,6 +307,7 @@ export class CanvasEngine {
   public resetPostAdjustments() {
     if (!this.mediaLayer) return;
     this.mediaLayer.resetPostAdjustments();
+    this.invalidateStaticCache();
     this.render();
     this.requestRender();
     this.emit('change');
@@ -279,6 +320,7 @@ export class CanvasEngine {
   public setReelsEffect(effect: ReelsEffectId) {
     if (!this.mediaLayer) return;
     this.mediaLayer.setReelsEffect(effect);
+    this.invalidateStaticCache();
     this.render();
     this.requestRender();
     this.emit('change');
@@ -286,6 +328,19 @@ export class CanvasEngine {
 
   public getReelsEffect(): ReelsEffectId {
     return this.mediaLayer ? this.mediaLayer.reelsEffect : 'none';
+  }
+
+  public setEffectClips(clips: ReelsEffectClip[]) {
+    if (!this.mediaLayer) return;
+    this.mediaLayer.setEffectClips(clips);
+    this.invalidateStaticCache();
+    this.render();
+    this.requestRender();
+    this.emit('change');
+  }
+
+  public getEffectClips(): ReelsEffectClip[] {
+    return this.mediaLayer ? this.mediaLayer.getEffectClips() : [];
   }
   // [END] CREATED BY Bedirhan
 
@@ -537,24 +592,101 @@ export class CanvasEngine {
     ctx.fillRect(0, 0, width, height);
   }
 
+  // [MODIFIED BY Bedirhan]
+  private ensureStaticSceneCache(width: number, height: number): HTMLCanvasElement | null {
+    if (typeof document === 'undefined') return null;
+    if (!this.staticSceneCacheCanvas) {
+      this.staticSceneCacheCanvas = document.createElement('canvas');
+      this.staticSceneCacheCtx = this.staticSceneCacheCanvas.getContext('2d');
+      this.staticSceneCacheDirty = true;
+    }
+    if (
+      this.staticSceneCacheCanvas.width !== width ||
+      this.staticSceneCacheCanvas.height !== height
+    ) {
+      this.staticSceneCacheCanvas.width = width;
+      this.staticSceneCacheCanvas.height = height;
+      this.staticSceneCacheDirty = true;
+    }
+    if (this.staticSceneCacheDirty && this.staticSceneCacheCtx) {
+      const cCtx = this.staticSceneCacheCtx;
+      cCtx.clearRect(0, 0, width, height);
+      this.renderAmbientBackground(cCtx, width, height);
+      if (this.mediaLayer && this.mediaLayer.visible) {
+        this.mediaLayer.render(cCtx, width, height);
+      }
+      for (let i = 0; i < this.overlayLayers.length; i++) {
+        const layer = this.overlayLayers[i];
+        if (layer.visible) {
+          layer.render(cCtx, width, height);
+        }
+      }
+      this.staticSceneCacheDirty = false;
+    }
+    return this.staticSceneCacheCanvas;
+  }
+
+  private ensureOverlayCache(width: number, height: number): HTMLCanvasElement | null {
+    if (typeof document === 'undefined' || this.overlayLayers.length === 0) return null;
+    if (!this.overlayCacheCanvas) {
+      this.overlayCacheCanvas = document.createElement('canvas');
+      this.overlayCacheCtx = this.overlayCacheCanvas.getContext('2d');
+      this.overlayCacheDirty = true;
+    }
+    if (
+      this.overlayCacheCanvas.width !== width ||
+      this.overlayCacheCanvas.height !== height
+    ) {
+      this.overlayCacheCanvas.width = width;
+      this.overlayCacheCanvas.height = height;
+      this.overlayCacheDirty = true;
+    }
+    if (this.overlayCacheDirty && this.overlayCacheCtx) {
+      const oCtx = this.overlayCacheCtx;
+      oCtx.clearRect(0, 0, width, height);
+      for (let i = 0; i < this.overlayLayers.length; i++) {
+        const layer = this.overlayLayers[i];
+        if (layer.visible) {
+          layer.render(oCtx, width, height);
+        }
+      }
+      this.overlayCacheDirty = false;
+    }
+    return this.overlayCacheCanvas;
+  }
+
   public render() {
     this.ctx.clearRect(0, 0, this.width, this.height);
 
-    // 1. Aktif filtreye özel dinamik ışık süzmesi ve atmosferik arka plan
-    this.renderAmbientBackground(this.ctx, this.width, this.height);
+    const ml = this.mediaLayer;
+    const sel = this.interactionManager.getSelectedLayer();
 
-    // 2. Katmanlar (Görsel / Metin / Çıkartmalar)
-    const layers = this.getAllLayers();
-    for (const layer of layers) {
-      if (layer.visible) {
-        layer.render(this.ctx, this.width, this.height);
+    // 5sn statik fotoğraf->video modunda değişmeyen katmanları tek offscreen tampondan bas
+    if (ml && ml.isMotionPhoto && !ml.isTimeDependentEffect() && !ml.isInteracting) {
+      const cached = this.ensureStaticSceneCache(this.width, this.height);
+      if (cached) {
+        this.ctx.drawImage(cached, 0, 0, this.width, this.height);
+      }
+    } else {
+      // 1. Aktif filtreye özel dinamik ışık süzmesi ve atmosferik arka plan
+      this.renderAmbientBackground(this.ctx, this.width, this.height);
+
+      // 2. Katmanlar (Görsel / Metin / Çıkartmalar)
+      if (ml && ml.visible) {
+        ml.render(this.ctx, this.width, this.height);
+      }
+      for (let i = 0; i < this.overlayLayers.length; i++) {
+        const layer = this.overlayLayers[i];
+        if (layer.visible) {
+          layer.render(this.ctx, this.width, this.height);
+        }
       }
     }
 
     // 3. Merkez Mıknatısı İnce Kılavuz Çizgileri (0.3s)
     if (this.snapGuide.x) {
       this.ctx.save();
-      this.ctx.strokeStyle = 'rgba(59, 130, 246, 0.75)'; // Soft blue Instagram alignment line
+      this.ctx.strokeStyle = 'rgba(59, 130, 246, 0.75)';
       this.ctx.lineWidth = 2;
       this.ctx.beginPath();
       this.ctx.moveTo(this.width * 0.5, 0);
@@ -573,20 +705,47 @@ export class CanvasEngine {
       this.ctx.restore();
     }
 
-    const sel = this.interactionManager.getSelectedLayer();
     if (sel && sel.visible && !sel.locked) {
       sel.renderSelectionHighlight(this.ctx, this.width, this.height);
     }
   }
 
   public renderClean(targetCtx: CanvasRenderingContext2D, width: number, height: number) {
+    const ml = this.mediaLayer;
+
+    // 5 saniyelik statik fotoğraf->video dönüşümünde değişmeyen katmanları tek offscreen tamponda önbelleğe al
+    if (ml && ml.isMotionPhoto) {
+      if (!ml.isTimeDependentEffect()) {
+        const cached = this.ensureStaticSceneCache(width, height);
+        if (cached) {
+          targetCtx.clearRect(0, 0, width, height);
+          targetCtx.drawImage(cached, 0, 0, width, height);
+          return;
+        }
+      } else {
+        targetCtx.clearRect(0, 0, width, height);
+        this.renderAmbientBackground(targetCtx, width, height);
+        if (ml.visible) {
+          ml.render(targetCtx, width, height);
+        }
+        const overlayCached = this.ensureOverlayCache(width, height);
+        if (overlayCached) {
+          targetCtx.drawImage(overlayCached, 0, 0, width, height);
+        }
+        return;
+      }
+    }
+
     targetCtx.clearRect(0, 0, width, height);
 
     // Dışa aktarmada da aynı büyüleyici ışık süzmesi ve arka plan atmosferi korunur (kılavuz çizgileri basılmaz)
     this.renderAmbientBackground(targetCtx, width, height);
 
-    const layers = this.getAllLayers();
-    for (const layer of layers) {
+    if (ml && ml.visible) {
+      ml.render(targetCtx, width, height);
+    }
+    for (let i = 0; i < this.overlayLayers.length; i++) {
+      const layer = this.overlayLayers[i];
       if (layer.visible) {
         layer.render(targetCtx, width, height);
       }
@@ -594,6 +753,12 @@ export class CanvasEngine {
   }
 
   // [START] CREATED BY Bedirhan
+  public getCurrentTime(): number {
+    const ml = this.mediaLayer;
+    if (!ml) return 0;
+    return ml.getCurrentTime();
+  }
+
   public getVideoState(): VideoState {
     const ml = this.mediaLayer;
     if (!ml) {
@@ -683,7 +848,7 @@ export class CanvasEngine {
     if (!this.mediaLayer) return;
     await this.mediaLayer.seek(t);
     this.render();
-    this.emit('video-time', this.getVideoState());
+    this.emit('video-progress', this.mediaLayer.getCurrentTime());
   }
 
   public async playVideo(): Promise<void> {
@@ -766,8 +931,12 @@ export class CanvasEngine {
 
   public setExportingVideo(exporting: boolean): void {
     this.isExportingVideo = exporting;
+    this.invalidateStaticCache();
     if (exporting) {
       this.pauseVideo();
+      if (this.mediaLayer) {
+        Object.assign(this.mediaLayer.currentValues, this.mediaLayer.targetValues);
+      }
     }
   }
 
@@ -801,8 +970,12 @@ export class CanvasEngine {
         if (ml.virtualTime >= end) {
           ml.virtualTime = ml.trimStart;
         }
-        this.render();
-        this.emit('video-time', this.getVideoState());
+
+        // Statik 5sn fotoğrafta yalnızca efekt zamana bağlıysa veya önbellek kirliyse yeniden çiz
+        if (ml.isTimeDependentEffect() || this.staticSceneCacheDirty) {
+          this.render();
+        }
+        this.emit('video-progress', ml.virtualTime);
         this.videoLoopId = requestAnimationFrame(tick);
         return;
       }
@@ -820,7 +993,7 @@ export class CanvasEngine {
           video.play().catch(() => {});
         }
         this.render();
-        this.emit('video-time', this.getVideoState());
+        this.emit('video-progress', video.currentTime || 0);
         this.videoLoopId = requestAnimationFrame(tick);
       } else {
         if (video.ended) {
@@ -855,9 +1028,13 @@ export class CanvasEngine {
   ): Promise<void> {
     const w = width || this.width;
     const h = height || this.height;
-    if (this.mediaLayer) {
-      this.mediaLayer.currentValues = { ...this.mediaLayer.targetValues };
-      await this.mediaLayer.seek(t);
+    const ml = this.mediaLayer;
+    if (ml) {
+      if (ml.isMotionPhoto) {
+        ml.virtualTime = t;
+      } else {
+        await ml.seek(t);
+      }
     }
     this.renderClean(targetCtx, w, h);
   }
@@ -892,6 +1069,9 @@ export class CanvasEngine {
   }
 
   private emit<K extends EngineEvent>(event: K, ...args: EngineEventMap[K]) {
+    if (event === 'change') {
+      this.invalidateStaticCache();
+    }
     this.listeners.get(event)?.forEach((fn) => {
       (fn as unknown as (...a: unknown[]) => void)(...args);
     });
@@ -907,6 +1087,11 @@ export class CanvasEngine {
     this.listeners.clear();
     this.mediaLayer = null;
     this.overlayLayers = [];
+    this.cachedAllLayers = [];
+    this.staticSceneCacheCanvas = null;
+    this.staticSceneCacheCtx = null;
+    this.overlayCacheCanvas = null;
+    this.overlayCacheCtx = null;
     try {
       this.ctx.clearRect(0, 0, this.width, this.height);
     } catch {}
