@@ -33,7 +33,11 @@ export interface TimelineOverlayTracksProps {
   musicClip: StoryAudioMeta | null;
   selectedItemId: string | null;
   selectedItemType: NLESelectedType;
-  onSelectItem: (id: string | null, type: NLESelectedType) => void;
+  onSelectItem: (
+    id: string | null,
+    type: NLESelectedType,
+    isSecondTap?: boolean
+  ) => void;
   onChangeOverlayTiming: (layerId: string, start: number, end: number) => void;
   onReorderOverlayLayer?: (layerId: string, direction: "up" | "down") => void;
   onChangeEffectClips?: (clips: ReelsEffectClip[]) => void;
@@ -61,6 +65,7 @@ type OverlayDragState = {
   startY: number;
   initStart: number;
   initEnd: number;
+  moved: boolean;
 };
 
 export default function TimelineOverlayTracks({
@@ -98,16 +103,20 @@ export default function TimelineOverlayTracks({
     }
   };
 
-  const beginDrag = (e: React.PointerEvent, state: OverlayDragState) => {
+  const beginDrag = (
+    e: React.PointerEvent,
+    state: Omit<OverlayDragState, "moved">
+  ) => {
     e.stopPropagation();
     clearLongPress();
     onPauseVideo?.();
     try {
       (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
     } catch {}
-    onCommitHistory?.();
-    onSelectItem(state.id, state.itemType);
-    dragRef.current = state;
+    if (state.mode !== "move") {
+      onCommitHistory?.();
+    }
+    dragRef.current = { ...state, moved: false };
 
     if (state.mode === "move") {
       longPressTimerRef.current = setTimeout(() => {
@@ -127,6 +136,16 @@ export default function TimelineOverlayTracks({
     if (!st) return;
     e.stopPropagation();
 
+    const dxPx = e.clientX - st.startX;
+    const dyPx = e.clientY - st.startY;
+    if (!st.moved) {
+      if (Math.hypot(dxPx, dyPx) < 4) return;
+      st.moved = true;
+      if (st.mode === "move") {
+        onCommitHistory?.();
+      }
+    }
+
     // Ekran kenarlarında otomatik yatay kaydırma (Edge Auto-Scroll)
     if (typeof window !== "undefined" && onEdgeScroll) {
       const edgeZone = 48;
@@ -139,9 +158,7 @@ export default function TimelineOverlayTracks({
       }
     }
 
-    const dxPx = e.clientX - st.startX;
-    const dyPx = e.clientY - st.startY;
-    const dtSec = dxPx / Math.max(20, pps);
+    const dtSec = (e.clientX - st.startX) / Math.max(20, pps);
     const maxSec = Math.max(totalDuration + 15, 60);
 
     // Dikey sürükleme ile katman sırası (Z-Index / satır sırası) değiştirme
@@ -198,11 +215,17 @@ export default function TimelineOverlayTracks({
   const handlePointerEnd = (e: React.PointerEvent) => {
     clearLongPress();
     setElevatedItemId(null);
-    if (!dragRef.current) return;
+    const st = dragRef.current;
+    if (!st) return;
     try {
       (e.currentTarget as HTMLElement).releasePointerCapture(e.pointerId);
     } catch {}
     dragRef.current = null;
+
+    // Seçili bir öğeye sürüklemeden 2. kez tıklandığında ilgili düzenleme menüsünü aç
+    if (!st.moved && st.mode === "move") {
+      onSelectItem(st.id, st.itemType, true);
+    }
   };
 
   const musicStart =
@@ -261,18 +284,16 @@ export default function TimelineOverlayTracks({
             return (
               <div key={item.id} className="relative h-8 w-full">
                 <div
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    onSelectItem(item.layerId, item.type);
-                  }}
+                  onClick={(e) => e.stopPropagation()}
                   onPointerDown={(e) => {
-                    // İki Aşamalı Etkileşim: İlk dokunuş yalnızca seçer, seçiliyken ikinci dokunuş taşır
+                    // 1. Tıklama: Yalnızca seçer (menü açılmaz, bar kaymaz)
                     if (!isSelected) {
                       e.stopPropagation();
                       onPauseVideo?.();
-                      onSelectItem(item.layerId, item.type);
+                      onSelectItem(item.layerId, item.type, false);
                       return;
                     }
+                    // Seçiliyken: Sürüklenirse taşır, sürüklenmeden bırakılırsa 2. tıklama menüsünü açar
                     beginDrag(e, {
                       targetKind: "overlay",
                       mode: "move",
@@ -447,18 +468,16 @@ export default function TimelineOverlayTracks({
                   return (
                     <div
                       key={fx.id}
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        onSelectItem(fx.id, "effect");
-                      }}
+                      onClick={(e) => e.stopPropagation()}
                       onPointerDown={(e) => {
-                        // İki Aşamalı Etkileşim: İlk dokunuş yalnızca seçer, seçiliyken ikinci dokunuş taşır
+                        // 1. Tıklama: Yalnızca seçer (menü açılmaz, bar kaymaz)
                         if (!isSelected) {
                           e.stopPropagation();
                           onPauseVideo?.();
-                          onSelectItem(fx.id, "effect");
+                          onSelectItem(fx.id, "effect", false);
                           return;
                         }
+                        // Seçiliyken: Sürüklenirse taşır, sürüklenmeden bırakılırsa 2. tıklama menüsünü açar
                         beginDrag(e, {
                           targetKind: "effect",
                           mode: "move",
@@ -561,18 +580,16 @@ export default function TimelineOverlayTracks({
             return (
               <div
                 key={seg.id}
-                onClick={(e) => {
-                  e.stopPropagation();
-                  onSelectItem(seg.id, "audio");
-                }}
+                onClick={(e) => e.stopPropagation()}
                 onPointerDown={(e) => {
-                  // İki Aşamalı Etkileşim: İlk dokunuş yalnızca seçer, seçiliyken ikinci dokunuş taşır
+                  // 1. Tıklama: Yalnızca seçer (menü açılmaz, bar kaymaz)
                   if (!isSelected) {
                     e.stopPropagation();
                     onPauseVideo?.();
-                    onSelectItem(seg.id, "audio");
+                    onSelectItem(seg.id, "audio", false);
                     return;
                   }
+                  // Seçiliyken: Sürüklenirse taşır, sürüklenmeden bırakılırsa 2. tıklama menüsünü açar
                   beginDrag(e, {
                     targetKind: "audio",
                     mode: "move",

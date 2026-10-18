@@ -36,6 +36,7 @@ import {
   ReelsEffectClip,
   ReelsEffectId,
   StoryAudioMeta,
+  TextLayer,
   VideoState,
   VideoTrackClip,
 } from "@/lib/canvas-editor";
@@ -64,7 +65,7 @@ export interface ReelsEditorProps {
   onCropModeChange?: (isCropping: boolean) => void;
   onSeek: (time: number) => void;
   onTogglePlay: () => void;
-  onOpenTextEditor: () => void;
+  onOpenTextEditor: (layer?: TextLayer) => void;
   onOpenMusicPicker: () => void;
   onOpenStickerSheet?: () => void;
   onOpenPhotoOverlay?: () => void;
@@ -248,7 +249,11 @@ export default function ReelsEditor({
     applySnapshot(nextSnap);
   };
 
-  const handleSelectItem = (id: string | null, type: NLESelectedType) => {
+  const handleSelectItem = (
+    id: string | null,
+    type: NLESelectedType,
+    isSecondTap = false
+  ) => {
     engine?.pauseVideo();
     setSelectedItemId(id);
     setSelectedItemType(type);
@@ -273,8 +278,27 @@ export default function ReelsEditor({
         engine.requestRender();
       }
     }
+
+    // 1. Tıklama: Yalnızca seçer, menü açılmaz
+    if (!isSecondTap) {
+      setActiveStrip("none");
+      return;
+    }
+
+    // 2. Tıklama (Seçiliyken sürüklemeden tekrar tıklama): İlgili düzenleme menüsünü açar
     if (type === "effect") {
-      setActiveStrip("effects");
+      setActiveStrip((p) => (p === "effects" ? "none" : "effects"));
+    } else if (type === "audio") {
+      setActiveStrip((p) => (p === "audio_speed" ? "none" : "audio_speed"));
+    } else if (type === "text" || type === "sticker") {
+      const selLayer = engine?.getSelectedLayer();
+      if (selLayer instanceof TextLayer) {
+        onOpenTextEditor(selLayer);
+      } else {
+        onOpenTextEditor();
+      }
+    } else if (type === "photo") {
+      setActiveStrip((p) => (p === "crop" ? "none" : "crop"));
     }
   };
 
@@ -1221,7 +1245,7 @@ export default function ReelsEditor({
             {activeStrip === "audio_speed" && (
               <div className="flex flex-col gap-2 px-4">
                 {selectedItemType === "audio" && selectedMusic ? (
-                  <div className="flex items-center gap-3 bg-[#16171b] rounded-2xl px-3.5 py-2">
+                  <div className="flex items-center gap-2.5 bg-[#16171b] rounded-2xl px-3.5 py-2">
                     <Music className="w-4 h-4 text-sky-400 shrink-0" />
                     <span className="text-xs font-medium text-zinc-300 w-16 truncate shrink-0">
                       {selectedMusic.title}
@@ -1239,6 +1263,13 @@ export default function ReelsEditor({
                     <span className="text-xs font-semibold text-white w-9 text-right tabular-nums">
                       {effectiveMusicVolume}%
                     </span>
+                    <button
+                      type="button"
+                      onClick={onOpenMusicPicker}
+                      className="px-2.5 py-1 rounded-xl bg-white/10 hover:bg-white/15 text-[11px] font-semibold text-sky-300 shrink-0 transition-all active:scale-95"
+                    >
+                      Değiştir
+                    </button>
                   </div>
                 ) : (
                   <>
@@ -1359,7 +1390,7 @@ export default function ReelsEditor({
 
             {/* 3. DİNAMİK ALT ARAÇ ÇUBUĞU (Contextual Action Toolbar) */}
             {selectedItemId && selectedItemType ? (
-              /* BİR KLİP, KATMAN VEYA ŞARKI PARÇASI SEÇİLİYKEN: [ ✂️ Böl ] [ 🗑️ Sil ] [ 📐 Kırp ] [ 🔊 Ses / Hız ] [ 📑 Kopyala ] */
+              /* BİR KLİP, KATMAN VEYA ŞARKI PARÇASI SEÇİLİYKEN: [ ✂️ Böl ] [ 🗑️ Sil ] [ 📐 Kırp / ✨ Efekt / ✏️ Düzenle ] [ 🔊 Ses / Hız ] [ 📑 Kopyala ] */
               <div className="flex items-center justify-between gap-2 px-4 pt-0.5">
                 <button
                   type="button"
@@ -1409,6 +1440,56 @@ export default function ReelsEditor({
                     </div>
                     <span className="text-[11px] font-medium text-zinc-200">
                       Kırp
+                    </span>
+                  </button>
+                )}
+
+                {selectedItemType === "effect" && (
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setActiveStrip((p) =>
+                        p === "effects" ? "none" : "effects"
+                      )
+                    }
+                    className="flex-1 flex flex-col items-center gap-1 group"
+                  >
+                    <div
+                      className={`w-full h-11 rounded-2xl flex items-center justify-center transition-all active:scale-95 ${
+                        activeStrip === "effects"
+                          ? "bg-amber-400 text-black"
+                          : "bg-[#1c1c1e] group-hover:bg-[#26262a] text-white"
+                      }`}
+                    >
+                      <Sparkles className="w-4 h-4" />
+                    </div>
+                    <span className="text-[11px] font-medium text-zinc-200">
+                      Efekt
+                    </span>
+                  </button>
+                )}
+
+                {(selectedItemType === "text" ||
+                  selectedItemType === "sticker") && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const selLayer = engine
+                        ?.getLayers()
+                        .find((l) => l.id === selectedItemId);
+                      if (selLayer && selLayer instanceof TextLayer) {
+                        onOpenTextEditor(selLayer);
+                      } else {
+                        onOpenTextEditor();
+                      }
+                    }}
+                    className="flex-1 flex flex-col items-center gap-1 group"
+                  >
+                    <div className="w-full h-11 rounded-2xl bg-[#1c1c1e] group-hover:bg-[#26262a] flex items-center justify-center text-white transition-all active:scale-95">
+                      <Type className="w-4 h-4" />
+                    </div>
+                    <span className="text-[11px] font-medium text-zinc-200">
+                      Düzenle
                     </span>
                   </button>
                 )}
@@ -1470,7 +1551,7 @@ export default function ReelsEditor({
               <div className="flex items-start justify-between gap-2 overflow-x-auto no-scrollbar px-4 pt-0.5">
                 <button
                   type="button"
-                  onClick={onOpenTextEditor}
+                  onClick={() => onOpenTextEditor()}
                   className="flex flex-col items-center gap-1 shrink-0 group"
                 >
                   <div className="w-14 h-11 rounded-2xl bg-[#1c1c1e] group-hover:bg-[#26262a] flex items-center justify-center text-white transition-all active:scale-95">
