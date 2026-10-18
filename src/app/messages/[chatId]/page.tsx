@@ -64,77 +64,6 @@ function formatClockTime(timestamp?: number): string {
   });
 }
 
-function PopInMessageRow({
-  msg,
-  isMine,
-  radiusClass,
-  marginTopClass,
-  animatePopIn,
-}: {
-  msg: ChatMessage;
-  isMine: boolean;
-  radiusClass: string;
-  marginTopClass: string;
-  animatePopIn: boolean;
-}) {
-  const [entered, setEntered] = useState(!animatePopIn);
-
-  useEffect(() => {
-    if (!animatePopIn) {
-      setEntered(true);
-      return;
-    }
-    const rafId = requestAnimationFrame(() => {
-      setEntered(true);
-    });
-    return () => cancelAnimationFrame(rafId);
-  }, [animatePopIn]);
-
-  return (
-    <div
-      className={`flex ${
-        isMine ? "justify-end" : "justify-start"
-      } ${marginTopClass}`}
-    >
-      <div
-        className={`max-w-[78%] px-4 py-2.5 text-sm break-words transform-gpu transition-all duration-[90ms] ease-out ${
-          isMine ? "origin-bottom-right" : "origin-bottom-left"
-        } ${
-          entered ? "scale-100 opacity-100" : "scale-90 opacity-0"
-        } ${radiusClass} ${
-          isMine
-            ? "bg-emerald-600 text-white"
-            : "bg-zinc-900 text-zinc-100 border border-zinc-800/80"
-        }`}
-      >
-        <span className="whitespace-pre-wrap leading-relaxed">{msg.text}</span>
-        <span
-          className={`inline-flex items-center gap-1 float-right ml-2.5 mt-1.5 text-[10px] select-none ${
-            isMine ? "text-emerald-100/80" : "text-zinc-400/80"
-          }`}
-        >
-          <span>{formatClockTime(msg.timestamp)}</span>
-          {isMine && (
-            <>
-              {msg.status === "read" ? (
-                <CheckCheck className="w-3.5 h-3.5 text-white stroke-[2.4]" />
-              ) : (
-                <Check
-                  className={`w-3 h-3 stroke-[2.2] ${
-                    msg.optimistic
-                      ? "text-emerald-200/50"
-                      : "text-emerald-100/80"
-                  }`}
-                />
-              )}
-            </>
-          )}
-        </span>
-      </div>
-    </div>
-  );
-}
-
 export default function ChatRoomPage() {
   const params = useParams<{ chatId: string }>();
   const router = useRouter();
@@ -167,6 +96,8 @@ export default function ChatRoomPage() {
   const isLocalTypingRef = useRef<boolean>(false);
   const initialHistoryLoadedRef = useRef<boolean>(false);
   const initialMessageIdsRef = useRef<Set<string>>(new Set());
+  // Optimistic ID -> Gerçek RTDB ID eşleşmesini tutarak mesaj onaylandığında DOM düğümünün yeniden mount olmasını (ikinci kez gecikmeli animasyon oynamasını) engeller
+  const stableKeyMapRef = useRef<Map<string, string>>(new Map());
 
   const showError = (msg: string) => {
     setErrorToast(msg);
@@ -245,19 +176,23 @@ export default function ChatRoomPage() {
     const confirmedIds = new Set(messages.map((m) => m.id));
     const stillPending = pendingMessages.filter((pm) => {
       if (confirmedIds.has(pm.id)) return false;
-      const matchedInRtdb = messages.some(
+      const matchedRtdbMsg = messages.find(
         (m) =>
           m.senderUid === pm.senderUid &&
           m.text === pm.text &&
-          Math.abs(m.timestamp - pm.timestamp) < 10000
+          Math.abs(m.timestamp - pm.timestamp) < 15000
       );
-      return !matchedInRtdb;
+      if (matchedRtdbMsg) {
+        stableKeyMapRef.current.set(matchedRtdbMsg.id, pm.id);
+        return false;
+      }
+      return true;
     });
     return [...messages, ...stillPending];
   }, [messages, pendingMessages]);
 
   useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: "smooth" });
+    bottomRef.current?.scrollIntoView({ behavior: "instant" });
   }, [displayedMessages.length, peerTyping]);
 
   const handleInputChange = (val: string) => {
@@ -294,7 +229,7 @@ export default function ChatRoomPage() {
     }
   };
 
-  const handleSend = async () => {
+  const handleSend = () => {
     // Klavyenin kapanmaması için odağı anında koru
     inputRef.current?.focus();
 
@@ -309,18 +244,8 @@ export default function ChatRoomPage() {
       inputRef.current.focus();
     }
     setInputText("");
-    requestAnimationFrame(() => {
-      inputRef.current?.focus();
-    });
 
-    if (typingTimeoutRef.current) {
-      clearTimeout(typingTimeoutRef.current);
-    }
-    if (isLocalTypingRef.current && chatId) {
-      isLocalTypingRef.current = false;
-      setTypingStatus(chatId, profile.uid, false);
-    }
-
+    // 0. milisaniyede Optimistic mesajı senkron olarak state'e ekle (hiçbir async işlem beklemeden anında animasyon başlar)
     const tempId = `optimistic_${Date.now()}_${Math.random()
       .toString(36)
       .slice(2, 7)}`;
@@ -336,21 +261,32 @@ export default function ChatRoomPage() {
 
     setPendingMessages((prev) => [...prev, optimisticMsg]);
 
-    try {
-      const result = await sendEncryptedMessage(peerUid, clean);
-      setPendingMessages((prev) =>
-        prev.map((m) =>
-          m.id === tempId
-            ? { ...result.message, id: result.messageId, optimistic: false }
-            : m
-        )
-      );
-    } catch (err) {
-      setPendingMessages((prev) => prev.filter((m) => m.id !== tempId));
-      showError(
-        err instanceof Error ? err.message : "Mesaj gönderilemedi"
-      );
+    if (typingTimeoutRef.current) {
+      clearTimeout(typingTimeoutRef.current);
     }
+    if (isLocalTypingRef.current && chatId) {
+      isLocalTypingRef.current = false;
+      setTypingStatus(chatId, profile.uid, false);
+    }
+
+    // Arka planda şifrele ve gönder; onaylandığında aynı DOM key'ini koru
+    void sendEncryptedMessage(peerUid, clean)
+      .then((result) => {
+        stableKeyMapRef.current.set(result.messageId, tempId);
+        setPendingMessages((prev) =>
+          prev.map((m) =>
+            m.id === tempId
+              ? { ...result.message, id: result.messageId, optimistic: false }
+              : m
+          )
+        );
+      })
+      .catch((err) => {
+        setPendingMessages((prev) => prev.filter((m) => m.id !== tempId));
+        showError(
+          err instanceof Error ? err.message : "Mesaj gönderilemedi"
+        );
+      });
   };
 
   if (!mounted || loading) {
@@ -363,6 +299,24 @@ export default function ChatRoomPage() {
 
   return (
     <div className="h-[100dvh] bg-zinc-950 text-zinc-100 flex flex-col overflow-hidden">
+      {/* 0ms Gecikmesiz GPU Keyframe Animasyonu */}
+      <style>{`
+        @keyframes sigalMsgPopIn {
+          0% {
+            opacity: 0;
+            transform: scale(0.88) translateY(6px);
+          }
+          100% {
+            opacity: 1;
+            transform: scale(1) translateY(0);
+          }
+        }
+        .msg-pop-in {
+          animation: sigalMsgPopIn 85ms cubic-bezier(0.2, 0.9, 0.3, 1) forwards;
+          will-change: transform, opacity;
+        }
+      `}</style>
+
       {errorToast && (
         <div className="fixed top-5 left-1/2 -translate-x-1/2 z-50 bg-red-950/90 text-red-200 text-xs font-semibold px-4 py-2 rounded-full shadow-xl border border-red-800/60 select-none">
           {errorToast}
@@ -459,17 +413,53 @@ export default function ChatRoomPage() {
                   ? "mt-1"
                   : "mt-3.5";
 
+              const stableDomKey =
+                stableKeyMapRef.current.get(msg.id) || msg.id;
               const isNewMessage = !initialMessageIdsRef.current.has(msg.id);
 
               return (
-                <PopInMessageRow
-                  key={msg.id}
-                  msg={msg}
-                  isMine={isMine}
-                  radiusClass={radiusClass}
-                  marginTopClass={marginTopClass}
-                  animatePopIn={isNewMessage}
-                />
+                <div
+                  key={stableDomKey}
+                  className={`flex ${
+                    isMine ? "justify-end" : "justify-start"
+                  } ${marginTopClass}`}
+                >
+                  <div
+                    className={`max-w-[78%] px-4 py-2.5 text-sm break-words transform-gpu ${
+                      isMine ? "origin-bottom-right" : "origin-bottom-left"
+                    } ${isNewMessage ? "msg-pop-in" : ""} ${radiusClass} ${
+                      isMine
+                        ? "bg-emerald-600 text-white"
+                        : "bg-zinc-900 text-zinc-100 border border-zinc-800/80"
+                    }`}
+                  >
+                    <span className="whitespace-pre-wrap leading-relaxed">
+                      {msg.text}
+                    </span>
+                    <span
+                      className={`inline-flex items-center gap-1 float-right ml-2.5 mt-1.5 text-[10px] select-none ${
+                        isMine ? "text-emerald-100/80" : "text-zinc-400/80"
+                      }`}
+                    >
+                      <span>{formatClockTime(msg.timestamp)}</span>
+                      {isMine && (
+                        <>
+                          {msg.status === "read" ? (
+                            <CheckCheck className="w-3.5 h-3.5 text-white stroke-[2.4]" />
+                          ) : (
+                            <Check
+                              className={`w-3 h-3 stroke-[2.2] ${
+                                msg.optimistic
+                                  ? "text-emerald-200/50"
+                                  : "text-emerald-100/80"
+                              }`}
+                            />
+                          )}
+                        </>
+                      )}
+                    </span>
+                  </div>
+                </div>
               );
             })}
           </div>
@@ -478,7 +468,7 @@ export default function ChatRoomPage() {
         {/* Mesaj Kutusu Kalınlığında ve Belirgin Yazıyor... Balonu */}
         {peerTyping && (
           <div className="mt-3.5 flex justify-start">
-            <div className="bg-zinc-900 border border-zinc-800/80 px-4 py-3 rounded-2xl rounded-bl-[4px] inline-flex items-center gap-2 transform-gpu transition-all duration-[90ms] ease-out origin-bottom-left">
+            <div className="bg-zinc-900 border border-zinc-800/80 px-4 py-3 rounded-2xl rounded-bl-[4px] inline-flex items-center gap-2 transform-gpu msg-pop-in origin-bottom-left">
               <span className="w-2 h-2 rounded-full bg-emerald-400 animate-bounce shadow-[0_0_8px_rgba(52,211,153,0.65)]" />
               <span className="w-2 h-2 rounded-full bg-emerald-400 animate-bounce [animation-delay:150ms] shadow-[0_0_8px_rgba(52,211,153,0.65)]" />
               <span className="w-2 h-2 rounded-full bg-emerald-400 animate-bounce [animation-delay:300ms] shadow-[0_0_8px_rgba(52,211,153,0.65)]" />
