@@ -3,10 +3,21 @@ import { getAuth, GoogleAuthProvider, Auth } from "firebase/auth";
 import { getFirestore, Firestore } from "firebase/firestore";
 import { getStorage, FirebaseStorage } from "firebase/storage";
 import { getAnalytics, isSupported, Analytics } from "firebase/analytics";
+// [START] CREATED BY Umut
+import { getDatabase, Database } from "firebase/database";
 
+const rawRtdbUrl = process.env.NEXT_PUBLIC_FIREBASE_DATABASE_URL;
+const rtdbUrl =
+  rawRtdbUrl && !rawRtdbUrl.includes("firebaseio.com")
+    ? rawRtdbUrl
+    : "https://sigalmedia-social-default-rtdb.europe-west1.firebasedatabase.app";
+// [END] CREATED BY Umut
+
+// [MODIFIED BY Umut]
 const firebaseConfig = {
   apiKey: process.env.NEXT_PUBLIC_FIREBASE_API_KEY || "AIzaSyPlaceholderForBuildOnly",
   authDomain: process.env.NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN || "placeholder.firebaseapp.com",
+  databaseURL: rtdbUrl,
   projectId: process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID || "placeholder-project",
   storageBucket: process.env.NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET || "placeholder.appspot.com",
   messagingSenderId: process.env.NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID || "1234567890",
@@ -23,6 +34,9 @@ googleProvider.setCustomParameters({ prompt: "select_account" });
 const firestoreDbId = process.env.NEXT_PUBLIC_FIREBASE_DATABASE_ID || "default";
 export const db: Firestore = getFirestore(app, firestoreDbId);
 export const storage: FirebaseStorage = getStorage(app);
+// [START] CREATED BY Umut
+export const rtdb: Database = getDatabase(app, rtdbUrl);
+// [END] CREATED BY Umut
 
 let analytics: Analytics | null = null;
 if (typeof window !== "undefined") {

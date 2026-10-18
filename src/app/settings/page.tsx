@@ -13,6 +13,9 @@ import {
   UserCheck,
   Ban,
   Check,
+  // [START] CREATED BY Umut
+  MessageSquare,
+  // [END] CREATED BY Umut
 } from "lucide-react";
 import { useAuth } from "@/context/AuthContext";
 import {
@@ -211,6 +214,20 @@ export default function SettingsPage() {
                 <ChevronRight className="w-4 h-4 text-zinc-500" />
               </div>
             </Link>
+
+            {/* [START] CREATED BY Umut */}
+            {/* Mesaj Ayarları */}
+            <Link
+              href="/settings/messages"
+              className="w-full flex items-center justify-between px-4 py-3.5 hover:bg-zinc-900 transition-colors text-sm font-medium text-zinc-100 btn-press-subtle"
+            >
+              <div className="flex items-center gap-3">
+                <MessageSquare className="w-5 h-5 text-zinc-400" />
+                <span>Mesaj Ayarları</span>
+              </div>
+              <ChevronRight className="w-4 h-4 text-zinc-500" />
+            </Link>
+            {/* [END] CREATED BY Umut */}
           </div>
         </section>
 

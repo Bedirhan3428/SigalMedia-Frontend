@@ -6,6 +6,14 @@ export interface UserStats {
   followingCount: number;
 }
 
+// [START] CREATED BY Umut
+export interface MessageSettings {
+  whoCanMessage: "everyone" | "following" | "followers" | "mutuals" | "none";
+  readReceipts: boolean;
+  showOnlineStatus: boolean;
+}
+// [END] CREATED BY Umut
+
 export interface UserProfile {
   uid: string;
   email: string | null;
@@ -21,6 +29,9 @@ export interface UserProfile {
   isPrivate?: boolean;
   // [END] NexusAI
   emailVerified?: boolean;
+  // [START] CREATED BY Umut
+  messageSettings?: MessageSettings;
+  // [END] CREATED BY Umut
   role: "user" | "admin";
   onboardingCompleted: boolean;
   stats: UserStats;

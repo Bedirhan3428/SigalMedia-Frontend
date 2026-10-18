@@ -387,3 +387,64 @@ export async function toggleDirectFollow(
   }
 }
 // [END] NexusAI
+
+// [START] CREATED BY Umut
+import type { MessageSettings } from "@/types/user";
+
+export const DEFAULT_MESSAGE_SETTINGS: MessageSettings = {
+  whoCanMessage: "everyone",
+  readReceipts: true,
+  showOnlineStatus: true,
+};
+
+export async function getMessageSettings(uid: string): Promise<MessageSettings> {
+  if (!uid) return DEFAULT_MESSAGE_SETTINGS;
+
+  try {
+    const userSnap = await getDoc(doc(db, "users", uid));
+    if (userSnap.exists()) {
+      const data = userSnap.data() as UserProfile;
+      if (data.messageSettings) {
+        return {
+          whoCanMessage:
+            data.messageSettings.whoCanMessage ||
+            DEFAULT_MESSAGE_SETTINGS.whoCanMessage,
+          readReceipts:
+            typeof data.messageSettings.readReceipts === "boolean"
+              ? data.messageSettings.readReceipts
+              : DEFAULT_MESSAGE_SETTINGS.readReceipts,
+          showOnlineStatus:
+            typeof data.messageSettings.showOnlineStatus === "boolean"
+              ? data.messageSettings.showOnlineStatus
+              : DEFAULT_MESSAGE_SETTINGS.showOnlineStatus,
+        };
+      }
+    }
+  } catch (err) {
+    console.error("Mesaj ayarları alınamadı:", err);
+  }
+
+  return DEFAULT_MESSAGE_SETTINGS;
+}
+
+export async function updateMessageSettings(
+  partial: Partial<MessageSettings>
+): Promise<MessageSettings> {
+  const currentUser = auth.currentUser;
+  if (!currentUser) throw new Error("Oturum açılmamış");
+
+  const currentSettings = await getMessageSettings(currentUser.uid);
+  const nextSettings: MessageSettings = {
+    ...currentSettings,
+    ...partial,
+  };
+
+  const userRef = doc(db, "users", currentUser.uid);
+  await updateDoc(userRef, {
+    messageSettings: nextSettings,
+    updatedAt: serverTimestamp(),
+  });
+
+  return nextSettings;
+}
+// [END] CREATED BY Umut
