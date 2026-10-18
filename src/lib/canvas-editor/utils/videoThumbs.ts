@@ -132,4 +132,61 @@ function seekHiddenVideo(video: HTMLVideoElement, targetTime: number): Promise<v
     video.currentTime = targetTime;
   });
 }
+
+export async function generatePhotoThumbnails(
+  source: string | Blob | File,
+  count = 8,
+  width = 84,
+  height = 148
+): Promise<string[]> {
+  if (typeof document === 'undefined') return [];
+
+  const img = new Image();
+  let createdUrl: string | null = null;
+  if (typeof source === 'string') {
+    if (source.startsWith('http://') || source.startsWith('https://')) {
+      img.crossOrigin = 'anonymous';
+    }
+    img.src = source;
+  } else {
+    createdUrl = URL.createObjectURL(source);
+    img.src = createdUrl;
+  }
+
+  try {
+    await new Promise<void>((resolve, reject) => {
+      img.onload = () => resolve();
+      img.onerror = () => reject(new Error('Image load error'));
+    });
+
+    const canvas = document.createElement('canvas');
+    canvas.width = width;
+    canvas.height = height;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return [];
+
+    const iw = img.naturalWidth || img.width || width;
+    const ih = img.naturalHeight || img.height || height;
+    const scale = Math.max(width / iw, height / ih);
+    const dw = iw * scale;
+    const dh = ih * scale;
+    const dx = (width - dw) / 2;
+    const dy = (height - dh) / 2;
+
+    ctx.fillStyle = '#000000';
+    ctx.fillRect(0, 0, width, height);
+    ctx.drawImage(img, dx, dy, dw, dh);
+
+    const dataUrl = canvas.toDataURL('image/jpeg', 0.6);
+    return Array.from({ length: count }, () => dataUrl);
+  } catch {
+    return [];
+  } finally {
+    if (createdUrl) {
+      try {
+        URL.revokeObjectURL(createdUrl);
+      } catch {}
+    }
+  }
+}
 // [END] CREATED BY Bedirhan

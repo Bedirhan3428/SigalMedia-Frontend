@@ -12,4 +12,5 @@ export * from './exporter/ImageExporter';
 export * from './exporter/VideoExporter';
 export * from './exporter/MediaRecorderFallback';
 export * from './utils/videoThumbs';
+export * from './image-adjustments';
 // [END] CREATED BY Bedirhan

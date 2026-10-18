@@ -18,6 +18,10 @@ import {
   StoryAudioMeta,
   SnapGuideState,
   VideoState,
+  ShareMode,
+  PostAdjustmentState,
+  DEFAULT_POST_ADJUSTMENTS,
+  ReelsEffectId,
 } from './types';
 
 // [MODIFIED BY Bedirhan]
@@ -59,6 +63,8 @@ export class CanvasEngine {
   // [START] CREATED BY Bedirhan
   private videoLoopId: number | null = null;
   private isExportingVideo = false;
+  private shareMode: ShareMode = 'story';
+  private lastVirtualTickTime: number = 0;
   // [END] CREATED BY Bedirhan
 
   constructor(options: EngineOptions) {
@@ -135,6 +141,22 @@ export class CanvasEngine {
     return list;
   }
 
+  // [START] CREATED BY Bedirhan
+  public setShareMode(mode: ShareMode) {
+    this.shareMode = mode;
+    if (mode === 'story' && this.mediaLayer && this.mediaLayer.media.type === 'video') {
+      const dur = this.mediaLayer.getDuration();
+      this.mediaLayer.trimStart = 0;
+      this.mediaLayer.trimEnd = dur > 0 ? Math.min(dur, 60) : 0;
+      this.mediaLayer.setPlaybackRate(1.0);
+    }
+  }
+
+  public getShareMode(): ShareMode {
+    return this.shareMode;
+  }
+  // [END] CREATED BY Bedirhan
+
   // [MODIFIED BY Bedirhan]
   public async loadMedia(source: string | Blob | File, forcedType?: MediaType, autoResizeCanvas = false): Promise<EditorMedia> {
     this.stopVideoLoop();
@@ -154,11 +176,16 @@ export class CanvasEngine {
     if (currentPreset) {
       this.mediaLayer.setPreset(currentPreset, () => this.requestRender());
     }
+
+    if (this.shareMode === 'reels' && media.type === 'image') {
+      this.mediaLayer.enableMotionPhoto(5);
+    }
+
     this.render();
     this.requestRender();
     this.emit('change');
 
-    if (media.type === 'video') {
+    if (media.type === 'video' || (this.shareMode === 'reels' && media.type === 'image')) {
       await this.playVideo();
       this.emit('video-time', this.getVideoState());
     }
@@ -218,6 +245,49 @@ export class CanvasEngine {
       this.emit('change');
     }
   }
+
+  // [START] CREATED BY Bedirhan
+  public flipMediaVertical() {
+    if (this.mediaLayer) {
+      this.mediaLayer.flipVertical();
+      this.render();
+      this.requestRender();
+      this.emit('change');
+    }
+  }
+
+  public setPostAdjustments(adj: Partial<PostAdjustmentState>) {
+    if (!this.mediaLayer) return;
+    this.mediaLayer.setPostAdjustments(adj);
+    this.render();
+    this.requestRender();
+    this.emit('change');
+  }
+
+  public resetPostAdjustments() {
+    if (!this.mediaLayer) return;
+    this.mediaLayer.resetPostAdjustments();
+    this.render();
+    this.requestRender();
+    this.emit('change');
+  }
+
+  public getPostAdjustments(): PostAdjustmentState {
+    return this.mediaLayer ? { ...this.mediaLayer.postAdjustments } : { ...DEFAULT_POST_ADJUSTMENTS };
+  }
+
+  public setReelsEffect(effect: ReelsEffectId) {
+    if (!this.mediaLayer) return;
+    this.mediaLayer.setReelsEffect(effect);
+    this.render();
+    this.requestRender();
+    this.emit('change');
+  }
+
+  public getReelsEffect(): ReelsEffectId {
+    return this.mediaLayer ? this.mediaLayer.reelsEffect : 'none';
+  }
+  // [END] CREATED BY Bedirhan
 
   public resetMediaTransform() {
     if (this.mediaLayer) {
@@ -514,8 +584,38 @@ export class CanvasEngine {
   // [START] CREATED BY Bedirhan
   public getVideoState(): VideoState {
     const ml = this.mediaLayer;
-    const video = ml?.getVideoElement() || null;
-    if (!ml || !video) {
+    if (!ml) {
+      return {
+        isVideo: false,
+        duration: 0,
+        trimStart: 0,
+        trimEnd: 0,
+        playbackRate: 1.0,
+        volume: 1.0,
+        muted: false,
+        currentTime: 0,
+        isPlaying: false,
+      };
+    }
+
+    if (ml.isMotionPhoto) {
+      const duration = ml.getDuration();
+      return {
+        isVideo: true,
+        isMotionPhoto: true,
+        duration,
+        trimStart: ml.trimStart,
+        trimEnd: ml.trimEnd > 0 ? ml.trimEnd : duration,
+        playbackRate: ml.playbackRate,
+        volume: 0,
+        muted: true,
+        currentTime: ml.virtualTime,
+        isPlaying: ml.virtualPlaying,
+      };
+    }
+
+    const video = ml.getVideoElement();
+    if (!video) {
       return {
         isVideo: false,
         duration: 0,
@@ -532,6 +632,7 @@ export class CanvasEngine {
     const duration = ml.getDuration();
     return {
       isVideo: true,
+      isMotionPhoto: false,
       duration,
       trimStart: ml.trimStart,
       trimEnd: ml.trimEnd > 0 ? ml.trimEnd : duration,
@@ -544,7 +645,8 @@ export class CanvasEngine {
   }
 
   public setTrim(start: number, end: number) {
-    if (!this.mediaLayer) return;
+    // Hikaye modunda video kare kırpma / trimming kesinlikle devre dışıdır
+    if (this.shareMode === 'story' || !this.mediaLayer) return;
     this.mediaLayer.setTrim(start, end);
     this.requestRender();
     this.emit('video-time', this.getVideoState());
@@ -552,7 +654,7 @@ export class CanvasEngine {
   }
 
   public setSpeed(rate: number) {
-    if (!this.mediaLayer) return;
+    if (this.shareMode === 'story' || !this.mediaLayer) return;
     this.mediaLayer.setPlaybackRate(rate);
     this.emit('video-time', this.getVideoState());
     this.emit('change');
@@ -573,8 +675,24 @@ export class CanvasEngine {
   }
 
   public async playVideo(): Promise<void> {
-    const video = this.mediaLayer?.getVideoElement();
-    if (!video || !this.mediaLayer) return;
+    if (!this.mediaLayer) return;
+
+    if (this.mediaLayer.isMotionPhoto) {
+      if (
+        this.mediaLayer.virtualTime < this.mediaLayer.trimStart ||
+        this.mediaLayer.virtualTime >= this.mediaLayer.trimEnd
+      ) {
+        this.mediaLayer.virtualTime = this.mediaLayer.trimStart;
+      }
+      this.mediaLayer.virtualPlaying = true;
+      this.lastVirtualTickTime = performance.now();
+      this.startVideoLoop();
+      this.emit('video-time', this.getVideoState());
+      return;
+    }
+
+    const video = this.mediaLayer.getVideoElement();
+    if (!video) return;
 
     if (video.currentTime < this.mediaLayer.trimStart || video.currentTime >= this.mediaLayer.trimEnd) {
       video.currentTime = this.mediaLayer.trimStart;
@@ -598,6 +716,12 @@ export class CanvasEngine {
   }
 
   public pauseVideo(): void {
+    if (this.mediaLayer?.isMotionPhoto) {
+      this.mediaLayer.virtualPlaying = false;
+      this.stopVideoLoop();
+      this.emit('video-time', this.getVideoState());
+      return;
+    }
     const video = this.mediaLayer?.getVideoElement();
     if (video && !video.paused) {
       video.pause();
@@ -607,6 +731,16 @@ export class CanvasEngine {
   }
 
   public async toggleVideoPlay(): Promise<boolean> {
+    if (this.mediaLayer?.isMotionPhoto) {
+      if (this.mediaLayer.virtualPlaying) {
+        this.pauseVideo();
+        return false;
+      } else {
+        await this.playVideo();
+        return true;
+      }
+    }
+
     const video = this.mediaLayer?.getVideoElement();
     if (!video) return false;
     if (video.paused || video.ended) {
@@ -627,14 +761,42 @@ export class CanvasEngine {
 
   private startVideoLoop(): void {
     this.stopVideoLoop();
+    this.lastVirtualTickTime = performance.now();
+
     const tick = () => {
       if (this.isExportingVideo) {
         this.videoLoopId = null;
         return;
       }
       const ml = this.mediaLayer;
-      const video = ml?.getVideoElement();
-      if (!ml || !video) {
+      if (!ml) {
+        this.videoLoopId = null;
+        return;
+      }
+
+      if (ml.isMotionPhoto) {
+        if (!ml.virtualPlaying) {
+          this.videoLoopId = null;
+          this.emit('video-time', this.getVideoState());
+          return;
+        }
+        const now = performance.now();
+        const dt = Math.max(0, (now - this.lastVirtualTickTime) / 1000);
+        this.lastVirtualTickTime = now;
+
+        const end = ml.trimEnd > 0 ? ml.trimEnd : ml.getDuration();
+        ml.virtualTime += dt * (ml.playbackRate || 1.0);
+        if (ml.virtualTime >= end) {
+          ml.virtualTime = ml.trimStart;
+        }
+        this.render();
+        this.emit('video-time', this.getVideoState());
+        this.videoLoopId = requestAnimationFrame(tick);
+        return;
+      }
+
+      const video = ml.getVideoElement();
+      if (!video) {
         this.videoLoopId = null;
         return;
       }

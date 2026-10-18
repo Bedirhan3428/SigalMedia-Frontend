@@ -2,6 +2,8 @@
 import {
   ref,
   onValue,
+  onChildAdded,
+  onChildChanged,
   update,
   set,
   get,
@@ -331,30 +333,65 @@ export function listenChatMessages(
   callback: (messages: ChatMessage[]) => void
 ): () => void {
   const messagesRef = ref(rtdb, `chats/${chatId}/messages`);
+  const messageMap = new Map<string, ChatMessage>();
+  let initialResolved = false;
 
-  const unsubscribe = onValue(
+  const emitSorted = () => {
+    const list = Array.from(messageMap.values());
+    list.sort((a, b) => (a.timestamp || 0) - (b.timestamp || 0));
+    callback(list);
+  };
+
+  const unsubAdded = onChildAdded(
     messagesRef,
     (snapshot) => {
-      if (!snapshot.exists()) {
-        callback([]);
-        return;
+      const val = snapshot.val() as ChatMessage | null;
+      if (!val) return;
+      const id = snapshot.key || val.id;
+      messageMap.set(id, { ...val, id });
+      if (initialResolved) {
+        emitSorted();
       }
-
-      const val = snapshot.val() as Record<string, ChatMessage>;
-      const list = Object.entries(val).map(([id, msg]) => ({
-        ...msg,
-        id: msg.id || id,
-      }));
-
-      list.sort((a, b) => (a.timestamp || 0) - (b.timestamp || 0));
-      callback(list);
     },
     () => {
       callback([]);
     }
   );
 
-  return () => unsubscribe();
+  const unsubChanged = onChildChanged(
+    messagesRef,
+    (snapshot) => {
+      const val = snapshot.val() as ChatMessage | null;
+      if (!val) return;
+      const id = snapshot.key || val.id;
+      messageMap.set(id, { ...val, id });
+      emitSorted();
+    },
+    () => {}
+  );
+
+  const unsubValue = onValue(
+    messagesRef,
+    (snapshot) => {
+      initialResolved = true;
+      if (!snapshot.exists()) {
+        messageMap.clear();
+        callback([]);
+        return;
+      }
+      emitSorted();
+    },
+    () => {
+      initialResolved = true;
+      callback([]);
+    }
+  );
+
+  return () => {
+    unsubAdded();
+    unsubChanged();
+    unsubValue();
+  };
 }
 
 export async function markChatAsRead(

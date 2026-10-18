@@ -20,11 +20,21 @@ import {
   VideoExporter,
   ImageExporter,
   generateVideoThumbnails,
+  generatePhotoThumbnails,
+  ShareMode,
+  PostAdjustmentState,
+  DEFAULT_POST_ADJUSTMENTS,
+  ReelsEffectId,
+  FILTER_PRESETS,
 } from "@/lib/canvas-editor";
 import MusicPickerDrawer from "@/components/share/MusicPickerDrawer";
 // [START] CREATED BY Bedirhan
 import VideoToolsDrawer from "@/components/share/VideoToolsDrawer";
 import ExportProgress from "@/components/share/ExportProgress";
+import ModeSelectorModal from "@/components/share/ModeSelectorModal";
+import StoryEditor from "@/components/share/StoryEditor";
+import ReelsEditor from "@/components/share/ReelsEditor";
+import PostPhotoEditor from "@/components/share/PostPhotoEditor";
 // [END] CREATED BY Bedirhan
 import { commitAudioClip } from "@/services/soundService";
 // [MODIFIED BY Bedirhan]
@@ -38,17 +48,10 @@ import {
   AlignLeft,
   AlignCenter,
   AlignRight,
-  CaseSensitive,
   Sticker,
   CircleChevronRight,
   X,
-  Search,
-  Sparkles,
-  Play,
-  Pause,
-  Check,
   Music,
-  Film,
 } from "lucide-react";
 
 // 18 Canlı Instagram Hikaye Renk Paleti
@@ -104,7 +107,16 @@ export default function ShareStoryPage() {
   const overlayFileInputRef = useRef<HTMLInputElement | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const guardTriggeredRef = useRef(false);
+
+  // [START] CREATED BY Bedirhan
+  // 3 Modlu Medya Editörü Durumları (Hikaye / Reels / Gönderi)
+  const [shareMode, setShareMode] = useState<ShareMode>("story");
+  const shareModeRef = useRef<ShareMode>("story");
+  const [isModeSelectorOpen, setIsModeSelectorOpen] = useState<boolean>(true);
+  const [postAdjustments, setPostAdjustments] = useState<PostAdjustmentState>(DEFAULT_POST_ADJUSTMENTS);
+  const [activeFilterIndex, setActiveFilterIndex] = useState<number>(0);
+  const [activeReelsEffect, setActiveReelsEffect] = useState<ReelsEffectId>("none");
+  // [END] CREATED BY Bedirhan
 
   // Editör Durumları
   const [canvasKey, setCanvasKey] = useState<number>(0);
@@ -178,7 +190,6 @@ export default function ShareStoryPage() {
     }
     setCanvasKey((prev) => prev + 1);
     setMounted(true);
-    guardTriggeredRef.current = false;
     if (baseFileInputRef.current) baseFileInputRef.current.value = "";
     if (overlayFileInputRef.current) overlayFileInputRef.current.value = "";
 
@@ -243,8 +254,10 @@ export default function ShareStoryPage() {
     setMusicVolume(0.85);
     setIsExportingVideo(false);
     setExportProgress(0);
+    setPostAdjustments(DEFAULT_POST_ADJUSTMENTS);
+    setActiveFilterIndex(0);
+    setActiveReelsEffect("none");
     setShowExitConfirm(false);
-    guardTriggeredRef.current = false;
   }, []);
 
   // Sayfadan çıkışta sesi tamamen durdur
@@ -303,23 +316,26 @@ export default function ShareStoryPage() {
     };
   }, [hasMedia]);
 
-  // Tuval Motorunu Başlatma (Tam Ekran Uygulama Boyutları)
+  // [MODIFIED BY Bedirhan]
+  // Tuval Motorunu Başlatma (Moda Göre 9:16 Tam Ekran veya 4:3 Gönderi Boyutları)
   const getOrCreateEngine = useCallback(() => {
     if (engineRef.current) return engineRef.current;
     if (!canvasRef.current) return null;
 
+    const currentMode = shareModeRef.current;
     const vw = typeof window !== "undefined" ? window.innerWidth : 1080;
     const vh = typeof window !== "undefined" ? window.innerHeight : 1920;
     const aspect = vh / (vw || 1);
-    const canvasWidth = 1080;
-    const canvasHeight = Math.round(1080 * aspect);
+    const canvasWidth = currentMode === "post" ? 1440 : 1080;
+    const canvasHeight = currentMode === "post" ? 1080 : Math.round(1080 * aspect);
 
     const engine = new CanvasEngine({
       canvas: canvasRef.current,
       width: canvasWidth,
       height: canvasHeight,
-      fitMode: "contain",
+      fitMode: currentMode === "post" ? "cover" : "contain",
     });
+    engine.setShareMode(currentMode);
 
     // Katman Seçimi
     engine.on("select", (layer: BaseLayer | null) => {
@@ -359,6 +375,7 @@ export default function ShareStoryPage() {
     engine.on("filter-swipe", (_dir: string, filterName: string) => {
       const currentPreset = engine.getCurrentFilterPreset();
       setActiveFilterGradient(currentPreset.backgroundGradient);
+      setActiveFilterIndex(engine.getFilterIndex());
       setFilterToast(filterName);
       if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
       toastTimerRef.current = setTimeout(() => {
@@ -413,16 +430,21 @@ export default function ShareStoryPage() {
     return engine;
   }, []);
 
+  // [MODIFIED BY Bedirhan]
   // Pencere boyutu değiştiğinde tuval çözünürlüğünü dinamik olarak güncelle
   useEffect(() => {
     const handleResize = () => {
       if (engineRef.current && canvasRef.current) {
-        const vw = window.innerWidth || 1080;
-        const vh = window.innerHeight || 1920;
-        const aspect = vh / (vw || 1);
-        const w = 1080;
-        const h = Math.round(1080 * aspect);
-        engineRef.current.updateCanvasResolution(w, h);
+        if (shareModeRef.current === "post") {
+          engineRef.current.updateCanvasResolution(1440, 1080);
+        } else {
+          const vw = window.innerWidth || 1080;
+          const vh = window.innerHeight || 1920;
+          const aspect = vh / (vw || 1);
+          const w = 1080;
+          const h = Math.round(1080 * aspect);
+          engineRef.current.updateCanvasResolution(w, h);
+        }
       }
     };
 
@@ -430,17 +452,70 @@ export default function ShareStoryPage() {
     return () => window.removeEventListener("resize", handleResize);
   }, []);
 
-  // ─────────────────────────────────────────────────────────────
-  // 1. TABAN MEDYA GİRİŞ GÜVENLİĞİ (BASE MEDIA GUARD)
-  // ─────────────────────────────────────────────────────────────
-  useEffect(() => {
-    if (mounted && !hasMedia && !guardTriggeredRef.current) {
-      guardTriggeredRef.current = true;
-      setTimeout(() => {
-        baseFileInputRef.current?.click();
-      }, 80);
+  // [START] CREATED BY Bedirhan
+  // 1. MOD SEÇİMİ VE TABAN MEDYA AKIŞI (HİKAYE / REELS / GÖNDERİ)
+  const handleSelectMode = useCallback(
+    (mode: ShareMode) => {
+      shareModeRef.current = mode;
+      setShareMode(mode);
+      setIsModeSelectorOpen(false);
+      setActiveDrawer("none");
+
+      const engine = getOrCreateEngine();
+      if (engine) {
+        if (mode === "post") {
+          engine.setFitMode("cover");
+          engine.updateCanvasResolution(1440, 1080);
+        } else {
+          const vw = typeof window !== "undefined" ? window.innerWidth : 1080;
+          const vh = typeof window !== "undefined" ? window.innerHeight : 1920;
+          const aspect = vh / (vw || 1);
+          engine.setFitMode("contain");
+          engine.updateCanvasResolution(1080, Math.round(1080 * aspect));
+        }
+        engine.setShareMode(mode);
+        setVideoState(engine.getVideoState());
+      }
+
+      if (!hasMedia) {
+        setTimeout(() => {
+          baseFileInputRef.current?.click();
+        }, 60);
+      }
+    },
+    [getOrCreateEngine, hasMedia]
+  );
+
+  const handleChangePostAdjustments = useCallback((partial: Partial<PostAdjustmentState>) => {
+    if (!engineRef.current) return;
+    engineRef.current.setPostAdjustments(partial);
+    setPostAdjustments(engineRef.current.getPostAdjustments());
+  }, []);
+
+  const handleResetPostAdjustments = useCallback(() => {
+    if (!engineRef.current) return;
+    engineRef.current.resetPostAdjustments();
+    setPostAdjustments(engineRef.current.getPostAdjustments());
+  }, []);
+
+  const handleSelectFilterIndex = useCallback((index: number) => {
+    const engine = engineRef.current;
+    if (!engine) return;
+    engine.setFilterByIndex(index);
+    setActiveFilterIndex(index);
+    const preset = FILTER_PRESETS[index];
+    if (preset) {
+      setActiveFilterGradient(preset.backgroundGradient);
     }
-  }, [mounted, hasMedia]);
+  }, []);
+
+  const handleSelectReelsEffect = useCallback((effect: ReelsEffectId) => {
+    const engine = engineRef.current;
+    if (!engine) return;
+    engine.setReelsEffect(effect);
+    setActiveReelsEffect(effect);
+  }, []);
+  // [END] CREATED BY Bedirhan
 
   // [MODIFIED BY Bedirhan]
   const handleBaseFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -456,15 +531,38 @@ export default function ShareStoryPage() {
       return;
     }
 
+    if (shareModeRef.current === "post" && file.type.startsWith("video/")) {
+      setFilterToast("Gönderi modunda yalnızca fotoğraf seçilebilir");
+      if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
+      toastTimerRef.current = setTimeout(() => setFilterToast(null), 2200);
+      e.target.value = "";
+      return;
+    }
+
     try {
       const engine = getOrCreateEngine();
       if (!engine) return;
 
+      engine.setShareMode(shareModeRef.current);
+      if (shareModeRef.current === "post") {
+        engine.setFitMode("cover");
+        engine.updateCanvasResolution(1440, 1080);
+      } else {
+        const vw = typeof window !== "undefined" ? window.innerWidth : 1080;
+        const vh = typeof window !== "undefined" ? window.innerHeight : 1920;
+        const aspect = vh / (vw || 1);
+        engine.setFitMode("contain");
+        engine.updateCanvasResolution(1080, Math.round(1080 * aspect));
+      }
+
       thumbAbortRef.current?.abort();
       setVideoThumbnails([]);
 
-      const media = await engine.loadMedia(file, undefined, false);
+      const media = await engine.loadMedia(file, undefined, shareModeRef.current === "post");
       setHasMedia(true);
+      setPostAdjustments(engine.getPostAdjustments());
+      setActiveFilterIndex(engine.getFilterIndex());
+      setActiveReelsEffect(engine.getReelsEffect());
       e.target.value = "";
 
       if (media.type === "video") {
@@ -476,6 +574,12 @@ export default function ShareStoryPage() {
           signal: abortCtrl.signal,
           onThumbnail: (thumbs) => setVideoThumbnails(thumbs),
         }).catch(() => {});
+      } else if (shareModeRef.current === "reels") {
+        // Reels modunda fotoğraf otomatik 5 saniyelik hareketli klibe dönüşür
+        setVideoState(engine.getVideoState());
+        generatePhotoThumbnails(file, 8)
+          .then((thumbs) => setVideoThumbnails(thumbs))
+          .catch(() => {});
       } else {
         setVideoState(INITIAL_VIDEO_STATE);
       }
@@ -714,7 +818,7 @@ export default function ShareStoryPage() {
         });
         setIsExportingVideo(false);
         const isWebm = blob.type.includes("webm");
-        filename = `story_${profile.uid}_${timestamp}.${isWebm ? "webm" : "mp4"}`;
+        filename = `${shareMode}_${profile.uid}_${timestamp}.${isWebm ? "webm" : "mp4"}`;
         contentType = isWebm ? "video/webm" : "video/mp4";
         publishedMediaType = "video";
       } else {
@@ -722,7 +826,7 @@ export default function ShareStoryPage() {
           mimeType: "image/webp",
           quality: 0.92,
         });
-        filename = `story_${profile.uid}_${timestamp}.webp`;
+        filename = `${shareMode}_${profile.uid}_${timestamp}.webp`;
         contentType = "image/webp";
         publishedMediaType = "image";
       }
@@ -742,7 +846,7 @@ export default function ShareStoryPage() {
         authorPhotoURL: profile.photoURL || "",
         mediaUrl,
         mediaType: publishedMediaType,
-        type: "reels",
+        type: shareMode,
         caption: "",
         likesCount: 0,
         commentsCount: 0,
@@ -801,6 +905,8 @@ export default function ShareStoryPage() {
   }
 
   const currentFontCfg = FONT_PRESET_CONFIGS[activeFontPreset];
+  const modeLabel =
+    shareMode === "story" ? "Hikaye" : shareMode === "reels" ? "Reels" : "Gönderi";
 
   return (
     <div className="fixed inset-0 w-screen h-[100dvh] bg-black text-white overflow-hidden select-none no-select touch-none">
@@ -809,7 +915,7 @@ export default function ShareStoryPage() {
         type="file"
         ref={baseFileInputRef}
         onChange={handleBaseFileChange}
-        accept="image/*,video/*"
+        accept={shareMode === "post" ? "image/*" : "image/*,video/*"}
         className="hidden"
       />
 
@@ -822,25 +928,34 @@ export default function ShareStoryPage() {
         className="hidden"
       />
 
-      {/* 3. TAM EKRAN ÇERÇEVESİZ TUVAL (BORDERLESS CANVAS STAGE - TÜM EKRANI KAPLAR) */}
+      {/* [MODIFIED BY Bedirhan] */}
+      {/* 3. TUVAL SAHNESİ: Hikaye/Reels için 9:16 Tam Ekran, Gönderi için 4:3 Stüdyo Çerçevesi */}
       <div
         className="fixed inset-0 w-full h-full flex items-center justify-center overflow-hidden select-none"
         style={{
-          background: activeFilterGradient,
+          background: shareMode === "post" ? "#09090b" : activeFilterGradient,
           transition: "background 400ms cubic-bezier(0.25, 1, 0.5, 1)",
           willChange: "background",
         }}
       >
-        <canvas
-          key={canvasKey}
-          ref={canvasRef}
-          style={{
-            width: "100%",
-            height: "100%",
-            touchAction: "none",
-          }}
-          className="w-full h-full block cursor-default select-none touch-none"
-        />
+        <div
+          className={
+            shareMode === "post"
+              ? "w-full max-w-md aspect-[4/3] mx-3 mb-40 rounded-2xl overflow-hidden border border-white/15 shadow-2xl bg-black"
+              : "w-full h-full"
+          }
+        >
+          <canvas
+            key={canvasKey}
+            ref={canvasRef}
+            style={{
+              width: "100%",
+              height: "100%",
+              touchAction: "none",
+            }}
+            className="w-full h-full block cursor-default select-none touch-none"
+          />
+        </div>
       </div>
 
       {/* 4. CANLI FİLTRE ROZETİ (0.5s Minimal Instagram Swipe Toast) */}
@@ -850,8 +965,8 @@ export default function ShareStoryPage() {
         </div>
       )}
 
-      {/* 5. SOL ÜST: GERİ VE İNDİRME BUTONLARI */}
-      {!isTextEditing && (
+      {/* 5. SOL ÜST: GERİ, MOD SEÇİCİ VE İNDİRME BUTONLARI */}
+      {!isTextEditing && !isModeSelectorOpen && (
         <div className="fixed left-4 top-6 z-40 flex items-center gap-2 pointer-events-auto">
           <button
             type="button"
@@ -860,6 +975,15 @@ export default function ShareStoryPage() {
             className="w-10 h-10 rounded-full bg-black/50 backdrop-blur-md border border-white/15 text-white hover:bg-black/70 active:scale-90 transition-all shadow-xl flex items-center justify-center"
           >
             <ChevronLeft className="w-5 h-5" />
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setIsModeSelectorOpen(true)}
+            disabled={isPublishing}
+            className="h-10 px-3.5 rounded-full bg-black/50 backdrop-blur-md border border-white/15 text-white hover:bg-black/70 active:scale-95 transition-all shadow-xl flex items-center gap-1.5 text-xs font-bold"
+          >
+            <span>{modeLabel}</span>
           </button>
 
           {hasMedia && (
@@ -872,13 +996,11 @@ export default function ShareStoryPage() {
               <Download className="w-4 h-4 text-zinc-300" />
             </button>
           )}
-
-          
         </div>
       )}
 
       {/* Taban Medya Henüz Seçilmediyse: Ortada Minimal Medya Seç Butonu */}
-      {!hasMedia && (
+      {!hasMedia && !isModeSelectorOpen && (
         <div className="fixed inset-0 flex flex-col items-center justify-center pointer-events-none z-30">
           <button
             type="button"
@@ -886,107 +1008,144 @@ export default function ShareStoryPage() {
             className="pointer-events-auto flex items-center gap-2.5 px-6 py-3.5 rounded-2xl bg-white/10 hover:bg-white/15 active:scale-95 backdrop-blur-xl border border-white/20 text-white font-semibold text-sm shadow-2xl transition-all"
           >
             <ImageIcon className="w-5 h-5 text-emerald-400" />
-            <span>Fotoğraf veya Video Seç</span>
+            <span>
+              {shareMode === "post" ? "Fotoğraf Seç" : "Fotoğraf veya Video Seç"}
+            </span>
           </button>
         </div>
       )}
 
-      {/* 6. SAĞ DİKEY 4'LÜ AKSİYON BARI (KATMAN 4) */}
-      {!isTextEditing && hasMedia && (
-        <div className="fixed right-4 top-6 flex flex-col gap-3.5 z-40 pointer-events-auto animate-in fade-in duration-200">
-          {/* #1: Metin Aracı (Aa) */}
-          <button
-            type="button"
-            onClick={() => openTextEditor()}
-            className="w-10 h-10 rounded-full bg-black/50 backdrop-blur-md border border-white/15 text-white hover:bg-black/70 active:scale-90 transition-all shadow-xl flex items-center justify-center"
-          >
-            <CaseSensitive className="w-5 h-5" />
-          </button>
+      {/* [START] CREATED BY Bedirhan */}
+      {/* 6A. HİKAYE MODU (STORY): Video kırpma kapalı, dikey hikaye araçları + Sağ Alt Paylaş */}
+      {!isTextEditing && hasMedia && shareMode === "story" && (
+        <>
+          <StoryEditor
+            activeDrawer={activeDrawer}
+            selectedMusic={selectedMusic}
+            onOpenTextEditor={() => openTextEditor()}
+            onOpenStickerSheet={() => setActiveDrawer("sticker_sheet")}
+            onOpenMusicPicker={() => setIsMusicDrawerOpen(true)}
+            onOpenTagSheet={() => setActiveDrawer("tag")}
+          />
 
-          {/* #2: Çıkartmalar & Fotoğraf Ekle (Sticker) */}
-          <button
-            type="button"
-            onClick={() => setActiveDrawer("sticker_sheet")}
-            className={`w-10 h-10 rounded-full backdrop-blur-md border transition-all shadow-xl flex items-center justify-center active:scale-90 ${
-              activeDrawer === "sticker_sheet"
-                ? "bg-white text-black border-white"
-                : "bg-black/50 border-white/15 text-white hover:bg-black/70"
-            }`}
-          >
-            <Sticker className="w-5 h-5 text-emerald-400" />
-          </button>
-
-          {/* #3: Müzik Aracı (Music) */}
-          <button
-            type="button"
-            onClick={() => setIsMusicDrawerOpen(true)}
-            className={`w-10 h-10 rounded-full backdrop-blur-md border transition-all shadow-xl flex items-center justify-center active:scale-90 ${
-              selectedMusic
-                ? "bg-pink-500 text-white border-pink-400 shadow-lg shadow-pink-500/30"
-                : "bg-black/50 border-white/15 text-white hover:bg-black/70"
-            }`}
-          >
-            <Music className={`w-5 h-5 ${selectedMusic ? "text-white" : "text-pink-400"}`} />
-          </button>
-
-          {/* #4: @Etiketleme Aracı (AtSign) */}
-          <button
-            type="button"
-            onClick={() => setActiveDrawer("tag")}
-            className={`w-10 h-10 rounded-full backdrop-blur-md border transition-all shadow-xl flex items-center justify-center active:scale-90 ${
-              activeDrawer === "tag"
-                ? "bg-white text-black border-white"
-                : "bg-black/50 border-white/15 text-white hover:bg-black/70"
-            }`}
-          >
-            <AtSign className="w-5 h-5 text-cyan-400" />
-          </button>
-
-          {/* [START] CREATED BY Bedirhan */}
-          {videoState.isVideo && (
+          <div className="fixed right-4 bottom-6 z-40 pointer-events-auto animate-in fade-in duration-200">
             <button
               type="button"
-              onClick={() => setActiveDrawer("video_tools")}
-              className={`w-10 h-10 rounded-full backdrop-blur-md border transition-all shadow-xl flex items-center justify-center active:scale-90 ${
-                activeDrawer === "video_tools"
-                  ? "bg-white text-black border-white"
-                  : "bg-black/50 border-white/15 text-white hover:bg-black/70"
-              }`}
+              onClick={handlePublish}
+              disabled={isPublishing}
+              className="group flex items-center gap-2 pl-4 pr-1.5 py-1.5 rounded-full bg-white text-black font-semibold text-sm shadow-2xl hover:bg-neutral-100 active:scale-95 transition-all disabled:opacity-50"
             >
-              <Film className="w-5 h-5 text-amber-400" />
+              {isPublishing ? (
+                <>
+                  <span className="text-xs font-bold">Paylaşılıyor</span>
+                  <div className="w-9 h-9 rounded-full bg-black text-white flex items-center justify-center">
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                  </div>
+                </>
+              ) : (
+                <>
+                  <span className="text-xs font-bold">Paylaş</span>
+                  <div className="w-9 h-9 rounded-full bg-black text-white flex items-center justify-center group-hover:scale-105 transition-transform">
+                    <CircleChevronRight className="w-5 h-5" />
+                  </div>
+                </>
+              )}
             </button>
-          )}
-          {/* [END] CREATED BY Bedirhan */}
-        </div>
+          </div>
+        </>
       )}
 
-      {/* 7. SAĞ ALT: PAYLAŞ OKU (PRIMARY CTA) */}
-      {!isTextEditing && hasMedia && (
-        <div className="fixed right-4 bottom-6 z-40 pointer-events-auto animate-in fade-in duration-200">
-          <button
-            type="button"
-            onClick={handlePublish}
-            disabled={isPublishing}
-            className="group flex items-center gap-2 pl-4 pr-1.5 py-1.5 rounded-full bg-white text-black font-semibold text-sm shadow-2xl hover:bg-neutral-100 active:scale-95 transition-all disabled:opacity-50"
-          >
-            {isPublishing ? (
-              <>
-                <span className="text-xs font-bold">Paylaşılıyor</span>
-                <div className="w-9 h-9 rounded-full bg-black text-white flex items-center justify-center">
-                  <Loader2 className="w-4 h-4 animate-spin" />
-                </div>
-              </>
-            ) : (
-              <>
-                <span className="text-xs font-bold">Paylaş</span>
-                <div className="w-9 h-9 rounded-full bg-black text-white flex items-center justify-center group-hover:scale-105 transition-transform">
-                  <CircleChevronRight className="w-5 h-5" />
-                </div>
-              </>
-            )}
-          </button>
-        </div>
+      {/* 6B. REELS MODU (CAPCUT SÜREKLİ AÇIK ALT BAR + FOTOĞRAFTAN 5SN VİDEO) */}
+      {!isTextEditing && hasMedia && shareMode === "reels" && (
+        <>
+          <div className="fixed right-4 top-6 flex flex-col gap-2.5 z-40 pointer-events-auto">
+            <button
+              type="button"
+              onClick={() => setActiveDrawer("sticker_sheet")}
+              className="w-10 h-10 rounded-full bg-black/50 backdrop-blur-md border border-white/15 text-white hover:bg-black/70 active:scale-90 transition-all shadow-xl flex items-center justify-center"
+            >
+              <Sticker className="w-5 h-5 text-emerald-400" />
+            </button>
+            <button
+              type="button"
+              onClick={() => setActiveDrawer("tag")}
+              className="w-10 h-10 rounded-full bg-black/50 backdrop-blur-md border border-white/15 text-white hover:bg-black/70 active:scale-90 transition-all shadow-xl flex items-center justify-center"
+            >
+              <AtSign className="w-5 h-5 text-cyan-400" />
+            </button>
+          </div>
+
+          <ReelsEditor
+            videoState={videoState}
+            thumbnails={videoThumbnails}
+            selectedMusic={selectedMusic}
+            musicVolume={musicVolume}
+            activeFilterIndex={activeFilterIndex}
+            activeReelsEffect={activeReelsEffect}
+            isPublishing={isPublishing}
+            onChangeTrim={(start, end) => engineRef.current?.setTrim(start, end)}
+            onChangeSpeed={(rate) => engineRef.current?.setSpeed(rate)}
+            onChangeVolume={(vol, muted) => engineRef.current?.setVolume(vol, muted)}
+            onChangeMusicVolume={(vol) => setMusicVolume(vol)}
+            onSeek={(t) => engineRef.current?.seekVideo(t)}
+            onTogglePlay={() => engineRef.current?.toggleVideoPlay()}
+            onOpenTextEditor={() => openTextEditor()}
+            onOpenMusicPicker={() => setIsMusicDrawerOpen(true)}
+            onSelectFilterIndex={handleSelectFilterIndex}
+            onSelectReelsEffect={handleSelectReelsEffect}
+            onPublish={handlePublish}
+          />
+        </>
       )}
+
+      {/* 6C. GÖNDERİ MODU (4:3 PROFESYONEL FOTOĞRAF STÜDYOSU) */}
+      {!isTextEditing && hasMedia && shareMode === "post" && (
+        <>
+          <div className="fixed right-4 top-6 flex flex-col gap-2.5 z-40 pointer-events-auto">
+            <button
+              type="button"
+              onClick={() => openTextEditor()}
+              className="w-10 h-10 rounded-full bg-black/50 backdrop-blur-md border border-white/15 text-white hover:bg-black/70 active:scale-90 transition-all shadow-xl flex items-center justify-center font-bold text-xs"
+            >
+              Aa
+            </button>
+            <button
+              type="button"
+              onClick={() => setActiveDrawer("tag")}
+              className="w-10 h-10 rounded-full bg-black/50 backdrop-blur-md border border-white/15 text-white hover:bg-black/70 active:scale-90 transition-all shadow-xl flex items-center justify-center"
+            >
+              <AtSign className="w-5 h-5 text-cyan-400" />
+            </button>
+          </div>
+
+          <PostPhotoEditor
+            adjustments={postAdjustments}
+            isPublishing={isPublishing}
+            onChangeAdjustments={handleChangePostAdjustments}
+            onResetAdjustments={handleResetPostAdjustments}
+            onRotate90={() => engineRef.current?.rotateMedia90()}
+            onFlipHorizontal={() => engineRef.current?.flipMediaHorizontal()}
+            onFlipVertical={() => engineRef.current?.flipMediaVertical()}
+            onResetGeometry={() => engineRef.current?.resetMediaGeometry()}
+            onPublish={handlePublish}
+          />
+        </>
+      )}
+
+      {/* 3 MOD SEÇİCİ MODAL (Hikaye / Reels / Gönderi) */}
+      <ModeSelectorModal
+        isOpen={isModeSelectorOpen}
+        activeMode={hasMedia ? shareMode : null}
+        onSelectMode={handleSelectMode}
+        onBack={() => {
+          if (hasMedia) {
+            setIsModeSelectorOpen(false);
+          } else {
+            router.back();
+          }
+        }}
+      />
+      {/* [END] CREATED BY Bedirhan */}
 
       {/* 8. MIKNATISLI ÇÖP KUTUSU (MAGNETIC TRASH) */}
       {!isTextEditing && isDraggingObject && (

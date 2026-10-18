@@ -60,10 +60,12 @@ export class MediaRecorderFallback {
     const playbackRate = state.playbackRate || 1.0;
     const outputDuration = Math.max(0.2, (trimEnd - trimStart) / playbackRate);
 
+    // [MODIFIED BY Bedirhan]
     engine.setExportingVideo(true);
     const mediaLayer = engine.getMediaLayer();
     const video = mediaLayer?.getVideoElement();
-    if (!video) {
+    const isMotionPhoto = Boolean(state.isMotionPhoto);
+    if (!video && !isMotionPhoto) {
       engine.setExportingVideo(false);
       throw new Error('Video elementi bulunamadı');
     }
@@ -92,7 +94,7 @@ export class MediaRecorderFallback {
           rafId = null;
         }
         canvasStream.getTracks().forEach((t) => t.stop());
-        video.pause();
+        if (video) video.pause();
         engine.setExportingVideo(false);
       };
 
@@ -135,10 +137,14 @@ export class MediaRecorderFallback {
 
       try {
         await engine.renderFrameAt(exportCtx, trimStart, width, height);
-        video.playbackRate = playbackRate;
-        video.muted = true;
+        if (video) {
+          video.playbackRate = playbackRate;
+          video.muted = true;
+        }
         recorder.start(100);
-        await video.play();
+        if (video) {
+          await video.play();
+        }
 
         const startWall = performance.now();
         const renderTick = () => {
@@ -147,9 +153,14 @@ export class MediaRecorderFallback {
           const progress = Math.min(0.99, elapsed / outputDuration);
           options?.onProgress?.(progress);
 
+          if (isMotionPhoto && mediaLayer) {
+            mediaLayer.virtualTime = Math.min(trimEnd, trimStart + elapsed * playbackRate);
+          }
+
           engine.renderClean(exportCtx, width, height);
 
-          if (video.currentTime >= trimEnd - 0.02 || video.ended || elapsed >= outputDuration) {
+          const videoFinished = video ? (video.currentTime >= trimEnd - 0.02 || video.ended) : false;
+          if (videoFinished || elapsed >= outputDuration) {
             if (recorder.state !== 'inactive') {
               recorder.stop();
             }

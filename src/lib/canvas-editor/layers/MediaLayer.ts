@@ -1,14 +1,19 @@
 import { BaseLayer } from './BaseLayer';
+// [MODIFIED BY Bedirhan]
 import {
   DEFAULT_FILTER_VALUES,
+  DEFAULT_POST_ADJUSTMENTS,
   EditorMedia,
   FilterPreset,
   FilterValues,
   FitMode,
   MediaFilters,
   OverlayEffect,
-  Rect
+  PostAdjustmentState,
+  Rect,
+  ReelsEffectId,
 } from '../types';
+import { ImageAdjustmentsEngine } from '../image-adjustments';
 
 export const DEFAULT_FILTERS: MediaFilters = {
   brightness: 100,
@@ -42,6 +47,11 @@ export class MediaLayer extends BaseLayer {
   public playbackRate: number = 1.0;
   public volume: number = 1.0;
   public muted: boolean = false;
+  public isMotionPhoto: boolean = false;
+  public virtualTime: number = 0;
+  public virtualPlaying: boolean = false;
+  public postAdjustments: PostAdjustmentState = { ...DEFAULT_POST_ADJUSTMENTS };
+  public reelsEffect: ReelsEffectId = 'none';
   // [END] CREATED BY Bedirhan
 
   private animFrameId: number | null = null;
@@ -297,14 +307,35 @@ export class MediaLayer extends BaseLayer {
       ctx.imageSmoothingEnabled = false;
     }
 
-    // Ana çizim
-    ctx.drawImage(
-      drawSource,
-      -dims.width / 2,
-      -dims.height / 2,
-      dims.width,
-      dims.height
-    );
+    // [MODIFIED BY Bedirhan]
+    const hasCustomAdjustments =
+      !ImageAdjustmentsEngine.isDefaultAdjustments(this.postAdjustments) ||
+      this.reelsEffect !== 'none';
+
+    if (hasCustomAdjustments) {
+      ImageAdjustmentsEngine.renderAdjustedMedia(
+        ctx,
+        drawSource,
+        {
+          x: -dims.width / 2,
+          y: -dims.height / 2,
+          width: dims.width,
+          height: dims.height,
+        },
+        this.postAdjustments,
+        this.reelsEffect,
+        this.getCurrentTime()
+      );
+    } else {
+      // Ana çizim
+      ctx.drawImage(
+        drawSource,
+        -dims.width / 2,
+        -dims.height / 2,
+        dims.width,
+        dims.height
+      );
+    }
 
     if (usePixelated) {
       ctx.imageSmoothingEnabled = prevSmooth;
@@ -397,6 +428,30 @@ export class MediaLayer extends BaseLayer {
   }
 
   // [START] CREATED BY Bedirhan
+  public enableMotionPhoto(duration = 5): void {
+    this.isMotionPhoto = true;
+    this.media.duration = duration;
+    this.trimStart = 0;
+    this.trimEnd = duration;
+    this.playbackRate = 1.0;
+    this.volume = 0;
+    this.muted = true;
+    this.virtualTime = 0;
+    this.virtualPlaying = true;
+  }
+
+  public setPostAdjustments(adj: Partial<PostAdjustmentState>): void {
+    this.postAdjustments = { ...this.postAdjustments, ...adj };
+  }
+
+  public resetPostAdjustments(): void {
+    this.postAdjustments = { ...DEFAULT_POST_ADJUSTMENTS };
+  }
+
+  public setReelsEffect(effect: ReelsEffectId): void {
+    this.reelsEffect = effect;
+  }
+
   public getVideoElement(): HTMLVideoElement | null {
     if (this.media.type === 'video' && this.media.element instanceof HTMLVideoElement) {
       return this.media.element;
@@ -405,10 +460,21 @@ export class MediaLayer extends BaseLayer {
   }
 
   public getDuration(): number {
+    if (this.isMotionPhoto) {
+      return this.media.duration || 5;
+    }
     const video = this.getVideoElement();
     if (!video) return 0;
     const d = Number.isFinite(video.duration) && video.duration > 0 ? video.duration : (this.media.duration || 0);
     return Number.isFinite(d) ? d : 0;
+  }
+
+  public getCurrentTime(): number {
+    if (this.isMotionPhoto) {
+      return this.virtualTime;
+    }
+    const video = this.getVideoElement();
+    return video ? video.currentTime || 0 : 0;
   }
 
   public setTrim(start: number, end: number): void {
@@ -418,6 +484,13 @@ export class MediaLayer extends BaseLayer {
     const clampedEnd = Math.max(clampedStart + 0.1, Math.min(end, maxEnd, clampedStart + 60));
     this.trimStart = clampedStart;
     this.trimEnd = clampedEnd;
+
+    if (this.isMotionPhoto) {
+      if (this.virtualTime < this.trimStart || this.virtualTime > this.trimEnd) {
+        this.virtualTime = this.trimStart;
+      }
+      return;
+    }
 
     const video = this.getVideoElement();
     if (video) {
@@ -455,11 +528,16 @@ export class MediaLayer extends BaseLayer {
   }
 
   public async seek(t: number): Promise<void> {
-    const video = this.getVideoElement();
-    if (!video) return;
-
     const dur = this.getDuration();
     const clamped = Math.max(0, Math.min(t, dur > 0 ? Math.max(0, dur - 0.001) : t));
+
+    if (this.isMotionPhoto) {
+      this.virtualTime = clamped;
+      return;
+    }
+
+    const video = this.getVideoElement();
+    if (!video) return;
 
     if (Math.abs(video.currentTime - clamped) < 0.002 && video.readyState >= 2 && !video.seeking) {
       return;
@@ -517,6 +595,7 @@ export class MediaLayer extends BaseLayer {
       cancelAnimationFrame(this.animFrameId);
       this.animFrameId = null;
     }
+    this.virtualPlaying = false;
     const video = this.getVideoElement();
     if (video) {
       try {

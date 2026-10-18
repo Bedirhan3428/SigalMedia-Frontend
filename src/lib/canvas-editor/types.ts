@@ -12,8 +12,54 @@ export interface EditorMedia {
 }
 
 // [START] CREATED BY Bedirhan
+export type ShareMode = 'story' | 'reels' | 'post';
+
+export type PostStudioFilterId =
+  | 'none'
+  | 'cinematic'
+  | 'vintage_90s'
+  | 'cold_nordic'
+  | 'warm_portrait'
+  | 'mono_contrast'
+  | 'fade_film';
+
+export type ReelsEffectId =
+  | 'none'
+  | 'glitch'
+  | 'zoom_pulse'
+  | 'flash'
+  | 'rgb_shift'
+  | 'vhs_grain';
+
+export interface PostAdjustmentState {
+  brightness: number;   // -100 .. +100 (0 default)
+  contrast: number;     // -100 .. +100 (0 default)
+  saturation: number;   // -100 .. +100 (0 default)
+  warmth: number;       // -100 .. +100 (0 default)
+  vignette: number;     // 0 .. 100 (0 default)
+  sharpness: number;    // 0 .. 100 (0 default)
+  grain: number;        // 0 .. 100 (0 default)
+  lightLeak: number;    // 0 .. 100 (0 default)
+  bokehGlow: number;    // 0 .. 100 (0 default)
+  filterPreset: PostStudioFilterId;
+}
+
+export const DEFAULT_POST_ADJUSTMENTS: PostAdjustmentState = {
+  brightness: 0,
+  contrast: 0,
+  saturation: 0,
+  warmth: 0,
+  vignette: 0,
+  sharpness: 0,
+  grain: 0,
+  lightLeak: 0,
+  bokehGlow: 0,
+  filterPreset: 'none',
+};
+
 export interface VideoState {
   isVideo: boolean;
+  isMotionPhoto?: boolean;
   duration: number;
   trimStart: number;
   trimEnd: number;
