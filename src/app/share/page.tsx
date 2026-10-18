@@ -479,10 +479,6 @@ export default function ShareStoryPage() {
     // - İkincil fotoğraf ise 5 kesim maskesi arasında geçiş yapar (Kare ➔ Daire ➔ Polaroid ➔ Kalp ➔ Yıldız)
     engine.on("single-tap", (layer: BaseLayer) => {
       if (layer instanceof TextLayer) {
-        if (shareModeRef.current === "reels") {
-          openTextEditorRef.current(layer);
-          return;
-        }
         const nextFont = layer.cycleFontPreset(() => engine.requestRender());
         setActiveFontPreset(nextFont);
         engine.requestRender();
@@ -1291,7 +1287,7 @@ export default function ShareStoryPage() {
           onCropModeChange={setIsReelsCropping}
           onSeek={(t) => engineRef.current?.seekVideo(t)}
           onTogglePlay={() => engineRef.current?.toggleVideoPlay()}
-          onOpenTextEditor={(layer) => openTextEditor(layer)}
+          onOpenTextEditor={() => openTextEditor()}
           onOpenMusicPicker={() => setIsMusicDrawerOpen(true)}
           onOpenStickerSheet={() => setActiveDrawer("sticker_sheet")}
           onOpenPhotoOverlay={() => overlayFileInputRef.current?.click()}

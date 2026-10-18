@@ -36,11 +36,7 @@ export interface VideoTimelineNLEProps {
   canUndo: boolean;
   canRedo: boolean;
   getCurrentTime?: () => number;
-  onSelectItem: (
-    id: string | null,
-    type: NLESelectedType,
-    isSecondTap?: boolean
-  ) => void;
+  onSelectItem: (id: string | null, type: NLESelectedType) => void;
   onTrimClip: (clipId: string, newSourceStart: number, newSourceEnd: number) => void;
   onReorderClips: (fromIndex: number, toIndex: number) => void;
   onAppendClipClick?: () => void;
