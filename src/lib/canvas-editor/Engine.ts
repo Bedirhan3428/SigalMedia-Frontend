@@ -1874,7 +1874,7 @@ export class CanvasEngine {
     this.listeners.get(event)?.delete(fn as unknown as (args: unknown) => void);
   }
 
-  private emit<K extends EngineEvent>(event: K, ...args: EngineEventMap[K]) {
+  public emit<K extends EngineEvent>(event: K, ...args: EngineEventMap[K]) {
     if (event === 'change') {
       this.invalidateStaticCache();
     }
