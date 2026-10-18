@@ -44,6 +44,7 @@ export interface TimelineOverlayTracksProps {
   ) => void;
   onPauseVideo?: () => void;
   onSeek?: (time: number) => void;
+  onEdgeScroll?: (deltaPx: number) => void;
   onOpenMusicPicker?: () => void;
   onOpenTextEditor?: () => void;
   onQuickAddEffect?: () => void;
@@ -76,6 +77,7 @@ export default function TimelineOverlayTracks({
   onChangeMusicTimeline,
   onPauseVideo,
   onSeek,
+  onEdgeScroll,
   onOpenMusicPicker,
   onOpenTextEditor,
   onQuickAddEffect,
@@ -85,7 +87,7 @@ export default function TimelineOverlayTracks({
   const longPressTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [elevatedItemId, setElevatedItemId] = useState<string | null>(null);
 
-  const trackMaxSec = Math.max(10, Math.ceil(totalDuration + 5));
+  const trackMaxSec = Math.max(10, Math.ceil(totalDuration + 10));
   const trackWidthPx = trackMaxSec * pps;
 
   const clearLongPress = () => {
@@ -124,10 +126,22 @@ export default function TimelineOverlayTracks({
     if (!st) return;
     e.stopPropagation();
 
+    // Ekran kenarlarında otomatik yatay kaydırma (Edge Auto-Scroll)
+    if (typeof window !== "undefined" && onEdgeScroll) {
+      const edgeZone = 48;
+      if (e.clientX > window.innerWidth - edgeZone) {
+        onEdgeScroll(10);
+        st.startX -= 10;
+      } else if (e.clientX < edgeZone) {
+        onEdgeScroll(-10);
+        st.startX += 10;
+      }
+    }
+
     const dxPx = e.clientX - st.startX;
     const dyPx = e.clientY - st.startY;
     const dtSec = dxPx / Math.max(20, pps);
-    const maxSec = Math.max(totalDuration + 5, 60);
+    const maxSec = Math.max(totalDuration + 15, 60);
 
     // Dikey sürükleme ile katman sırası (Z-Index / satır sırası) değiştirme
     if (

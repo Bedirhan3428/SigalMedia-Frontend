@@ -55,15 +55,15 @@ export const FONT_PRESET_CONFIGS: Record<FontPreset, {
 
 export const DEFAULT_TEXT_STYLE: TextStyle = {
   text: 'Yazı Ekleyin',
-  fontSize: 52,
+  fontSize: 90,
   fontFamily: "'Outfit', 'Google Sans', 'Inter', -apple-system, BlinkMacSystemFont, sans-serif",
   color: '#ffffff',
   fontWeight: '800',
   fontStyle: 'normal',
   textAlign: 'center',
   backgroundColor: '#000000',
-  backgroundPadding: 16,
-  borderRadius: 12,
+  backgroundPadding: 24,
+  borderRadius: 18,
   strokeColor: 'transparent',
   strokeWidth: 0,
   shadowColor: 'transparent',
@@ -241,9 +241,9 @@ export class TextLayer extends BaseLayer {
     ctx.restore();
 
     const hasBg = this.bgPreset === 'solid' || this.bgPreset === 'translucent';
-    const padding = hasBg ? (this.style.backgroundPadding ?? 18) : 8;
-    const totalW = maxLineWidth + padding * 2;
-    const totalH = lines.length * lineHeight + padding * 2;
+    const padding = hasBg ? (this.style.backgroundPadding ?? 24) : 16;
+    const totalW = Math.max(180, maxLineWidth + padding * 2);
+    const totalH = Math.max(110, lines.length * lineHeight + padding * 2);
 
     return {
       x: -totalW / 2,

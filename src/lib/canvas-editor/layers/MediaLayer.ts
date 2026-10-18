@@ -54,6 +54,7 @@ export class MediaLayer extends BaseLayer {
   public postAdjustments: PostAdjustmentState = { ...DEFAULT_POST_ADJUSTMENTS };
   public reelsEffect: ReelsEffectId = 'none';
   public effectClips: ReelsEffectClip[] = [];
+  public cropRect?: { x: number; y: number; width: number; height: number };
   // [END] CREATED BY Bedirhan
 
   private animFrameId: number | null = null;
@@ -236,6 +237,22 @@ export class MediaLayer extends BaseLayer {
     const cornerRadius = isFullScreenTouching ? 0 : Math.round(24 * (canvasWidth / 414));
 
     ctx.save();
+    if (
+      this.cropRect &&
+      (this.cropRect.x > 0.002 ||
+        this.cropRect.y > 0.002 ||
+        this.cropRect.width < 0.998 ||
+        this.cropRect.height < 0.998)
+    ) {
+      ctx.beginPath();
+      ctx.rect(
+        this.cropRect.x * canvasWidth,
+        this.cropRect.y * canvasHeight,
+        this.cropRect.width * canvasWidth,
+        this.cropRect.height * canvasHeight
+      );
+      ctx.clip();
+    }
     // 1. Serbest pozisyon (sağa / sola / yukarı / aşağı taşıma)
     ctx.translate(center.x, center.y);
     // 2. Serbest açı (döndürme)

@@ -1,8 +1,9 @@
 // [START] CREATED BY Bedirhan
+// [MODIFIED BY Bedirhan]
 "use client";
 
 import React, { useRef, useState } from "react";
-import { VolumeX, ArrowLeftRight } from "lucide-react";
+import { VolumeX, ArrowLeftRight, Plus } from "lucide-react";
 import { VideoTrackClip } from "@/lib/canvas-editor";
 
 export interface TimelineTrackClipsProps {
@@ -14,6 +15,8 @@ export interface TimelineTrackClipsProps {
   onSelectClip: (clipId: string) => void;
   onTrimClip: (clipId: string, newSourceStart: number, newSourceEnd: number) => void;
   onReorderClips: (fromIndex: number, toIndex: number) => void;
+  onAppendClipClick?: () => void;
+  onEdgeScroll?: (deltaPx: number) => void;
   onPauseVideo?: () => void;
   onSeek?: (time: number) => void;
   onCommitHistory?: () => void;
@@ -49,6 +52,8 @@ export default function TimelineTrackClips({
   onSelectClip,
   onTrimClip,
   onReorderClips,
+  onAppendClipClick,
+  onEdgeScroll,
   onPauseVideo,
   onSeek,
   onCommitHistory,
@@ -66,6 +71,7 @@ export default function TimelineTrackClips({
   const [trimPreview, setTrimPreview] = useState<TrimPreviewState | null>(null);
   const [reorderingClipId, setReorderingClipId] = useState<string | null>(null);
   const [insertionIndex, setInsertionIndex] = useState<number | null>(null);
+  const [reorderOffsetPx, setReorderOffsetPx] = useState<number>(0);
 
   const clearLongPressTimer = () => {
     if (longPressTimerRef.current) {
@@ -108,6 +114,7 @@ export default function TimelineTrackClips({
     } else if (state.mode === "reorder") {
       setReorderingClipId(state.clipId);
       setInsertionIndex(state.clipIndex);
+      setReorderOffsetPx(0);
     }
   };
 
@@ -117,7 +124,6 @@ export default function TimelineTrackClips({
     idx: number
   ) => {
     onSelectClip(clip.id);
-    if (clips.length <= 1) return;
 
     clearLongPressTimer();
     const targetEl = e.currentTarget as HTMLElement;
@@ -126,6 +132,7 @@ export default function TimelineTrackClips({
     const startY = e.clientY;
     pressOriginRef.current = { x: startX, y: startY, pointerId, target: targetEl };
 
+    // 300ms Basılı Tutma -> 1:1 Küçük Kareler (CapCut Tile Reorder Mode)
     longPressTimerRef.current = setTimeout(() => {
       longPressTimerRef.current = null;
       onPauseVideo?.();
@@ -152,6 +159,7 @@ export default function TimelineTrackClips({
       dragRef.current = state;
       setReorderingClipId(clip.id);
       setInsertionIndex(idx);
+      setReorderOffsetPx(0);
     }, 300);
   };
 
@@ -170,13 +178,27 @@ export default function TimelineTrackClips({
     if (!st) return;
     e.stopPropagation();
 
+    // Ekran kenarlarına yaklaşıldığında otomatik yatay kaydırma (Edge Auto-Scroll)
+    if (typeof window !== "undefined" && onEdgeScroll) {
+      const edgeZone = 48;
+      if (e.clientX > window.innerWidth - edgeZone) {
+        onEdgeScroll(10);
+        st.startX -= 10;
+      } else if (e.clientX < edgeZone) {
+        onEdgeScroll(-10);
+        st.startX += 10;
+      }
+    }
+
     const dxPx = e.clientX - st.startX;
     const rate = Math.max(0.25, st.playbackRate || 1.0);
     const dtTimelineSec = dxPx / Math.max(20, pps);
     const dtSourceSec = dtTimelineSec * rate;
+    const clipObj = clips.find((c) => c.id === st.clipId);
+    const clipMediaDur = clipObj?.media?.duration || maxSourceDuration || 60;
     const maxAllowedSource = st.isMotionPhoto
       ? 60
-      : Math.max(0.5, maxSourceDuration || 60);
+      : Math.max(0.5, clipMediaDur, st.initSourceEnd + 30);
     const initDurSec = (st.initSourceEnd - st.initSourceStart) / rate;
 
     if (st.mode === "trim-left") {
@@ -231,8 +253,11 @@ export default function TimelineTrackClips({
     }
 
     if (st.mode === "reorder") {
-      const thresholdPx = Math.max(36, ((st.initSourceEnd - st.initSourceStart) / rate) * pps * 0.48);
-      if (dxPx > thresholdPx && st.clipIndex < clips.length - 1) {
+      // 1:1 Küçük Kareler Modunda (64px kare + 10px boşluk = 74px slot adımı)
+      const tileSlotPx = 68;
+      setReorderOffsetPx(dxPx);
+
+      if (dxPx > tileSlotPx && st.clipIndex < clips.length - 1) {
         const nextIdx = st.clipIndex + 1;
         onReorderClips(st.clipIndex, nextIdx);
         setInsertionIndex(nextIdx);
@@ -241,7 +266,8 @@ export default function TimelineTrackClips({
           clipIndex: nextIdx,
           startX: e.clientX,
         };
-      } else if (dxPx < -thresholdPx && st.clipIndex > 0) {
+        setReorderOffsetPx(0);
+      } else if (dxPx < -tileSlotPx && st.clipIndex > 0) {
         const prevIdx = st.clipIndex - 1;
         onReorderClips(st.clipIndex, prevIdx);
         setInsertionIndex(prevIdx);
@@ -250,6 +276,7 @@ export default function TimelineTrackClips({
           clipIndex: prevIdx,
           startX: e.clientX,
         };
+        setReorderOffsetPx(0);
       }
     }
   };
@@ -268,6 +295,7 @@ export default function TimelineTrackClips({
     setTrimPreview(null);
     setReorderingClipId(null);
     setInsertionIndex(null);
+    setReorderOffsetPx(0);
 
     // Aşama 2: Parmağı bıraktığında geçici boşluğu kapat ve manyetik birleşmeyi (Ripple) uygula
     if (
@@ -282,189 +310,258 @@ export default function TimelineTrackClips({
     }
   };
 
+  const isTileReorderMode = reorderingClipId !== null;
+
   return (
     <div
-      className="relative h-14 flex items-center select-none"
+      className="relative h-16 flex items-center select-none"
       onPointerMove={handlePointerMove}
       onPointerUp={handlePointerEnd}
       onPointerCancel={handlePointerEnd}
     >
-      {/* Manyetik Ana Video Kanalı: Parçalar boşluksuz (2px ayrım çizgisiyle) yan yana dizilir */}
-      <div className="flex items-center h-14 gap-[2px] bg-black/80 rounded-xl transition-all duration-180 ease-[cubic-bezier(0.22,1,0.36,1)]">
-        {clips.map((clip, idx) => {
-          const isTrimmingThis = trimPreview?.clipId === clip.id;
-          const rate = Math.max(0.25, clip.playbackRate || 1);
-          const effectiveDuration = isTrimmingThis
-            ? Math.max(
-                0.2,
-                (trimPreview.previewSourceEnd - trimPreview.previewSourceStart) / rate
-              )
-            : clip.duration;
-          const widthPx = Math.max(28, Math.round(effectiveDuration * pps));
-          const leftGapPx = isTrimmingThis ? trimPreview.leftGapPx : 0;
-          const rightGapPx = isTrimmingThis ? trimPreview.rightGapPx : 0;
+      {/* 1:1 KÜÇÜK KARELER SIRALAMA MODU (Basılı Tutulduğunda Aktifleşir) */}
+      {isTileReorderMode ? (
+        <div className="flex items-center h-16 gap-2.5 px-2 py-1 bg-zinc-900/90 border border-white/15 rounded-2xl shadow-2xl transition-all duration-200">
+          {clips.map((clip, idx) => {
+            const isHeld = reorderingClipId === clip.id;
+            const thumbSrc =
+              clip.thumbnailUrl ||
+              (thumbnails.length > 0
+                ? thumbnails[Math.min(thumbnails.length - 1, idx * 2)]
+                : null);
 
-          const isSelected = selectedClipId === clip.id;
-          const isReordering = reorderingClipId === clip.id;
-          const showInsertGuide =
-            reorderingClipId !== null &&
-            insertionIndex === idx &&
-            reorderingClipId === clip.id;
-          const thumbCount = Math.max(
-            1,
-            Math.min(thumbnails.length || 1, Math.ceil(widthPx / 42))
-          );
-
-          return (
-            <div
-              key={clip.id}
-              className="flex items-center shrink-0 transition-[margin,width] duration-180 ease-[cubic-bezier(0.22,1,0.36,1)]"
-              style={{
-                marginLeft: leftGapPx > 0 ? `${leftGapPx}px` : "0px",
-                marginRight: rightGapPx > 0 ? `${rightGapPx}px` : "0px",
-              }}
-            >
-              {/* Long-Press Reorder Mavi Ekleme Kılavuz Çizgisi */}
-              {showInsertGuide && (
-                <div className="w-1 h-16 bg-blue-500 rounded-full shadow-[0_0_12px_rgba(59,130,246,0.95)] mr-1 pointer-events-none z-40" />
-              )}
-
+            return (
               <div
-                onClick={(e) => {
-                  e.stopPropagation();
-                  onSelectClip(clip.id);
+                key={clip.id}
+                style={{
+                  transform: isHeld
+                    ? `translateX(${reorderOffsetPx}px) scale(1.12)`
+                    : "scale(1)",
                 }}
-                onPointerDown={(e) => handleClipBodyPointerDown(e, clip, idx)}
-                className={`relative h-14 rounded-xl overflow-visible transition-transform duration-150 cursor-pointer shrink-0 ${
-                  isReordering
-                    ? "scale-105 z-30 opacity-95 shadow-[0_10px_28px_rgba(0,0,0,0.75)] ring-2 ring-blue-400"
-                    : "z-10"
+                className={`relative w-14 h-14 rounded-xl overflow-hidden shrink-0 border-2 transition-transform duration-150 ${
+                  isHeld
+                    ? "border-emerald-400 ring-2 ring-emerald-400/60 shadow-[0_12px_28px_rgba(0,0,0,0.85)] z-40"
+                    : insertionIndex === idx
+                      ? "border-amber-400 opacity-95 z-20"
+                      : "border-white/20 opacity-85 z-10"
                 }`}
-                style={{ width: `${widthPx}px` }}
               >
-                {/* İç Film Şeridi Konteyneri */}
+                {thumbSrc ? (
+                  <img
+                    src={thumbSrc}
+                    alt=""
+                    draggable={false}
+                    className="w-full h-full object-cover pointer-events-none select-none"
+                  />
+                ) : (
+                  <div className="w-full h-full bg-zinc-800" />
+                )}
+                <div className="absolute inset-0 bg-gradient-to-t from-black/75 via-transparent to-black/30 pointer-events-none" />
+                <span className="absolute top-1 left-1.5 px-1 py-0.2 rounded bg-black/70 text-[9px] font-extrabold text-amber-300 tabular-nums">
+                  #{idx + 1}
+                </span>
+                <span className="absolute bottom-1 right-1.5 text-[9px] font-bold text-white tabular-nums">
+                  {clip.duration.toFixed(1)}s
+                </span>
+              </div>
+            );
+          })}
+        </div>
+      ) : (
+        /* NORMAL MANYETİK ANA VİDEO KANALI + SONDAKİ [+] KLİP EKLEME BUTONU */
+        <div className="flex items-center h-14">
+          <div className="flex items-center h-14 gap-[2px] bg-black/80 rounded-xl transition-all duration-180 ease-[cubic-bezier(0.22,1,0.36,1)]">
+            {clips.map((clip, idx) => {
+              const isTrimmingThis = trimPreview?.clipId === clip.id;
+              const rate = Math.max(0.25, clip.playbackRate || 1);
+              const effectiveDuration = isTrimmingThis
+                ? Math.max(
+                    0.2,
+                    (trimPreview.previewSourceEnd - trimPreview.previewSourceStart) / rate
+                  )
+                : clip.duration;
+              const widthPx = Math.max(28, Math.round(effectiveDuration * pps));
+              const leftGapPx = isTrimmingThis ? trimPreview.leftGapPx : 0;
+              const rightGapPx = isTrimmingThis ? trimPreview.rightGapPx : 0;
+
+              const isSelected = selectedClipId === clip.id;
+              const thumbCount = Math.max(
+                1,
+                Math.min(
+                  clip.thumbnailUrl ? 12 : thumbnails.length || 1,
+                  Math.ceil(widthPx / 42)
+                )
+              );
+
+              return (
                 <div
-                  className={`w-full h-full rounded-xl overflow-hidden relative flex bg-zinc-900 border-2 transition-colors ${
-                    isSelected
-                      ? "border-amber-400 shadow-[0_0_0_1px_rgba(251,191,36,0.45)]"
-                      : "border-white/15 hover:border-white/30"
-                  }`}
+                  key={clip.id}
+                  className="flex items-center shrink-0 transition-[margin] duration-150"
+                  style={{
+                    marginLeft: leftGapPx > 0 ? `${leftGapPx}px` : "0px",
+                    marginRight: rightGapPx > 0 ? `${rightGapPx}px` : "0px",
+                  }}
                 >
-                  {thumbnails.length > 0 ? (
-                    Array.from({ length: thumbCount }).map((_, tIdx) => {
-                      const src =
-                        thumbnails[
-                          Math.min(
-                            thumbnails.length - 1,
-                            Math.floor(
-                              (tIdx / Math.max(1, thumbCount)) * thumbnails.length
-                            )
-                          )
-                        ];
-                      return (
-                        <img
-                          key={tIdx}
-                          src={src}
-                          alt=""
-                          draggable={false}
-                          className="h-full flex-1 object-cover pointer-events-none select-none opacity-90"
-                        />
-                      );
-                    })
-                  ) : (
-                    <div className="w-full h-full bg-gradient-to-r from-zinc-800 via-zinc-700 to-zinc-800" />
-                  )}
+                  <div
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onSelectClip(clip.id);
+                    }}
+                    onPointerDown={(e) => handleClipBodyPointerDown(e, clip, idx)}
+                    className="relative h-14 rounded-xl overflow-visible cursor-pointer shrink-0 z-10"
+                    style={{ width: `${widthPx}px` }}
+                  >
+                    {/* İç Film Şeridi Konteyneri */}
+                    <div
+                      className={`w-full h-full rounded-xl overflow-hidden relative flex bg-zinc-900 border-2 transition-colors ${
+                        isSelected
+                          ? "border-amber-400 shadow-[0_0_0_1px_rgba(251,191,36,0.45)]"
+                          : "border-white/15 hover:border-white/30"
+                      }`}
+                    >
+                      {clip.thumbnailUrl ? (
+                        Array.from({ length: thumbCount }).map((_, tIdx) => (
+                          <img
+                            key={tIdx}
+                            src={clip.thumbnailUrl}
+                            alt=""
+                            draggable={false}
+                            className="h-full flex-1 object-cover pointer-events-none select-none opacity-90"
+                          />
+                        ))
+                      ) : thumbnails.length > 0 ? (
+                        Array.from({ length: thumbCount }).map((_, tIdx) => {
+                          const src =
+                            thumbnails[
+                              Math.min(
+                                thumbnails.length - 1,
+                                Math.floor(
+                                  (tIdx / Math.max(1, thumbCount)) * thumbnails.length
+                                )
+                              )
+                            ];
+                          return (
+                            <img
+                              key={tIdx}
+                              src={src}
+                              alt=""
+                              draggable={false}
+                              className="h-full flex-1 object-cover pointer-events-none select-none opacity-90"
+                            />
+                          );
+                        })
+                      ) : (
+                        <div className="w-full h-full bg-gradient-to-r from-zinc-800 via-zinc-700 to-zinc-800" />
+                      )}
 
-                  <div className="absolute inset-0 bg-gradient-to-t from-black/55 via-transparent to-black/25 pointer-events-none" />
+                      <div className="absolute inset-0 bg-gradient-to-t from-black/55 via-transparent to-black/25 pointer-events-none" />
 
-                  {/* Klip Etiket ve Bilgi Rozetleri */}
-                  <div className="absolute left-2.5 bottom-1.5 flex items-center gap-1.5 pointer-events-none">
-                    <span className="px-1.5 py-0.5 rounded bg-black/65 text-[10px] font-bold text-white tabular-nums">
-                      {effectiveDuration.toFixed(1)}s
-                    </span>
-                    {Math.abs((clip.playbackRate || 1) - 1) > 0.01 && (
-                      <span className="px-1.5 py-0.5 rounded bg-amber-400 text-black text-[9px] font-extrabold tabular-nums">
-                        {clip.playbackRate}x
-                      </span>
-                    )}
-                    {clip.muted && !clip.isMotionPhoto && (
-                      <span className="p-0.5 rounded bg-black/65 text-red-400">
-                        <VolumeX className="w-2.5 h-2.5" />
-                      </span>
+                      {/* Klip Etiket ve Bilgi Rozetleri */}
+                      <div className="absolute left-2.5 bottom-1.5 flex items-center gap-1.5 pointer-events-none">
+                        <span className="px-1.5 py-0.5 rounded bg-black/65 text-[10px] font-bold text-white tabular-nums">
+                          {effectiveDuration.toFixed(1)}s
+                        </span>
+                        {Math.abs((clip.playbackRate || 1) - 1) > 0.01 && (
+                          <span className="px-1.5 py-0.5 rounded bg-amber-400 text-black text-[9px] font-extrabold tabular-nums">
+                            {clip.playbackRate}x
+                          </span>
+                        )}
+                        {clip.muted && !clip.isMotionPhoto && (
+                          <span className="p-0.5 rounded bg-black/65 text-red-400">
+                            <VolumeX className="w-2.5 h-2.5" />
+                          </span>
+                        )}
+                      </div>
+
+                      {/* Çoklu klip varsa sıra değiştirme tutamacı */}
+                      {isSelected && clips.length > 1 && (
+                        <div
+                          onPointerDown={(e) =>
+                            beginClipDrag(e, {
+                              mode: "reorder",
+                              clipId: clip.id,
+                              clipIndex: idx,
+                              startX: e.clientX,
+                              initSourceStart: clip.sourceStart,
+                              initSourceEnd: clip.sourceEnd,
+                              clipTimelineStart: getClipTimelineStart(idx),
+                              playbackRate: clip.playbackRate || 1,
+                              isMotionPhoto: clip.isMotionPhoto,
+                            })
+                          }
+                          className="absolute top-1 right-2.5 px-1.5 py-0.5 rounded bg-black/75 border border-white/20 text-[9px] font-semibold text-zinc-200 flex items-center gap-1 cursor-grab active:cursor-grabbing z-20"
+                        >
+                          <ArrowLeftRight className="w-2.5 h-2.5 text-amber-400" />
+                          <span>Sırala</span>
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Seçili Klip Sol ve Sağ Kırpma Kulakçıkları (Trim Handles) */}
+                    {isSelected && (
+                      <>
+                        <div
+                          onClick={(e) => e.stopPropagation()}
+                          onPointerDown={(e) =>
+                            beginClipDrag(e, {
+                              mode: "trim-left",
+                              clipId: clip.id,
+                              clipIndex: idx,
+                              startX: e.clientX,
+                              initSourceStart: clip.sourceStart,
+                              initSourceEnd: clip.sourceEnd,
+                              clipTimelineStart: getClipTimelineStart(idx),
+                              playbackRate: clip.playbackRate || 1,
+                              isMotionPhoto: clip.isMotionPhoto,
+                            })
+                          }
+                          className="absolute -left-2 top-0 bottom-0 w-5 rounded-l-xl bg-amber-400 flex items-center justify-center cursor-ew-resize z-30 shadow-lg touch-none"
+                        >
+                          <div className="w-[2px] h-5 rounded-full bg-black/80" />
+                        </div>
+
+                        <div
+                          onClick={(e) => e.stopPropagation()}
+                          onPointerDown={(e) =>
+                            beginClipDrag(e, {
+                              mode: "trim-right",
+                              clipId: clip.id,
+                              clipIndex: idx,
+                              startX: e.clientX,
+                              initSourceStart: clip.sourceStart,
+                              initSourceEnd: clip.sourceEnd,
+                              clipTimelineStart: getClipTimelineStart(idx),
+                              playbackRate: clip.playbackRate || 1,
+                              isMotionPhoto: clip.isMotionPhoto,
+                            })
+                          }
+                          className="absolute -right-2 top-0 bottom-0 w-5 rounded-r-xl bg-amber-400 flex items-center justify-center cursor-ew-resize z-30 shadow-lg touch-none"
+                        >
+                          <div className="w-[2px] h-5 rounded-full bg-black/80" />
+                        </div>
+                      </>
                     )}
                   </div>
-
-                  {/* Çoklu klip varsa sıra değiştirme tutamacı */}
-                  {isSelected && clips.length > 1 && (
-                    <div
-                      onPointerDown={(e) =>
-                        beginClipDrag(e, {
-                          mode: "reorder",
-                          clipId: clip.id,
-                          clipIndex: idx,
-                          startX: e.clientX,
-                          initSourceStart: clip.sourceStart,
-                          initSourceEnd: clip.sourceEnd,
-                          clipTimelineStart: getClipTimelineStart(idx),
-                          playbackRate: clip.playbackRate || 1,
-                          isMotionPhoto: clip.isMotionPhoto,
-                        })
-                      }
-                      className="absolute top-1 right-2.5 px-1.5 py-0.5 rounded bg-black/75 border border-white/20 text-[9px] font-semibold text-zinc-200 flex items-center gap-1 cursor-grab active:cursor-grabbing z-20"
-                    >
-                      <ArrowLeftRight className="w-2.5 h-2.5 text-amber-400" />
-                      <span>Taşı</span>
-                    </div>
-                  )}
                 </div>
+              );
+            })}
+          </div>
 
-                {/* Seçili Klip Sol ve Sağ Kırpma Kulakçıkları (Trim Handles) */}
-                {isSelected && (
-                  <>
-                    <div
-                      onPointerDown={(e) =>
-                        beginClipDrag(e, {
-                          mode: "trim-left",
-                          clipId: clip.id,
-                          clipIndex: idx,
-                          startX: e.clientX,
-                          initSourceStart: clip.sourceStart,
-                          initSourceEnd: clip.sourceEnd,
-                          clipTimelineStart: getClipTimelineStart(idx),
-                          playbackRate: clip.playbackRate || 1,
-                          isMotionPhoto: clip.isMotionPhoto,
-                        })
-                      }
-                      className="absolute -left-1.5 top-0 bottom-0 w-4 rounded-l-xl bg-amber-400 flex items-center justify-center cursor-ew-resize z-30 shadow-lg touch-none"
-                    >
-                      <div className="w-[2px] h-5 rounded-full bg-black/80" />
-                    </div>
-
-                    <div
-                      onPointerDown={(e) =>
-                        beginClipDrag(e, {
-                          mode: "trim-right",
-                          clipId: clip.id,
-                          clipIndex: idx,
-                          startX: e.clientX,
-                          initSourceStart: clip.sourceStart,
-                          initSourceEnd: clip.sourceEnd,
-                          clipTimelineStart: getClipTimelineStart(idx),
-                          playbackRate: clip.playbackRate || 1,
-                          isMotionPhoto: clip.isMotionPhoto,
-                        })
-                      }
-                      className="absolute -right-1.5 top-0 bottom-0 w-4 rounded-r-xl bg-amber-400 flex items-center justify-center cursor-ew-resize z-30 shadow-lg touch-none"
-                    >
-                      <div className="w-[2px] h-5 rounded-full bg-black/80" />
-                    </div>
-                  </>
-                )}
-              </div>
-            </div>
-          );
-        })}
-      </div>
+          {/* ANA BARIN SONUNA YENİ KLİP / GÖRSEL EKLEME [+] BUTONU */}
+          {onAppendClipClick && (
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                onAppendClipClick();
+              }}
+              className="ml-2.5 w-11 h-11 rounded-xl bg-[#1c1c1e] hover:bg-[#28282d] border border-white/15 active:scale-95 transition-all flex items-center justify-center text-white shadow-md shrink-0"
+            >
+              <Plus className="w-5 h-5 text-white" />
+            </button>
+          )}
+        </div>
+      )}
     </div>
   );
 }

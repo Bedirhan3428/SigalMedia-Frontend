@@ -1,4 +1,5 @@
 // [START] CREATED BY Bedirhan
+// [MODIFIED BY Bedirhan]
 "use client";
 
 import React, { useCallback, useEffect, useRef, useState } from "react";
@@ -38,6 +39,7 @@ export interface VideoTimelineNLEProps {
   onSelectItem: (id: string | null, type: NLESelectedType) => void;
   onTrimClip: (clipId: string, newSourceStart: number, newSourceEnd: number) => void;
   onReorderClips: (fromIndex: number, toIndex: number) => void;
+  onAppendClipClick?: () => void;
   onChangeOverlayTiming: (layerId: string, start: number, end: number) => void;
   onReorderOverlayLayer?: (layerId: string, direction: "up" | "down") => void;
   onChangeEffectClips?: (clips: ReelsEffectClip[]) => void;
@@ -56,6 +58,8 @@ export interface VideoTimelineNLEProps {
   onQuickAddEffect?: () => void;
   onCommitHistory?: () => void;
 }
+
+const LEFT_PAD_PX = 16;
 
 export function formatNLEClock(seconds: number): string {
   const safe = Math.max(0, Number.isFinite(seconds) ? seconds : 0);
@@ -83,6 +87,7 @@ export default function VideoTimelineNLE({
   onSelectItem,
   onTrimClip,
   onReorderClips,
+  onAppendClipClick,
   onChangeOverlayTiming,
   onReorderOverlayLayer,
   onChangeEffectClips,
@@ -100,88 +105,138 @@ export default function VideoTimelineNLE({
   // Varsayılan sabit ölçek: 1 saniye = 60 piksel (40px - 100px arası zoom destekli)
   const [pps, setPps] = useState<number>(60);
   const scrollContainerRef = useRef<HTMLDivElement | null>(null);
+  const playheadRef = useRef<HTMLDivElement | null>(null);
   const timeLabelRef = useRef<HTMLSpanElement | null>(null);
-  const userScrollingRef = useRef<boolean>(false);
-  const scrollIdleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const programmaticScrollRef = useRef<boolean>(false);
+  const playheadDragRef = useRef<{
+    startX: number;
+    initTime: number;
+  } | null>(null);
 
   const safeTotal = Math.max(0.5, totalDuration || 5);
 
-  const syncScrollToTime = useCallback(
-    (t: number) => {
-      const el = scrollContainerRef.current;
-      if (!el) return;
-      const clamped = Math.max(0, Math.min(t, safeTotal));
+  const syncPlayheadToTime = useCallback(
+    (t: number, autoFollowViewport: boolean) => {
+      const clamped = Math.max(0, Math.min(t, safeTotal + 10));
       if (timeLabelRef.current) {
-        timeLabelRef.current.textContent = formatNLEClock(clamped);
+        timeLabelRef.current.textContent = formatNLEClock(Math.min(clamped, safeTotal));
       }
-      if (!userScrollingRef.current) {
-        programmaticScrollRef.current = true;
-        el.scrollLeft = clamped * pps;
+      const xPx = LEFT_PAD_PX + clamped * pps;
+      if (playheadRef.current) {
+        playheadRef.current.style.left = `${xPx}px`;
+      }
+      if (autoFollowViewport && scrollContainerRef.current) {
+        const el = scrollContainerRef.current;
+        const viewWidth = el.clientWidth;
+        if (viewWidth > 0) {
+          if (xPx > el.scrollLeft + viewWidth - 44) {
+            el.scrollLeft = xPx - viewWidth + 68;
+          } else if (xPx < el.scrollLeft + 12) {
+            el.scrollLeft = Math.max(0, xPx - 24);
+          }
+        }
       }
     },
     [pps, safeTotal]
   );
 
-  // Oynatma esnasında 60 FPS akıcı scrollLeft = currentTime * PPS senkronu
+  // Oynatma esnasında 60 FPS akıcı Dinamik Playhead hareketi (soldan sağa kliplerin üzerinde gezer)
   useEffect(() => {
     const cur = getCurrentTime ? getCurrentTime() : currentTime;
-    syncScrollToTime(cur);
+    syncPlayheadToTime(cur, isPlaying);
 
     if (!isPlaying) return;
     let rafId: number | null = null;
     const tick = () => {
       const liveT = getCurrentTime ? getCurrentTime() : currentTime;
-      syncScrollToTime(liveT);
+      syncPlayheadToTime(liveT, true);
       rafId = requestAnimationFrame(tick);
     };
     rafId = requestAnimationFrame(tick);
     return () => {
       if (rafId !== null) cancelAnimationFrame(rafId);
     };
-  }, [currentTime, getCurrentTime, isPlaying, syncScrollToTime]);
+  }, [currentTime, getCurrentTime, isPlaying, syncPlayheadToTime]);
 
-  // Kullanıcı parmağıyla timeline'ı kaydırdığında anlıkSaniye = scrollLeft / PPS ve otomatik duraklatma
-  const handleScroll = () => {
+  // Kulakçık uzatma/kısaltma esnasında timeline'ı zıplatmadan sadece ibreyi ve video karesini günceller
+  const handleSeekWithoutScroll = useCallback(
+    (targetSec: number) => {
+      if (isPlaying) {
+        onPauseVideo?.();
+      }
+      const clamped = Math.max(0, targetSec);
+      syncPlayheadToTime(clamped, false);
+      onSeek(Math.min(safeTotal, clamped));
+    },
+    [isPlaying, onPauseVideo, onSeek, safeTotal, syncPlayheadToTime]
+  );
+
+  // Cetvele tıklandığında ibreyi o saniyeye taşır
+  const handleRulerSeek = useCallback(
+    (targetSec: number) => {
+      if (isPlaying) {
+        onPauseVideo?.();
+      }
+      const clamped = Math.max(0, Math.min(safeTotal, targetSec));
+      syncPlayheadToTime(clamped, true);
+      onSeek(clamped);
+    },
+    [isPlaying, onPauseVideo, onSeek, safeTotal, syncPlayheadToTime]
+  );
+
+  // Kulakçıklar ekran kenarına (sol/sağ 48px) ulaştığında timeline'ı akıcı kaydırır
+  const handleEdgeScroll = useCallback((deltaPx: number) => {
     const el = scrollContainerRef.current;
     if (!el) return;
-    if (programmaticScrollRef.current) {
-      programmaticScrollRef.current = false;
-      return;
-    }
+    el.scrollLeft = Math.max(0, el.scrollLeft + deltaPx);
+  }, []);
 
+  // Dinamik Playhead'i doğrudan parmakla tutup sağa/sola gezdirme
+  const handlePlayheadPointerDown = (e: React.PointerEvent) => {
+    e.stopPropagation();
     if (isPlaying) {
       onPauseVideo?.();
     }
-
-    userScrollingRef.current = true;
-    if (scrollIdleTimerRef.current) clearTimeout(scrollIdleTimerRef.current);
-    scrollIdleTimerRef.current = setTimeout(() => {
-      userScrollingRef.current = false;
-    }, 140);
-
-    const scrubbedSec = Math.max(0, Math.min(safeTotal, el.scrollLeft / pps));
-    if (timeLabelRef.current) {
-      timeLabelRef.current.textContent = formatNLEClock(scrubbedSec);
-    }
-    onSeek(Number(scrubbedSec.toFixed(3)));
+    try {
+      (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+    } catch {}
+    const cur = getCurrentTime ? getCurrentTime() : currentTime;
+    playheadDragRef.current = {
+      startX: e.clientX,
+      initTime: Math.max(0, Math.min(safeTotal, cur)),
+    };
   };
 
-  const handleSeekAndScroll = (targetSec: number) => {
-    if (isPlaying) {
-      onPauseVideo?.();
+  const handlePlayheadPointerMove = (e: React.PointerEvent) => {
+    const st = playheadDragRef.current;
+    if (!st) return;
+    e.stopPropagation();
+
+    if (typeof window !== "undefined") {
+      if (e.clientX > window.innerWidth - 44) {
+        handleEdgeScroll(10);
+        st.startX -= 10;
+      } else if (e.clientX < 44) {
+        handleEdgeScroll(-10);
+        st.startX += 10;
+      }
     }
-    const clamped = Math.max(0, Math.min(safeTotal, targetSec));
-    const el = scrollContainerRef.current;
-    if (el) {
-      programmaticScrollRef.current = true;
-      el.scrollLeft = clamped * pps;
-    }
-    if (timeLabelRef.current) {
-      timeLabelRef.current.textContent = formatNLEClock(clamped);
-    }
-    onSeek(clamped);
+
+    const dxPx = e.clientX - st.startX;
+    const nextSec = Math.max(0, Math.min(safeTotal, st.initTime + dxPx / Math.max(20, pps)));
+    syncPlayheadToTime(nextSec, false);
+    onSeek(Number(nextSec.toFixed(3)));
   };
+
+  const handlePlayheadPointerUp = (e: React.PointerEvent) => {
+    if (!playheadDragRef.current) return;
+    try {
+      (e.currentTarget as HTMLElement).releasePointerCapture(e.pointerId);
+    } catch {}
+    playheadDragRef.current = null;
+  };
+
+  const initialPlayheadLeftPx =
+    LEFT_PAD_PX + Math.max(0, Math.min(safeTotal, currentTime)) * pps;
 
   return (
     <div className="w-full flex flex-col gap-1.5 select-none pointer-events-auto">
@@ -246,27 +301,27 @@ export default function VideoTimelineNLE({
         </div>
       </div>
 
-      {/* 2. Sabit Merkez İbreli (Fixed Center Playhead) ve 50vw Boşluklu NLE Kayar Konteyner */}
+      {/* 2. Dinamik Gezen Zaman İbreli (Dynamic Playhead) Çok Kanallı NLE Kayar Alanı */}
       <div className="relative w-full bg-[#0b0c0e] border-y border-white/10 py-2">
-        {/* SABİT MERKEZ PLAYHEAD (left: 50%, üstte üçgen ok + dikey beyaz ibre) */}
-        <div className="pointer-events-none absolute top-0 bottom-0 left-1/2 -translate-x-1/2 z-40 flex flex-col items-center">
-          <div className="w-0 h-0 border-l-[6px] border-l-transparent border-r-[6px] border-r-transparent border-t-[7px] border-t-white drop-shadow" />
-          <div className="w-[2px] flex-1 bg-white shadow-[0_0_10px_rgba(255,255,255,0.95)]" />
-        </div>
-
-        {/* Yatay Kaydırılabilir 50vw Sol / 50vw Sağ Boşluklu Çok Kanallı Alan */}
         <div
           ref={scrollContainerRef}
-          onScroll={handleScroll}
-          onTouchStart={() => {
-            if (isPlaying) onPauseVideo?.();
-          }}
           className="w-full overflow-x-auto no-scrollbar"
           style={{ WebkitOverflowScrolling: "touch" }}
         >
-          <div className="inline-flex items-stretch">
-            {/* 50vw Sol Boşluk (Videonun 0.00s karesi tam merkez ibreye oturur) */}
-            <div className="w-[50vw] shrink-0 pointer-events-none" />
+          <div className="relative inline-flex items-stretch pl-4 pr-16">
+            {/* DİNAMİK PLAYHEAD: Videonun o anki saniyesinde kliplerin üzerinde soldan sağa gezer ve tutulup sürüklenebilir */}
+            <div
+              ref={playheadRef}
+              onPointerDown={handlePlayheadPointerDown}
+              onPointerMove={handlePlayheadPointerMove}
+              onPointerUp={handlePlayheadPointerUp}
+              onPointerCancel={handlePlayheadPointerUp}
+              style={{ left: `${initialPlayheadLeftPx}px` }}
+              className="absolute top-0 bottom-0 -translate-x-1/2 w-7 z-40 flex flex-col items-center cursor-ew-resize touch-none"
+            >
+              <div className="w-3 h-3 rounded-full bg-white shadow-[0_0_8px_rgba(255,255,255,0.95)] border border-black/40 shrink-0" />
+              <div className="w-[2px] flex-1 bg-white shadow-[0_0_10px_rgba(255,255,255,0.95)] pointer-events-none" />
+            </div>
 
             {/* Kanallar Yığını */}
             <div className="flex flex-col gap-2">
@@ -274,10 +329,10 @@ export default function VideoTimelineNLE({
               <TimelineRuler
                 totalDuration={safeTotal}
                 pps={pps}
-                onSeekToTime={handleSeekAndScroll}
+                onSeekToTime={handleRulerSeek}
               />
 
-              {/* 2. Manyetik Ana Video Kanalı (Clips[]) */}
+              {/* 2. Manyetik Ana Video Kanalı (Clips[] + Sondaki [+] Klip Ekle Butonu) */}
               <TimelineTrackClips
                 clips={clips}
                 maxSourceDuration={maxSourceDuration}
@@ -287,8 +342,10 @@ export default function VideoTimelineNLE({
                 onSelectClip={(clipId) => onSelectItem(clipId, "video")}
                 onTrimClip={onTrimClip}
                 onReorderClips={onReorderClips}
+                onAppendClipClick={onAppendClipClick}
+                onEdgeScroll={handleEdgeScroll}
                 onPauseVideo={onPauseVideo}
-                onSeek={handleSeekAndScroll}
+                onSeek={handleSeekWithoutScroll}
                 onCommitHistory={onCommitHistory}
               />
 
@@ -307,16 +364,14 @@ export default function VideoTimelineNLE({
                 onChangeEffectClips={onChangeEffectClips}
                 onChangeMusicTimeline={onChangeMusicTimeline}
                 onPauseVideo={onPauseVideo}
-                onSeek={handleSeekAndScroll}
+                onSeek={handleSeekWithoutScroll}
+                onEdgeScroll={handleEdgeScroll}
                 onOpenMusicPicker={onOpenMusicPicker}
                 onOpenTextEditor={onOpenTextEditor}
                 onQuickAddEffect={onQuickAddEffect}
                 onCommitHistory={onCommitHistory}
               />
             </div>
-
-            {/* 50vw Sağ Boşluk (Videonun son karesi tam merkez ibreye oturur) */}
-            <div className="w-[50vw] shrink-0 pointer-events-none" />
           </div>
         </div>
       </div>

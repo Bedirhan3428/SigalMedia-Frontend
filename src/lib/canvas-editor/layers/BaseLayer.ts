@@ -62,8 +62,9 @@ export abstract class BaseLayer {
     const unrotatedX = dx * Math.cos(rad) - dy * Math.sin(rad);
     const unrotatedY = dx * Math.sin(rad) + dy * Math.cos(rad);
 
-    const halfW = (bounds.width * this.transform.scale) / 2;
-    const halfH = (bounds.height * this.transform.scale) / 2;
+    const touchSlop = this.type === 'media' ? 0 : 68;
+    const halfW = (bounds.width * this.transform.scale) / 2 + touchSlop;
+    const halfH = (bounds.height * this.transform.scale) / 2 + touchSlop;
 
     return (
       unrotatedX >= -halfW &&
@@ -71,6 +72,36 @@ export abstract class BaseLayer {
       unrotatedY >= -halfH &&
       unrotatedY <= halfH
     );
+  }
+
+  public isCornerHandleHit(point: Point, ctx: CanvasRenderingContext2D, canvasWidth: number, canvasHeight: number): boolean {
+    if (this.type === 'media' || !this.selected || !this.visible || !this.temporalVisible) return false;
+
+    const center = this.getPixelPosition(canvasWidth, canvasHeight);
+    const bounds = this.getBoundingBox(ctx, canvasWidth, canvasHeight);
+    const pad = 14;
+    const halfW = ((bounds.width + pad * 2) * this.transform.scale) / 2;
+    const halfH = ((bounds.height + pad * 2) * this.transform.scale) / 2;
+
+    const rad = (-this.transform.rotation * Math.PI) / 180;
+    const dx = point.x - center.x;
+    const dy = point.y - center.y;
+    const unrotatedX = dx * Math.cos(rad) - dy * Math.sin(rad);
+    const unrotatedY = dx * Math.sin(rad) + dy * Math.cos(rad);
+
+    const hitRadius = 56;
+    const corners = [
+      [-halfW, -halfH],
+      [halfW, -halfH],
+      [halfW, halfH],
+      [-halfW, halfH],
+    ];
+    for (const [cx, cy] of corners) {
+      if (Math.hypot(unrotatedX - cx, unrotatedY - cy) <= hitRadius) {
+        return true;
+      }
+    }
+    return false;
   }
 
   public renderSelectionHighlight(ctx: CanvasRenderingContext2D, canvasWidth: number, canvasHeight: number): void {
@@ -88,13 +119,13 @@ export abstract class BaseLayer {
     ctx.scale(this.transform.scale, this.transform.scale);
 
     ctx.strokeStyle = 'rgba(251, 191, 36, 0.95)';
-    ctx.lineWidth = Math.max(2, 3 / Math.max(0.4, this.transform.scale));
+    ctx.lineWidth = Math.max(2.5, 3.5 / Math.max(0.4, this.transform.scale));
     ctx.beginPath();
     ctx.roundRect(-w / 2, -h / 2, w, h, 14);
     ctx.stroke();
 
     // Köşe tutamaç noktaları
-    const r = Math.max(5, 7 / Math.max(0.4, this.transform.scale));
+    const r = Math.max(6, 9 / Math.max(0.4, this.transform.scale));
     ctx.fillStyle = '#ffffff';
     const corners = [
       [-w / 2, -h / 2],

@@ -746,7 +746,7 @@ export default function ShareStoryPage() {
       target = engine.addText(
         "",
         {
-          fontSize: 54,
+          fontSize: 90,
           color: activeTextColor,
         },
         0.5,
@@ -849,11 +849,11 @@ export default function ShareStoryPage() {
     const layer = engine.addText(
       tagText,
       {
-        fontSize: 48,
+        fontSize: 72,
         color: "#000000",
         backgroundColor: "#ffffff",
-        borderRadius: 12,
-        backgroundPadding: 16,
+        borderRadius: 14,
+        backgroundPadding: 18,
         fontWeight: "800",
         fontFamily: "'Outfit', 'Google Sans', 'Inter', -apple-system, sans-serif",
       },

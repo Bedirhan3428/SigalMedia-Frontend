@@ -2,7 +2,7 @@
 // [MODIFIED BY Bedirhan]
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import {
   Scissors,
   Sparkles,
@@ -40,6 +40,7 @@ import {
 } from "@/lib/canvas-editor";
 import VideoTimelineNLE from "./VideoTimelineNLE";
 import { NLESelectedType } from "./TimelineOverlayTracks";
+import OnCanvasCropOverlay from "./OnCanvasCropOverlay";
 
 export interface ReelsEditorProps {
   engine?: CanvasEngine | null;
@@ -113,6 +114,7 @@ export default function ReelsEditor({
   const [overlayItems, setOverlayItems] = useState<OverlayTrackItem[]>([]);
   const [historyStack, setHistoryStack] = useState<NLEHistorySnapshot[]>([]);
   const [redoStack, setRedoStack] = useState<NLEHistorySnapshot[]>([]);
+  const appendClipInputRef = useRef<HTMLInputElement | null>(null);
 
   const syncFromEngine = useCallback(() => {
     if (!engine) return;
@@ -525,6 +527,19 @@ export default function ReelsEditor({
     });
   };
 
+  const handleAppendClipFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = "";
+    if (!file || !engine) return;
+    commitHistory();
+    const added = await engine.appendVideoClip(file);
+    if (added) {
+      syncFromEngine();
+      setSelectedItemId(added.id);
+      setSelectedItemType("video");
+    }
+  };
+
   const activeClipVolume = selectedVideoClip
     ? selectedVideoClip.muted
       ? 0
@@ -548,56 +563,83 @@ export default function ReelsEditor({
   const effectiveMusicVolume = Math.round(musicVolume * 100);
 
   return (
-    <div className="fixed inset-x-0 bottom-0 z-40 bg-black pt-1.5 pb-5 flex flex-col gap-2.5 pointer-events-auto select-none">
-      {/* 1. Sabit PPS (60px/s) ve Sabit Merkez İbreli NLE Zaman Çizelgesi */}
-      <VideoTimelineNLE
-        clips={clips}
-        overlayItems={overlayItems}
-        effectClips={effectClips}
-        musicClip={selectedMusic}
-        totalDuration={totalDuration}
-        maxSourceDuration={maxSourceDuration}
-        currentTime={videoState.currentTime}
-        isPlaying={videoState.isPlaying}
-        thumbnails={thumbnails}
-        selectedItemId={selectedItemId}
-        selectedItemType={selectedItemType}
-        canUndo={historyStack.length > 0}
-        canRedo={redoStack.length > 0}
-        getCurrentTime={getCurrentTime}
-        onSelectItem={handleSelectItem}
-        onTrimClip={(clipId, newStart, newEnd) => {
-          engine?.updateClipTrim(clipId, newStart, newEnd);
-          syncFromEngine();
-        }}
-        onReorderClips={(fromIdx, toIdx) => {
-          engine?.reorderClips(fromIdx, toIdx);
-          syncFromEngine();
-        }}
-        onChangeOverlayTiming={(layerId, start, end) => {
-          engine?.updateOverlayTrackTiming(layerId, start, end);
-          syncFromEngine();
-        }}
-        onReorderOverlayLayer={(layerId, direction) => {
-          commitHistory();
-          engine?.reorderOverlayLayer(layerId, direction);
-          syncFromEngine();
-        }}
-        onChangeEffectClips={onChangeEffectClips}
-        onChangeMusicTimeline={handleMusicTimelineChange}
-        onSeek={onSeek}
-        onPauseVideo={() => engine?.pauseVideo()}
-        onTogglePlay={onTogglePlay}
-        onUndo={handleUndo}
-        onRedo={handleRedo}
-        onOpenMusicPicker={onOpenMusicPicker}
-        onOpenTextEditor={onOpenTextEditor}
-        onQuickAddEffect={() => {
-          setActiveStrip("effects");
-          addEffectClipAtPlayhead("zoom_pulse");
-        }}
-        onCommitHistory={commitHistory}
+    <>
+      {/* Ana Bar Sonuna Klip Ekleme Gizli Dosya Seçici */}
+      <input
+        ref={appendClipInputRef}
+        type="file"
+        accept="image/*,video/*"
+        className="hidden"
+        onChange={handleAppendClipFile}
       />
+
+      {/* Ekranda 8 Tutamaçlı ve 9 Eşit Parçalı (3x3 Rule of Thirds) İnteraktif Kırpma Katmanı */}
+      {activeStrip === "crop" &&
+        selectedItemType === "video" &&
+        selectedVideoClip &&
+        engine && (
+          <OnCanvasCropOverlay
+            cropRect={
+              selectedVideoClip.cropRect || { x: 0, y: 0, width: 1, height: 1 }
+            }
+            onCommitHistory={commitHistory}
+            onChangeCropRect={(nextRect) => {
+              engine.updateClipCropRect(selectedVideoClip.id, nextRect);
+              syncFromEngine();
+            }}
+          />
+        )}
+
+      <div className="fixed inset-x-0 bottom-0 z-40 bg-black pt-1.5 pb-5 flex flex-col gap-2.5 pointer-events-auto select-none">
+        {/* 1. Sabit PPS (60px/s) ve Dinamik Gezen İbreli NLE Zaman Çizelgesi */}
+        <VideoTimelineNLE
+          clips={clips}
+          overlayItems={overlayItems}
+          effectClips={effectClips}
+          musicClip={selectedMusic}
+          totalDuration={totalDuration}
+          maxSourceDuration={maxSourceDuration}
+          currentTime={videoState.currentTime}
+          isPlaying={videoState.isPlaying}
+          thumbnails={thumbnails}
+          selectedItemId={selectedItemId}
+          selectedItemType={selectedItemType}
+          canUndo={historyStack.length > 0}
+          canRedo={redoStack.length > 0}
+          getCurrentTime={getCurrentTime}
+          onSelectItem={handleSelectItem}
+          onTrimClip={(clipId, newStart, newEnd) => {
+            engine?.updateClipTrim(clipId, newStart, newEnd);
+            syncFromEngine();
+          }}
+          onReorderClips={(fromIdx, toIdx) => {
+            engine?.reorderClips(fromIdx, toIdx);
+            syncFromEngine();
+          }}
+          onAppendClipClick={() => appendClipInputRef.current?.click()}
+          onChangeOverlayTiming={(layerId, start, end) => {
+            engine?.updateOverlayTrackTiming(layerId, start, end);
+            syncFromEngine();
+          }}
+          onReorderOverlayLayer={(layerId, direction) => {
+            commitHistory();
+            engine?.reorderOverlayLayer(layerId, direction);
+            syncFromEngine();
+          }}
+          onChangeEffectClips={onChangeEffectClips}
+          onChangeMusicTimeline={handleMusicTimelineChange}
+          onSeek={onSeek}
+          onPauseVideo={() => engine?.pauseVideo()}
+          onTogglePlay={onTogglePlay}
+          onUndo={handleUndo}
+          onRedo={handleRedo}
+          onOpenMusicPicker={onOpenMusicPicker}
+          onOpenTextEditor={onOpenTextEditor}
+          onQuickAddEffect={() => {
+            setActiveStrip("effects");
+          }}
+          onCommitHistory={commitHistory}
+        />
 
       {/* 2. Açılır Alt Ayar Şeridi (Kırp & Kadraj / Efektler / Ses & Hız / Filtreler) */}
       {activeStrip === "crop" &&
@@ -802,14 +844,17 @@ export default function ReelsEditor({
               );
             })}
 
-            {onChangeEffectClips && (
+            {selectedEffectClip && (
               <button
                 type="button"
-                onClick={() => addEffectClipAtPlayhead("zoom_pulse")}
+                onClick={() => {
+                  setSelectedItemId(null);
+                  setSelectedItemType(null);
+                }}
                 className="px-3.5 py-2 rounded-2xl text-xs font-semibold shrink-0 border border-white/15 text-white bg-[#1c1c1e] hover:bg-[#26262a] active:scale-95 flex items-center gap-1"
               >
                 <Plus className="w-3.5 h-3.5" />
-                <span>Yeni Efekt</span>
+                <span>Yeni Efekt Seç</span>
               </button>
             )}
           </div>
@@ -1190,7 +1235,8 @@ export default function ReelsEditor({
           </button>
         </div>
       )}
-    </div>
+      </div>
+    </>
   );
 }
 // [END] CREATED BY Bedirhan

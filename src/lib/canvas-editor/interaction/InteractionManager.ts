@@ -26,6 +26,7 @@ export class InteractionManager {
   private touchStartY: number = 0;
   private isMoved: boolean = false;
   private isSwipeTriggered: boolean = false;
+  private isCornerResizeMode: boolean = false;
   private candidateLayer: BaseLayer | null = null;
 
   // İki Parmak (Pan + Pinch + Rotate) Takibi
@@ -172,13 +173,35 @@ export class InteractionManager {
       this.touchStartY = e.clientY;
       this.isMoved = false;
       this.isSwipeTriggered = false;
+      this.isCornerResizeMode = false;
+
+      const ctx = this.getContext();
+      if (
+        this.selectedLayer &&
+        this.selectedLayer.type !== 'media' &&
+        !this.selectedLayer.locked &&
+        this.selectedLayer.isCornerHandleHit(pt, ctx, this.canvas.width, this.canvas.height)
+      ) {
+        this.candidateLayer = this.selectedLayer;
+        this.transformingLayer = this.selectedLayer;
+        this.isCornerResizeMode = true;
+        this.selectedLayer.isInteracting = true;
+        const centerPx = this.selectedLayer.getPixelPosition(this.canvas.width, this.canvas.height);
+        this.startCenter = centerPx;
+        this.startDistance = Math.max(12, Math.hypot(pt.x - centerPx.x, pt.y - centerPx.y));
+        this.startAngle = Math.atan2(pt.y - centerPx.y, pt.x - centerPx.x) * (180 / Math.PI);
+        this.startLayerTransform = { ...this.selectedLayer.transform };
+        this.onStateChange();
+        return;
+      }
+
       this.candidateLayer = this.findHitLayer(pt);
       const wasSelected = Boolean(
         this.candidateLayer && this.selectedLayer === this.candidateLayer
       );
       this.prevFontBeforeTap = wasSelected ? 'already_selected' : null;
 
-      // Tek elle etiket/resim taşıma (Single-finger drag):
+      // Tek elle etiket/resim/metin taşıma (Single-finger drag):
       if (this.candidateLayer && this.candidateLayer.type !== 'media' && !this.candidateLayer.locked) {
         this.transformingLayer = this.candidateLayer;
         this.setSelectedLayer(this.candidateLayer);
@@ -197,6 +220,7 @@ export class InteractionManager {
       // 1. Bekleyen tap zamanlayıcısını iptal et
       this.cancelTapTimer();
       this.isSwipeTriggered = true; // Filtre kaydırmayı kilitle
+      this.isCornerResizeMode = false;
 
       const pts = Array.from(this.activePointers.values()).map((p) => p.pt);
       const p1 = pts[0];
@@ -354,42 +378,54 @@ export class InteractionManager {
 
     // ─────────────────────────────────────────────────────────────
     // 2. TEK PARMAK MODU:
-    // A) Üst nesne tutulduysa: Tek elle serbest taşıma + Merkez Mıknatısı + Çöp Takibi
-    // B) Boş tuvalde sürükleniyorsa: Yatay Swipe (Filtre Değişimi)
+    // A) Köşe tutamacı tutulduysa: Tek parmakla ölçekleme + döndürme
+    // B) Üst nesne tutulduysa: Tek elle 1:1 serbest taşıma
+    // C) Boş tuvalde sürükleniyorsa: Yatay Swipe (Filtre Değişimi)
     // ─────────────────────────────────────────────────────────────
     if (this.activePointers.size === 1) {
       const deltaX = e.clientX - this.touchStartX;
       const deltaY = e.clientY - this.touchStartY;
       const deltaDist = Math.hypot(deltaX, deltaY);
 
-      // Taşıma/Sürükleme Eşiği (8px): 8px'den fazla hareket kesinlikle sürüklemedir, tıklama değildir
-      const DRAG_THRESHOLD = 8;
+      const DRAG_THRESHOLD = 3;
       if (!this.isMoved) {
         if (deltaDist > DRAG_THRESHOLD) {
           this.isMoved = true;
           this.cancelTapTimer();
         } else {
-          // 8px aşılmadığı sürece nesneyi kımıldatma, anlık tıklama hassasiyetini koru
           return;
         }
       }
 
-      // A. Tek elle etiket / çıkartma / metin taşıma (Hızlı ve akıcı sürükleme)
+      if (this.isCornerResizeMode && this.transformingLayer && this.transformingLayer.type !== 'media' && !this.transformingLayer.locked) {
+        const curDist = Math.max(8, Math.hypot(pt.x - this.startCenter.x, pt.y - this.startCenter.y));
+        const scaleFactor = curDist / this.startDistance;
+        const newScale = Math.max(0.2, Math.min(5.0, this.startLayerTransform.scale * scaleFactor));
+        this.transformingLayer.transform.scale = Math.round(newScale * 100) / 100;
+
+        const curAngle = Math.atan2(pt.y - this.startCenter.y, pt.x - this.startCenter.x) * (180 / Math.PI);
+        const angleDelta = curAngle - this.startAngle;
+        let newRot = (this.startLayerTransform.rotation + angleDelta) % 360;
+        if (newRot < 0) newRot += 360;
+        if (Math.abs(newRot - 0) <= 3.0 || Math.abs(newRot - 360) <= 3.0) newRot = 0;
+        this.transformingLayer.transform.rotation = Math.round(newRot);
+
+        this.onStateChange();
+        return;
+      }
+
+      // A. Tek elle etiket / çıkartma / metin taşıma (1:1 anlık sürükleme)
       if (this.transformingLayer && this.transformingLayer.type !== 'media' && !this.transformingLayer.locked) {
-        const DRAG_SPEED = 1.25;
-        const dx = ((pt.x - this.startCenter.x) / this.canvas.width) * DRAG_SPEED;
-        const dy = ((pt.y - this.startCenter.y) / this.canvas.height) * DRAG_SPEED;
+        const dx = (pt.x - this.startCenter.x) / this.canvas.width;
+        const dy = (pt.y - this.startCenter.y) / this.canvas.height;
         let newX = Math.max(-1.5, Math.min(2.5, this.startLayerTransform.x + dx));
         let newY = Math.max(-1.5, Math.min(2.5, this.startLayerTransform.y + dy));
 
-        // Merkez Mıknatısı:
-        // KURAL: Yazılar (TextLayer) merkez kılavuzundan/mıknatısından tamamen hariç tutulur.
         let snapX = false;
         let snapY = false;
         const isText = this.transformingLayer.type === 'text';
 
         if (!isText) {
-          // Yumuşak ve esnek mıknatıs eşiği (0.0065 = ~7px)
           const SNAP_THRESHOLD = 0.0065;
           if (Math.abs(newX - 0.5) < SNAP_THRESHOLD) {
             newX = 0.5;
@@ -405,7 +441,6 @@ export class InteractionManager {
         this.transformingLayer.transform.x = newX;
         this.transformingLayer.transform.y = newY;
 
-        // Mıknatıslı çöp kutusu konumu bildirimi
         this.onDragMove?.({
           layer: this.transformingLayer,
           clientX: e.clientX,
@@ -454,6 +489,7 @@ export class InteractionManager {
 
     // Dokunuş tamamen bittiğinde etkileşimi kaldır ve kılavuz çizgisini kapat
     if (this.activePointers.size === 0) {
+      this.isCornerResizeMode = false;
       this.onSnapGuide?.({ x: false, y: false });
     }
     if (this.activePointers.size === 0 && this.transformingLayer) {

@@ -80,6 +80,9 @@ export interface VideoTrackClip {
   isMotionPhoto?: boolean; // Reels için foto karesi
   transform?: LayerTransform; // Klip bazlı bağımsız kadraj/kırpma (scale, x, y, rotation, flipH, flipV)
   fitMode?: FitMode;       // Klip bazlı 9:16 Doldur ('cover') veya Sığdır ('contain')
+  cropRect?: { x: number; y: number; width: number; height: number }; // Normalize [0..1] 8 tutamaçlı kırpma kutusu
+  media?: EditorMedia;     // Klip bazlı bağımsız medya kaynağı ([+] ile eklenen klipler için)
+  thumbnailUrl?: string;   // Klip önizleme karesi
 }
 
 export interface OverlayTrackItem {

@@ -249,6 +249,8 @@ export class CanvasEngine {
         isMotionPhoto: this.shareMode === 'reels' && media.type === 'image',
         transform: { ...this.mediaLayer.transform },
         fitMode: this.fitMode,
+        cropRect: { x: 0, y: 0, width: 1, height: 1 },
+        media,
       },
     ];
     this.nleTimelineTime = 0;
@@ -1018,6 +1020,7 @@ export class CanvasEngine {
       ...orig,
       id: `clip_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 5)}`,
       transform: orig.transform ? { ...orig.transform } : undefined,
+      cropRect: orig.cropRect ? { ...orig.cropRect } : undefined,
     };
     this.videoClips.splice(idx + 1, 0, clone);
     this.syncMediaLayerWithClips();
@@ -1026,15 +1029,97 @@ export class CanvasEngine {
     return clone;
   }
 
+  public async appendVideoClip(source: string | Blob | File): Promise<VideoTrackClip | null> {
+    if (!this.mediaLayer) return null;
+    this.pauseVideo();
+    const newMedia = await MediaSourceManager.load(source);
+    const isPhoto = newMedia.type === 'image';
+    const rawDur = isPhoto
+      ? 5
+      : Math.max(0.5, Math.min(60, Number.isFinite(newMedia.duration) && (newMedia.duration || 0) > 0 ? (newMedia.duration as number) : 5));
+
+    let thumbnailUrl: string | undefined;
+    try {
+      if (typeof document !== 'undefined') {
+        const tCanvas = document.createElement('canvas');
+        tCanvas.width = 160;
+        tCanvas.height = 160;
+        const tCtx = tCanvas.getContext('2d');
+        if (tCtx) {
+          tCtx.drawImage(newMedia.element, 0, 0, 160, 160);
+          thumbnailUrl = tCanvas.toDataURL('image/jpeg', 0.72);
+        }
+      }
+    } catch {}
+
+    const newClip: VideoTrackClip = {
+      id: `clip_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 5)}`,
+      sourceMediaId: newMedia.objectUrl || `media_${Date.now()}`,
+      sourceStart: 0,
+      sourceEnd: Number(rawDur.toFixed(2)),
+      duration: Number(rawDur.toFixed(2)),
+      playbackRate: 1.0,
+      volume: 1.0,
+      muted: isPhoto,
+      isMotionPhoto: isPhoto,
+      transform: {
+        x: 0.5,
+        y: 0.5,
+        scale: 1,
+        rotation: 0,
+        flipH: false,
+        flipV: false,
+      },
+      fitMode: 'cover',
+      cropRect: { x: 0, y: 0, width: 1, height: 1 },
+      media: newMedia,
+      thumbnailUrl,
+    };
+
+    this.videoClips.push(newClip);
+    this.syncMediaLayerWithClips();
+    this.invalidateStaticCache();
+    this.requestRender();
+    this.emit('video-time', this.getVideoState());
+    this.emit('change');
+    return newClip;
+  }
+
   public applyClipTransformToMediaLayer(clip: VideoTrackClip): boolean {
     const ml = this.mediaLayer;
     if (!ml) return false;
     let changed = false;
+
+    if (clip.media && ml.media !== clip.media) {
+      const prevVideo = ml.getVideoElement();
+      if (prevVideo && !prevVideo.paused) {
+        try {
+          prevVideo.pause();
+        } catch {}
+      }
+      ml.media = clip.media;
+      ml.isMotionPhoto = Boolean(clip.isMotionPhoto);
+      changed = true;
+    }
+
     const nextFit = clip.fitMode || 'cover';
     if (ml.fitMode !== nextFit) {
       ml.fitMode = nextFit;
       changed = true;
     }
+
+    const nextCrop = clip.cropRect || { x: 0, y: 0, width: 1, height: 1 };
+    const curCrop = ml.cropRect || { x: 0, y: 0, width: 1, height: 1 };
+    if (
+      Math.abs(curCrop.x - nextCrop.x) > 0.0005 ||
+      Math.abs(curCrop.y - nextCrop.y) > 0.0005 ||
+      Math.abs(curCrop.width - nextCrop.width) > 0.0005 ||
+      Math.abs(curCrop.height - nextCrop.height) > 0.0005
+    ) {
+      ml.cropRect = { ...nextCrop };
+      changed = true;
+    }
+
     if (clip.transform) {
       const t = clip.transform;
       if (
@@ -1053,6 +1138,30 @@ export class CanvasEngine {
       this.invalidateStaticCache();
     }
     return changed;
+  }
+
+  public updateClipCropRect(
+    clipId: string,
+    cropRect: { x: number; y: number; width: number; height: number }
+  ): void {
+    const idx = this.videoClips.findIndex((c) => c.id === clipId);
+    if (idx === -1) return;
+    const clamped = {
+      x: Math.max(0, Math.min(0.85, Number(cropRect.x.toFixed(4)))),
+      y: Math.max(0, Math.min(0.85, Number(cropRect.y.toFixed(4)))),
+      width: Math.max(0.15, Math.min(1, Number(cropRect.width.toFixed(4)))),
+      height: Math.max(0.15, Math.min(1, Number(cropRect.height.toFixed(4)))),
+    };
+    this.videoClips[idx] = {
+      ...this.videoClips[idx],
+      cropRect: clamped,
+    };
+    if (this.mediaLayer) {
+      this.mediaLayer.cropRect = { ...clamped };
+    }
+    this.invalidateStaticCache();
+    this.requestRender();
+    this.emit('change');
   }
 
   public updateClipTransform(
@@ -1095,6 +1204,7 @@ export class CanvasEngine {
   }
 
   public resetClipTransform(clipId: string): void {
+    this.updateClipCropRect(clipId, { x: 0, y: 0, width: 1, height: 1 });
     this.updateClipTransform(
       clipId,
       {
