@@ -6,6 +6,7 @@ import { MusicStickerLayer } from './layers/MusicStickerLayer';
 import { MediaSourceManager } from './MediaSource';
 import { InteractionManager } from './interaction/InteractionManager';
 import { ImageExporter, ExportImageOptions } from './exporter/ImageExporter';
+import { generateVideoThumbnails } from './utils/videoThumbs';
 import {
   EngineOptions,
   EditorMedia,
@@ -707,6 +708,9 @@ export class CanvasEngine {
   // [MODIFIED BY Bedirhan]
   public syncTemporalVisibility(t?: number): boolean {
     const curT = typeof t === 'number' ? t : this.getCurrentTime();
+    if (this.mediaLayer) {
+      this.mediaLayer.timelineTime = curT;
+    }
     let changed = false;
     for (let i = 0; i < this.overlayLayers.length; i++) {
       const layer = this.overlayLayers[i];
@@ -1082,6 +1086,7 @@ export class CanvasEngine {
       cropRect: { x: 0, y: 0, width: 1, height: 1 },
       media: newMedia,
       thumbnailUrl,
+      thumbnails: thumbnailUrl ? [thumbnailUrl] : undefined,
     };
 
     this.videoClips.push(newClip);
@@ -1090,6 +1095,25 @@ export class CanvasEngine {
     this.requestRender();
     this.emit('video-time', this.getVideoState());
     this.emit('change');
+
+    // Video ise film şeridinde gerçek ardışık kareler görünmesi için arka planda 8 kare üret
+    if (!isPhoto) {
+      generateVideoThumbnails(source, {
+        count: 8,
+        onThumbnail: (thumbs) => {
+          const idx = this.videoClips.findIndex((c) => c.id === newClip.id);
+          if (idx !== -1 && thumbs.length > 0) {
+            this.videoClips[idx] = {
+              ...this.videoClips[idx],
+              thumbnailUrl: thumbs[0],
+              thumbnails: thumbs,
+            };
+            this.emit('change');
+          }
+        },
+      }).catch(() => {});
+    }
+
     return newClip;
   }
 
@@ -1959,6 +1983,8 @@ export class CanvasEngine {
       this.syncTemporalVisibility(t);
       const active = this.getActiveClipAtTime(t);
       if (ml && active) {
+        this.applyClipTransformToMediaLayer(active.clip);
+        ml.timelineTime = t;
         if (ml.isMotionPhoto) {
           ml.virtualTime = t;
         } else {
@@ -1970,6 +1996,7 @@ export class CanvasEngine {
     }
 
     if (ml) {
+      ml.timelineTime = t;
       if (ml.isMotionPhoto) {
         ml.virtualTime = t;
       } else {

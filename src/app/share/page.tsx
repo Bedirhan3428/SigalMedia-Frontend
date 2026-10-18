@@ -324,29 +324,50 @@ export default function ShareStoryPage() {
       }
 
       const cur = eng.getCurrentTime();
-      const clipStart =
-        typeof selectedMusic.timelineStart === "number"
-          ? selectedMusic.timelineStart
-          : videoState.trimStart;
-      const clipEnd =
-        typeof selectedMusic.timelineEnd === "number" &&
-        selectedMusic.timelineEnd > clipStart
-          ? selectedMusic.timelineEnd
-          : videoState.trimEnd || videoState.duration;
-
-      if (cur >= clipStart && cur <= clipEnd) {
-        const expectedSongTime =
-          Math.max(0, selectedMusic.startTime || 0) + Math.max(0, cur - clipStart);
-        if (Math.abs(audio.currentTime - expectedSongTime) > 0.35) {
-          try {
-            audio.currentTime = expectedSongTime;
-          } catch {}
-        }
-        if (audio.paused) {
-          audio.play().catch(() => {});
+      if (selectedMusic.segments && selectedMusic.segments.length > 0) {
+        const activeSeg = selectedMusic.segments.find(
+          (s) => cur >= s.timelineStart && cur <= s.timelineEnd
+        );
+        if (activeSeg) {
+          const expectedSongTime =
+            Math.max(0, activeSeg.songOffset || 0) +
+            Math.max(0, cur - activeSeg.timelineStart);
+          if (Math.abs(audio.currentTime - expectedSongTime) > 0.35) {
+            try {
+              audio.currentTime = expectedSongTime;
+            } catch {}
+          }
+          if (audio.paused) {
+            audio.play().catch(() => {});
+          }
+        } else {
+          if (!audio.paused) audio.pause();
         }
       } else {
-        if (!audio.paused) audio.pause();
+        const clipStart =
+          typeof selectedMusic.timelineStart === "number"
+            ? selectedMusic.timelineStart
+            : videoState.trimStart;
+        const clipEnd =
+          typeof selectedMusic.timelineEnd === "number" &&
+          selectedMusic.timelineEnd > clipStart
+            ? selectedMusic.timelineEnd
+            : videoState.trimEnd || videoState.duration;
+
+        if (cur >= clipStart && cur <= clipEnd) {
+          const expectedSongTime =
+            Math.max(0, selectedMusic.startTime || 0) + Math.max(0, cur - clipStart);
+          if (Math.abs(audio.currentTime - expectedSongTime) > 0.35) {
+            try {
+              audio.currentTime = expectedSongTime;
+            } catch {}
+          }
+          if (audio.paused) {
+            audio.play().catch(() => {});
+          }
+        } else {
+          if (!audio.paused) audio.pause();
+        }
       }
 
       rafId = requestAnimationFrame(syncAudioTick);

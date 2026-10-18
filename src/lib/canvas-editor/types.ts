@@ -83,6 +83,7 @@ export interface VideoTrackClip {
   cropRect?: { x: number; y: number; width: number; height: number }; // Normalize [0..1] 8 tutamaçlı kırpma kutusu
   media?: EditorMedia;     // Klip bazlı bağımsız medya kaynağı ([+] ile eklenen klipler için)
   thumbnailUrl?: string;   // Klip önizleme karesi
+  thumbnails?: string[];   // Klip boyunca ardışık video kareleri (film şeridi için)
 }
 
 export interface OverlayTrackItem {
@@ -152,6 +153,13 @@ export type FontPreset = 'modern' | 'classic' | 'neon' | 'typewriter' | 'heavy';
 export type TextBgPreset = 'none' | 'solid' | 'translucent' | 'neon';
 
 // [MODIFIED BY Bedirhan]
+export interface AudioTrackSegment {
+  id: string;
+  timelineStart: number;
+  timelineEnd: number;
+  songOffset: number;
+}
+
 export interface StoryAudioMeta {
   id: string;
   title: string;
@@ -165,6 +173,7 @@ export interface StoryAudioMeta {
   lyricsSnippet?: string;
   timelineStart?: number;
   timelineEnd?: number;
+  segments?: AudioTrackSegment[];
 }
 
 export interface SnapGuideState {

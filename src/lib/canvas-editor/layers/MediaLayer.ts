@@ -54,6 +54,7 @@ export class MediaLayer extends BaseLayer {
   public postAdjustments: PostAdjustmentState = { ...DEFAULT_POST_ADJUSTMENTS };
   public reelsEffect: ReelsEffectId = 'none';
   public effectClips: ReelsEffectClip[] = [];
+  public timelineTime: number = 0;
   public cropRect?: { x: number; y: number; width: number; height: number };
   public isCropOverlayOpen: boolean = false;
   // [END] CREATED BY Bedirhan
@@ -333,7 +334,7 @@ export class MediaLayer extends BaseLayer {
         },
         this.postAdjustments,
         this.reelsEffect,
-        this.getCurrentTime(),
+        this.timelineTime,
         filterStr,
         this.effectClips
       );

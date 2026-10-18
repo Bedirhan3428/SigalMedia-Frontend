@@ -46,7 +46,8 @@ export interface VideoTimelineNLEProps {
   onChangeMusicTimeline?: (
     timelineStart: number,
     timelineEnd: number,
-    songOffset?: number
+    songOffset?: number,
+    segmentId?: string
   ) => void;
   onSeek: (time: number) => void;
   onPauseVideo?: () => void;

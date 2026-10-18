@@ -301,12 +301,40 @@ export default function ReelsEditor({
       ? effectClips.find((c) => c.id === selectedItemId) || null
       : null;
 
+  const [effectCategory, setEffectCategory] = useState<"cinema" | "dynamic">(
+    "cinema"
+  );
+
   const selectedPhotoLayer =
     selectedItemType === "photo" && engine
       ? (engine.getSelectedLayer() as OverlayImageLayer | null)
       : null;
 
-  // İbre seçili klibin/katmanın içindeyse Böl butonu aktiftir
+  const getAudioSegments = () => {
+    if (!selectedMusic) return [];
+    if (selectedMusic.segments && selectedMusic.segments.length > 0) {
+      return selectedMusic.segments;
+    }
+    const mStart =
+      typeof selectedMusic.timelineStart === "number"
+        ? Math.max(0, selectedMusic.timelineStart)
+        : 0;
+    const mEnd =
+      typeof selectedMusic.timelineEnd === "number" &&
+      selectedMusic.timelineEnd > mStart
+        ? selectedMusic.timelineEnd
+        : Math.max(mStart + 1, totalDuration);
+    return [
+      {
+        id: selectedMusic.id || "audio_main",
+        timelineStart: mStart,
+        timelineEnd: mEnd,
+        songOffset: selectedMusic.startTime || 0,
+      },
+    ];
+  };
+
+  // İbre seçili klibin/katmanın/şarkının içindeyse Böl butonu aktiftir
   const canSplitSelected = (() => {
     const cur = getPlayheadTime();
     if (!selectedItemId || !selectedItemType) {
@@ -340,6 +368,13 @@ export default function ReelsEditor({
       const fx = effectClips.find((c) => c.id === selectedItemId);
       return Boolean(fx && cur > fx.startTime + 0.2 && cur < fx.endTime - 0.2);
     }
+    if (selectedItemType === "audio") {
+      const segs = getAudioSegments();
+      const seg = segs.find((s) => s.id === selectedItemId) || segs[0];
+      return Boolean(
+        seg && cur > seg.timelineStart + 0.25 && cur < seg.timelineEnd - 0.25
+      );
+    }
     return false;
   })();
 
@@ -347,6 +382,41 @@ export default function ReelsEditor({
   const handleSplitSelected = () => {
     const cur = getPlayheadTime();
     commitHistory();
+
+    if (selectedItemType === "audio" && selectedMusic && onChangeMusicMeta) {
+      const segs = getAudioSegments();
+      const seg = segs.find((s) => s.id === selectedItemId) || segs[0];
+      if (
+        seg &&
+        cur > seg.timelineStart + 0.25 &&
+        cur < seg.timelineEnd - 0.25
+      ) {
+        const splitPt = Number(cur.toFixed(2));
+        const leftSeg = {
+          ...seg,
+          timelineEnd: splitPt,
+        };
+        const rightSeg = {
+          id: `aud_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 5)}`,
+          timelineStart: splitPt,
+          timelineEnd: seg.timelineEnd,
+          songOffset: Number(
+            (seg.songOffset + (splitPt - seg.timelineStart)).toFixed(2)
+          ),
+        };
+        const nextSegs = segs.flatMap((s) =>
+          s.id === seg.id ? [leftSeg, rightSeg] : [s]
+        );
+        onChangeMusicMeta({
+          ...selectedMusic,
+          segments: nextSegs,
+          timelineStart: nextSegs[0].timelineStart,
+          timelineEnd: nextSegs[nextSegs.length - 1].timelineEnd,
+        });
+        setSelectedItemId(rightSeg.id);
+      }
+      return;
+    }
 
     if (selectedItemType === "effect" && selectedEffectClip && onChangeEffectClips) {
       if (
@@ -400,7 +470,7 @@ export default function ReelsEditor({
     }
   };
 
-  // 🗑️ SİL (DELETE) Aksiyonu (Manyetik Ripple / Katman Silme)
+  // 🗑️ SİL (DELETE) Aksiyonu (Manyetik Ripple / Katman / Şarkı Parçası Silme)
   const handleDeleteSelected = () => {
     if (!selectedItemId || !selectedItemType) return;
     commitHistory();
@@ -439,7 +509,18 @@ export default function ReelsEditor({
     }
 
     if (selectedItemType === "audio" && onChangeMusicMeta) {
-      onChangeMusicMeta(null);
+      const segs = getAudioSegments();
+      if (segs.length > 1 && selectedMusic) {
+        const nextSegs = segs.filter((s) => s.id !== selectedItemId);
+        onChangeMusicMeta({
+          ...selectedMusic,
+          segments: nextSegs,
+          timelineStart: nextSegs[0]?.timelineStart ?? 0,
+          timelineEnd: nextSegs[nextSegs.length - 1]?.timelineEnd ?? totalDuration,
+        });
+      } else {
+        onChangeMusicMeta(null);
+      }
       setSelectedItemId(null);
       setSelectedItemType(null);
       setActiveStrip("none");
@@ -486,6 +567,31 @@ export default function ReelsEditor({
       };
       onChangeEffectClips([...effectClips, cloneFx]);
       setSelectedItemId(cloneFx.id);
+      return;
+    }
+
+    if (selectedItemType === "audio" && selectedMusic && onChangeMusicMeta) {
+      const segs = getAudioSegments();
+      const seg = segs.find((s) => s.id === selectedItemId) || segs[0];
+      if (seg) {
+        const span = Math.max(0.4, seg.timelineEnd - seg.timelineStart);
+        const nextStart = Math.min(totalDuration - 0.4, seg.timelineEnd);
+        const nextEnd = Math.min(totalDuration + 10, nextStart + span);
+        const cloneSeg = {
+          id: `aud_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 5)}`,
+          timelineStart: Number(nextStart.toFixed(2)),
+          timelineEnd: Number(Math.max(nextStart + 0.4, nextEnd).toFixed(2)),
+          songOffset: seg.songOffset,
+        };
+        const nextSegs = [...segs, cloneSeg];
+        onChangeMusicMeta({
+          ...selectedMusic,
+          segments: nextSegs,
+          timelineStart: nextSegs[0].timelineStart,
+          timelineEnd: nextSegs[nextSegs.length - 1].timelineEnd,
+        });
+        setSelectedItemId(cloneSeg.id);
+      }
     }
   };
 
@@ -578,14 +684,30 @@ export default function ReelsEditor({
   const handleMusicTimelineChange = (
     timelineStart: number,
     timelineEnd: number,
-    songOffset?: number
+    songOffset?: number,
+    segmentId?: string
   ) => {
     if (!selectedMusic || !onChangeMusicMeta) return;
+    const segs = getAudioSegments();
+    const targetId = segmentId || selectedItemId || segs[0]?.id;
+    const nextSegs = segs.map((s) =>
+      s.id === targetId
+        ? {
+            ...s,
+            timelineStart,
+            timelineEnd,
+            songOffset:
+              typeof songOffset === "number" ? songOffset : s.songOffset,
+          }
+        : s
+    );
     onChangeMusicMeta({
       ...selectedMusic,
-      timelineStart,
-      timelineEnd,
-      startTime: typeof songOffset === "number" ? songOffset : selectedMusic.startTime,
+      timelineStart: nextSegs[0]?.timelineStart ?? timelineStart,
+      timelineEnd: nextSegs[nextSegs.length - 1]?.timelineEnd ?? timelineEnd,
+      startTime:
+        typeof songOffset === "number" ? songOffset : selectedMusic.startTime,
+      segments: nextSegs,
     });
   };
 
@@ -919,7 +1041,84 @@ export default function ReelsEditor({
 
             {activeStrip === "effects" && (
               <div className="flex flex-col gap-2 px-4">
-                {/* Eklenen Efektler Şeridi (Aynı anda veya farklı zamanlarda eklenen tüm efektler) */}
+                {/* 1. Kategori Sekmeleri: Sinema & Retro | Dinamik & Işık + Temizle */}
+                <div className="flex items-center justify-between gap-2">
+                  <div className="flex items-center gap-1.5 bg-[#16171b] p-1 rounded-xl border border-white/5">
+                    <button
+                      type="button"
+                      onClick={() => setEffectCategory("cinema")}
+                      className={`px-3 py-1 rounded-lg text-[11px] font-bold transition-all ${
+                        effectCategory === "cinema"
+                          ? "bg-amber-400 text-black shadow-sm"
+                          : "text-zinc-400 hover:text-white"
+                      }`}
+                    >
+                      🎬 Sinema & Retro
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setEffectCategory("dynamic")}
+                      className={`px-3 py-1 rounded-lg text-[11px] font-bold transition-all ${
+                        effectCategory === "dynamic"
+                          ? "bg-amber-400 text-black shadow-sm"
+                          : "text-zinc-400 hover:text-white"
+                      }`}
+                    >
+                      ⚡ Dinamik & Işık
+                    </button>
+                  </div>
+
+                  {effectClips.length > 0 && (
+                    <button
+                      type="button"
+                      onClick={() => handleSelectEffectPreset("none")}
+                      className="px-2.5 py-1 rounded-xl bg-red-500/15 hover:bg-red-500/25 border border-red-500/25 text-[11px] font-semibold text-red-300 active:scale-95 transition-all"
+                    >
+                      Temizle
+                    </button>
+                  )}
+                </div>
+
+                {/* 2. Seçili Kategorideki Görsel Efekt Seçenek Kartları (4'lü Grid) */}
+                <div className="grid grid-cols-4 gap-2">
+                  {REELS_EFFECT_PRESETS.filter((eff) =>
+                    effectCategory === "cinema"
+                      ? ["cinema_warm", "vhs_grain", "rgb_shift", "glitch"].includes(
+                          eff.id
+                        )
+                      : ["zoom_pulse", "flash", "shake", "cyber_neon"].includes(
+                          eff.id
+                        )
+                  ).map((eff) => {
+                    const active = selectedEffectClip?.effect === eff.id;
+                    return (
+                      <button
+                        key={eff.id}
+                        type="button"
+                        onClick={() => handleSelectEffectPreset(eff.id)}
+                        className={`flex flex-col items-center justify-center gap-1.5 py-2 px-1.5 rounded-2xl border transition-all active:scale-95 ${
+                          active
+                            ? "bg-white/15 border-amber-400 ring-1 ring-amber-400/60 shadow-md"
+                            : "bg-[#18191e] border-white/10 hover:bg-[#22242b]"
+                        }`}
+                      >
+                        <div
+                          className="w-7 h-7 rounded-xl flex items-center justify-center shadow-inner"
+                          style={{
+                            background: `radial-gradient(circle at 30% 30%, ${eff.color}, #111827)`,
+                          }}
+                        >
+                          <Sparkles className="w-3.5 h-3.5 text-white drop-shadow" />
+                        </div>
+                        <span className="text-[10px] font-bold text-zinc-100 truncate w-full text-center">
+                          {eff.name}
+                        </span>
+                      </button>
+                    );
+                  })}
+                </div>
+
+                {/* 3. Eklenen Efektler Şeridi (Aynı anda veya farklı zamanlarda eklenen tüm efektler) */}
                 {effectClips.length > 0 && (
                   <div className="flex items-center gap-1.5 overflow-x-auto no-scrollbar pb-0.5">
                     {effectClips.map((fx) => {
@@ -943,6 +1142,7 @@ export default function ReelsEditor({
                             onClick={() => {
                               setSelectedItemId(fx.id);
                               setSelectedItemType("effect");
+                              onSeek(fx.startTime);
                             }}
                             className="flex items-center gap-1.5"
                           >
@@ -988,39 +1188,8 @@ export default function ReelsEditor({
                   </div>
                 )}
 
-                {/* Efekt Ekleme Şeridi (Her dokunuşta ibre konumuna yeni efekt ekler) */}
-                <div className="flex items-center gap-2 overflow-x-auto no-scrollbar">
-                  {REELS_EFFECT_PRESETS.map((eff) => {
-                    const isNone = eff.id === "none";
-                    const active = isNone
-                      ? effectClips.length === 0 && activeReelsEffect === "none"
-                      : selectedEffectClip?.effect === eff.id;
-
-                    return (
-                      <button
-                        key={eff.id}
-                        type="button"
-                        onClick={() => handleSelectEffectPreset(eff.id)}
-                        className={`px-3.5 py-2 rounded-2xl text-xs font-semibold shrink-0 border transition-all active:scale-95 flex items-center gap-1.5 ${
-                          active
-                            ? "bg-white text-black border-white"
-                            : "bg-[#1c1c1e] text-zinc-300 border-white/5 hover:bg-[#26262a]"
-                        }`}
-                      >
-                        {!isNone && (
-                          <span
-                            className="w-2 h-2 rounded-full shrink-0"
-                            style={{ backgroundColor: eff.color }}
-                          />
-                        )}
-                        <span>{isNone ? "Temizle" : `+ ${eff.name}`}</span>
-                      </button>
-                    );
-                  })}
-                </div>
-
                 {selectedEffectClip && onChangeEffectClips && (
-                  <div className="flex items-center gap-3 bg-[#16171b] rounded-2xl px-3.5 py-2 border border-white/5">
+                  <div className="flex items-center gap-3 bg-[#16171b] rounded-2xl px-3.5 py-1.5 border border-white/5">
                     <span className="text-xs font-medium text-zinc-400 shrink-0">
                       Yoğunluk
                     </span>
@@ -1039,7 +1208,7 @@ export default function ReelsEditor({
                           )
                         );
                       }}
-                      className="flex-1 h-1.5 bg-white/15 rounded-lg appearance-none cursor-pointer accent-white"
+                      className="flex-1 h-1.5 bg-white/15 rounded-lg appearance-none cursor-pointer accent-amber-400"
                     />
                     <span className="text-xs font-semibold text-white w-9 text-right tabular-nums">
                       {selectedEffectClip.intensity}%
@@ -1190,23 +1359,21 @@ export default function ReelsEditor({
 
             {/* 3. DİNAMİK ALT ARAÇ ÇUBUĞU (Contextual Action Toolbar) */}
             {selectedItemId && selectedItemType ? (
-              /* BİR KLİP VEYA KATMAN SEÇİLİYKEN: [ ✂️ Böl ] [ 🗑️ Sil ] [ 📐 Kırp ] [ 🔊 Ses / Hız ] [ 📑 Kopyala ] */
+              /* BİR KLİP, KATMAN VEYA ŞARKI PARÇASI SEÇİLİYKEN: [ ✂️ Böl ] [ 🗑️ Sil ] [ 📐 Kırp ] [ 🔊 Ses / Hız ] [ 📑 Kopyala ] */
               <div className="flex items-center justify-between gap-2 px-4 pt-0.5">
-                {selectedItemType !== "audio" && (
-                  <button
-                    type="button"
-                    onClick={handleSplitSelected}
-                    disabled={!canSplitSelected}
-                    className="flex-1 flex flex-col items-center gap-1 disabled:opacity-35 group"
-                  >
-                    <div className="w-full h-11 rounded-2xl bg-[#1c1c1e] group-hover:bg-[#26262a] flex items-center justify-center text-white transition-all active:scale-95">
-                      <Scissors className="w-4 h-4" />
-                    </div>
-                    <span className="text-[11px] font-medium text-zinc-200">
-                      Böl
-                    </span>
-                  </button>
-                )}
+                <button
+                  type="button"
+                  onClick={handleSplitSelected}
+                  disabled={!canSplitSelected}
+                  className="flex-1 flex flex-col items-center gap-1 disabled:opacity-35 group"
+                >
+                  <div className="w-full h-11 rounded-2xl bg-[#1c1c1e] group-hover:bg-[#26262a] flex items-center justify-center text-white transition-all active:scale-95">
+                    <Scissors className="w-4 h-4" />
+                  </div>
+                  <span className="text-[11px] font-medium text-zinc-200">
+                    Böl
+                  </span>
+                </button>
 
                 <button
                   type="button"
@@ -1272,20 +1439,18 @@ export default function ReelsEditor({
                   </button>
                 )}
 
-                {selectedItemType !== "audio" && (
-                  <button
-                    type="button"
-                    onClick={handleDuplicateSelected}
-                    className="flex-1 flex flex-col items-center gap-1 group"
-                  >
-                    <div className="w-full h-11 rounded-2xl bg-[#1c1c1e] group-hover:bg-[#26262a] flex items-center justify-center text-white transition-all active:scale-95">
-                      <Copy className="w-4 h-4" />
-                    </div>
-                    <span className="text-[11px] font-medium text-zinc-200">
-                      Kopyala
-                    </span>
-                  </button>
-                )}
+                <button
+                  type="button"
+                  onClick={handleDuplicateSelected}
+                  className="flex-1 flex flex-col items-center gap-1 group"
+                >
+                  <div className="w-full h-11 rounded-2xl bg-[#1c1c1e] group-hover:bg-[#26262a] flex items-center justify-center text-white transition-all active:scale-95">
+                    <Copy className="w-4 h-4" />
+                  </div>
+                  <span className="text-[11px] font-medium text-zinc-200">
+                    Kopyala
+                  </span>
+                </button>
 
                 <button
                   type="button"

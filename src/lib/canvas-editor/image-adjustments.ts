@@ -251,6 +251,7 @@ export class ImageAdjustmentsEngine {
     const adj = adjustments || DEFAULT_POST_ADJUSTMENTS;
     const activeEffects = this.resolveActiveEffects(reelsEffect, effectClips, timeSec);
     const combinedFilter = this.buildCssFilter(adj, baseFilter, activeEffects);
+    const phase = timeSec + 0.28; // Duraklatılmış 0.00sn anında da efektin görünür olması için faz farkı
 
     ctx.save();
     ctx.filter = combinedFilter;
@@ -259,11 +260,11 @@ export class ImageAdjustmentsEngine {
     for (let i = 0; i < activeEffects.length; i++) {
       const { effect, weight } = activeEffects[i];
       if (effect === 'zoom_pulse') {
-        const pulse = 1 + Math.sin(timeSec * Math.PI * 4.2) * (0.055 * weight);
+        const pulse = 1 + Math.abs(Math.sin(phase * Math.PI * 3.8)) * (0.065 * weight);
         ctx.scale(pulse, pulse);
       } else if (effect === 'shake') {
-        const dx = Math.sin(timeSec * 46) * (14 * weight);
-        const dy = Math.cos(timeSec * 39) * (10 * weight);
+        const dx = Math.sin(phase * 46) * (14 * weight);
+        const dy = Math.cos(phase * 39) * (10 * weight);
         ctx.translate(dx, dy);
       }
     }
@@ -336,22 +337,22 @@ export class ImageAdjustmentsEngine {
       }
     }
 
-    // 5. Reels Efektleri: Glitch / RGB Shift / Flash / Cyber Neon
+    // 5. Reels Efektleri: Glitch / RGB Shift / Flash / Cyber Neon / Cinema Warm
     for (let i = 0; i < activeEffects.length; i++) {
       const { effect, weight } = activeEffects[i];
       if (effect === 'rgb_shift' || effect === 'glitch') {
         const offset =
           effect === 'glitch'
-            ? Math.sin(timeSec * 34) * (14 * weight)
-            : 8 * weight;
+            ? (Math.sin(phase * 34) >= 0 ? 1 : -1) * Math.max(4, Math.abs(Math.sin(phase * 34)) * 15) * weight
+            : 9 * weight;
         ctx.save();
         ctx.globalCompositeOperation = 'screen';
-        ctx.globalAlpha = 0.32 * weight;
+        ctx.globalAlpha = 0.35 * weight;
         ctx.drawImage(source, box.x - offset, box.y, box.width, box.height);
         ctx.drawImage(source, box.x + offset, box.y, box.width, box.height);
         ctx.restore();
       } else if (effect === 'flash') {
-        const flashAlpha = Math.max(0, Math.sin(timeSec * Math.PI * 5)) * (0.48 * weight);
+        const flashAlpha = Math.max(0.12 * weight, Math.max(0, Math.sin(phase * Math.PI * 5)) * (0.52 * weight));
         if (flashAlpha > 0.015) {
           ctx.save();
           ctx.fillStyle = `rgba(255,255,255,${flashAlpha.toFixed(3)})`;
@@ -361,12 +362,22 @@ export class ImageAdjustmentsEngine {
       } else if (effect === 'cyber_neon') {
         ctx.save();
         ctx.globalCompositeOperation = 'overlay';
-        ctx.globalAlpha = 0.22 * weight;
+        ctx.globalAlpha = 0.26 * weight;
         const neonGrad = ctx.createLinearGradient(box.x, box.y, box.x + box.width, box.y + box.height);
         neonGrad.addColorStop(0, '#ec4899');
-        neonGrad.addColorStop(0.5, 'rgba(6, 182, 212, 0.4)');
+        neonGrad.addColorStop(0.5, 'rgba(6, 182, 212, 0.45)');
         neonGrad.addColorStop(1, '#8b5cf6');
         ctx.fillStyle = neonGrad;
+        ctx.fillRect(box.x, box.y, box.width, box.height);
+        ctx.restore();
+      } else if (effect === 'cinema_warm') {
+        ctx.save();
+        ctx.globalCompositeOperation = 'soft-light';
+        ctx.globalAlpha = 0.28 * weight;
+        const warmGrad = ctx.createLinearGradient(box.x, box.y, box.x, box.y + box.height);
+        warmGrad.addColorStop(0, '#f59e0b');
+        warmGrad.addColorStop(1, '#7c2d12');
+        ctx.fillStyle = warmGrad;
         ctx.fillRect(box.x, box.y, box.width, box.height);
         ctx.restore();
       }

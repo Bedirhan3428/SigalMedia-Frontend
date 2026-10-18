@@ -40,7 +40,8 @@ export interface TimelineOverlayTracksProps {
   onChangeMusicTimeline?: (
     timelineStart: number,
     timelineEnd: number,
-    songOffset?: number
+    songOffset?: number,
+    segmentId?: string
   ) => void;
   onPauseVideo?: () => void;
   onSeek?: (time: number) => void;
@@ -184,7 +185,7 @@ export default function TimelineOverlayTracks({
         )
       );
     } else if (st.targetKind === "audio" && onChangeMusicTimeline) {
-      onChangeMusicTimeline(sRounded, eRounded);
+      onChangeMusicTimeline(sRounded, eRounded, undefined, st.id);
     }
 
     if (st.mode === "left") {
@@ -214,6 +215,20 @@ export default function TimelineOverlayTracks({
     musicClip.timelineEnd > musicStart
       ? musicClip.timelineEnd
       : Math.max(musicStart + 1, totalDuration);
+
+  const audioSegments =
+    musicClip?.segments && musicClip.segments.length > 0
+      ? musicClip.segments
+      : musicClip
+        ? [
+            {
+              id: musicClip.id || "audio_main",
+              timelineStart: musicStart,
+              timelineEnd: musicEnd,
+              songOffset: musicClip.startTime || 0,
+            },
+          ]
+        : [];
 
   return (
     <div
@@ -250,7 +265,14 @@ export default function TimelineOverlayTracks({
                     e.stopPropagation();
                     onSelectItem(item.layerId, item.type);
                   }}
-                  onPointerDown={(e) =>
+                  onPointerDown={(e) => {
+                    // İki Aşamalı Etkileşim: İlk dokunuş yalnızca seçer, seçiliyken ikinci dokunuş taşır
+                    if (!isSelected) {
+                      e.stopPropagation();
+                      onPauseVideo?.();
+                      onSelectItem(item.layerId, item.type);
+                      return;
+                    }
                     beginDrag(e, {
                       targetKind: "overlay",
                       mode: "move",
@@ -260,9 +282,13 @@ export default function TimelineOverlayTracks({
                       startY: e.clientY,
                       initStart: item.timelineStart,
                       initEnd: item.timelineEnd,
-                    })
-                  }
-                  className={`absolute top-0 bottom-0 rounded-lg flex items-center px-2.5 gap-1.5 cursor-grab active:cursor-grabbing touch-none transition-transform duration-150 ${barBg} ${
+                    });
+                  }}
+                  className={`absolute top-0 bottom-0 rounded-lg flex items-center px-2.5 gap-1.5 touch-none transition-transform duration-150 ${
+                    isSelected
+                      ? "cursor-grab active:cursor-grabbing"
+                      : "cursor-pointer"
+                  } ${barBg} ${
                     isElevated
                       ? "scale-[1.03] ring-2 ring-blue-400 shadow-[0_8px_24px_rgba(0,0,0,0.75)] z-30"
                       : isSelected
@@ -425,7 +451,14 @@ export default function TimelineOverlayTracks({
                         e.stopPropagation();
                         onSelectItem(fx.id, "effect");
                       }}
-                      onPointerDown={(e) =>
+                      onPointerDown={(e) => {
+                        // İki Aşamalı Etkileşim: İlk dokunuş yalnızca seçer, seçiliyken ikinci dokunuş taşır
+                        if (!isSelected) {
+                          e.stopPropagation();
+                          onPauseVideo?.();
+                          onSelectItem(fx.id, "effect");
+                          return;
+                        }
                         beginDrag(e, {
                           targetKind: "effect",
                           mode: "move",
@@ -435,9 +468,13 @@ export default function TimelineOverlayTracks({
                           startY: e.clientY,
                           initStart: fx.startTime,
                           initEnd: fx.endTime,
-                        })
-                      }
-                      className={`absolute top-0 bottom-0 rounded-lg flex items-center px-2.5 gap-1.5 cursor-grab active:cursor-grabbing touch-none transition-transform duration-150 ${
+                        });
+                      }}
+                      className={`absolute top-0 bottom-0 rounded-lg flex items-center px-2.5 gap-1.5 touch-none transition-transform duration-150 ${
+                        isSelected
+                          ? "cursor-grab active:cursor-grabbing"
+                          : "cursor-pointer"
+                      } ${
                         isElevated
                           ? "scale-[1.03] ring-2 ring-blue-400 shadow-2xl z-30"
                           : isSelected
@@ -506,98 +543,127 @@ export default function TimelineOverlayTracks({
         );
       })()}
 
-      {/* 3. Ses / Müzik (Waveform) Serbest Zamanlı Kanalı */}
+      {/* 3. Ses / Müzik (Waveform) Serbest Zamanlı Kanalı (Çoklu / Bölünmüş Parça Desteği) */}
       <div className="relative h-8 w-full">
-        {musicClip ? (
-          <div
-            onClick={(e) => {
-              e.stopPropagation();
-              onSelectItem(musicClip.id || "audio_main", "audio");
-            }}
-            onPointerDown={(e) =>
-              beginDrag(e, {
-                targetKind: "audio",
-                mode: "move",
-                id: musicClip.id || "audio_main",
-                itemType: "audio",
-                startX: e.clientX,
-                startY: e.clientY,
-                initStart: musicStart,
-                initEnd: musicEnd,
-              })
-            }
-            className={`absolute top-0 bottom-0 rounded-lg bg-sky-600/80 flex items-center px-2.5 gap-2 cursor-grab active:cursor-grabbing touch-none overflow-visible transition-transform duration-150 ${
-              elevatedItemId === (musicClip.id || "audio_main")
-                ? "scale-[1.03] ring-2 ring-blue-400 shadow-2xl z-30"
-                : selectedItemType === "audio"
-                  ? "ring-2 ring-white shadow-lg z-20"
-                  : "border border-sky-300/30 z-10"
-            }`}
-            style={{
-              left: `${musicStart * pps}px`,
-              width: `${Math.max(32, (musicEnd - musicStart) * pps)}px`,
-            }}
-          >
-            <Music className="w-3.5 h-3.5 text-white shrink-0 pointer-events-none" />
-            <span className="text-[11px] font-bold text-white truncate pointer-events-none">
-              {musicClip.title}
-            </span>
+        {musicClip && audioSegments.length > 0 ? (
+          audioSegments.map((seg, segIdx) => {
+            const isSelected =
+              selectedItemType === "audio" &&
+              (selectedItemId === seg.id ||
+                (audioSegments.length === 1 && !selectedItemId));
+            const isElevated = elevatedItemId === seg.id;
+            const segLeftPx = Math.max(0, seg.timelineStart * pps);
+            const segWidthPx = Math.max(
+              32,
+              (seg.timelineEnd - seg.timelineStart) * pps
+            );
 
-            {/* Ses Dalgası (Waveform) Görselleştirmesi */}
-            <div className="flex items-center gap-[2px] flex-1 h-4 overflow-hidden opacity-60 pointer-events-none">
-              {Array.from({ length: 36 }).map((_, i) => {
-                const h = 25 + ((i * 37) % 70);
-                return (
-                  <div
-                    key={i}
-                    className="w-[2px] bg-sky-100 rounded-full shrink-0"
-                    style={{ height: `${h}%` }}
-                  />
-                );
-              })}
-            </div>
+            return (
+              <div
+                key={seg.id}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onSelectItem(seg.id, "audio");
+                }}
+                onPointerDown={(e) => {
+                  // İki Aşamalı Etkileşim: İlk dokunuş yalnızca seçer, seçiliyken ikinci dokunuş taşır
+                  if (!isSelected) {
+                    e.stopPropagation();
+                    onPauseVideo?.();
+                    onSelectItem(seg.id, "audio");
+                    return;
+                  }
+                  beginDrag(e, {
+                    targetKind: "audio",
+                    mode: "move",
+                    id: seg.id,
+                    itemType: "audio",
+                    startX: e.clientX,
+                    startY: e.clientY,
+                    initStart: seg.timelineStart,
+                    initEnd: seg.timelineEnd,
+                  });
+                }}
+                className={`absolute top-0 bottom-0 rounded-lg bg-sky-600/80 flex items-center px-2.5 gap-2 touch-none overflow-visible transition-transform duration-150 ${
+                  isSelected
+                    ? "cursor-grab active:cursor-grabbing"
+                    : "cursor-pointer"
+                } ${
+                  isElevated
+                    ? "scale-[1.03] ring-2 ring-blue-400 shadow-2xl z-30"
+                    : isSelected
+                      ? "ring-2 ring-white shadow-lg z-20"
+                      : "border border-sky-300/30 z-10"
+                }`}
+                style={{
+                  left: `${segLeftPx}px`,
+                  width: `${segWidthPx}px`,
+                }}
+              >
+                <Music className="w-3.5 h-3.5 text-white shrink-0 pointer-events-none" />
+                <span className="text-[11px] font-bold text-white truncate pointer-events-none">
+                  {audioSegments.length > 1
+                    ? `${musicClip.title} #${segIdx + 1}`
+                    : musicClip.title}
+                </span>
 
-            {selectedItemType === "audio" && (
-              <>
-                <div
-                  onClick={(e) => e.stopPropagation()}
-                  onPointerDown={(e) =>
-                    beginDrag(e, {
-                      targetKind: "audio",
-                      mode: "left",
-                      id: musicClip.id || "audio_main",
-                      itemType: "audio",
-                      startX: e.clientX,
-                      startY: e.clientY,
-                      initStart: musicStart,
-                      initEnd: musicEnd,
-                    })
-                  }
-                  className="absolute -left-1.5 top-0 bottom-0 w-3.5 rounded-l-lg bg-white flex items-center justify-center cursor-ew-resize z-30 shadow"
-                >
-                  <div className="w-[1.5px] h-3.5 rounded-full bg-black" />
+                {/* Ses Dalgası (Waveform) Görselleştirmesi */}
+                <div className="flex items-center gap-[2px] flex-1 h-4 overflow-hidden opacity-60 pointer-events-none">
+                  {Array.from({ length: 36 }).map((_, i) => {
+                    const h = 25 + (((i + segIdx * 7) * 37) % 70);
+                    return (
+                      <div
+                        key={i}
+                        className="w-[2px] bg-sky-100 rounded-full shrink-0"
+                        style={{ height: `${h}%` }}
+                      />
+                    );
+                  })}
                 </div>
-                <div
-                  onClick={(e) => e.stopPropagation()}
-                  onPointerDown={(e) =>
-                    beginDrag(e, {
-                      targetKind: "audio",
-                      mode: "right",
-                      id: musicClip.id || "audio_main",
-                      itemType: "audio",
-                      startX: e.clientX,
-                      startY: e.clientY,
-                      initStart: musicStart,
-                      initEnd: musicEnd,
-                    })
-                  }
-                  className="absolute -right-1.5 top-0 bottom-0 w-3.5 rounded-r-lg bg-white flex items-center justify-center cursor-ew-resize z-30 shadow"
-                >
-                  <div className="w-[1.5px] h-3.5 rounded-full bg-black" />
-                </div>
-              </>
-            )}
-          </div>
+
+                {isSelected && (
+                  <>
+                    <div
+                      onClick={(e) => e.stopPropagation()}
+                      onPointerDown={(e) =>
+                        beginDrag(e, {
+                          targetKind: "audio",
+                          mode: "left",
+                          id: seg.id,
+                          itemType: "audio",
+                          startX: e.clientX,
+                          startY: e.clientY,
+                          initStart: seg.timelineStart,
+                          initEnd: seg.timelineEnd,
+                        })
+                      }
+                      className="absolute -left-1.5 top-0 bottom-0 w-3.5 rounded-l-lg bg-white flex items-center justify-center cursor-ew-resize z-30 shadow"
+                    >
+                      <div className="w-[1.5px] h-3.5 rounded-full bg-black" />
+                    </div>
+                    <div
+                      onClick={(e) => e.stopPropagation()}
+                      onPointerDown={(e) =>
+                        beginDrag(e, {
+                          targetKind: "audio",
+                          mode: "right",
+                          id: seg.id,
+                          itemType: "audio",
+                          startX: e.clientX,
+                          startY: e.clientY,
+                          initStart: seg.timelineStart,
+                          initEnd: seg.timelineEnd,
+                        })
+                      }
+                      className="absolute -right-1.5 top-0 bottom-0 w-3.5 rounded-r-lg bg-white flex items-center justify-center cursor-ew-resize z-30 shadow"
+                    >
+                      <div className="w-[1.5px] h-3.5 rounded-full bg-black" />
+                    </div>
+                  </>
+                )}
+              </div>
+            );
+          })
         ) : (
           <button
             type="button"

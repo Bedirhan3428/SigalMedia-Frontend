@@ -417,11 +417,34 @@ export default function TimelineTrackClips({
           <div className="flex items-center gap-2.5 overflow-x-auto no-scrollbar py-1 px-0.5 touch-none">
             {clips.map((clip, idx) => {
               const isHeld = reorderingClipId === clip.id;
+              const clipThumbs = clip.isMotionPhoto
+                ? clip.thumbnailUrl
+                  ? [clip.thumbnailUrl]
+                  : thumbnails
+                : clip.thumbnails && clip.thumbnails.length > 1
+                  ? clip.thumbnails
+                  : thumbnails.length > 0
+                    ? thumbnails
+                    : clip.thumbnailUrl
+                      ? [clip.thumbnailUrl]
+                      : [];
+              const rawMediaDur = Math.max(
+                clip.sourceEnd,
+                clip.media?.duration || maxSourceDuration || 1
+              );
+              const midRatio = Math.max(
+                0,
+                Math.min(1, ((clip.sourceStart + clip.sourceEnd) * 0.5) / rawMediaDur)
+              );
               const thumbSrc =
-                clip.thumbnailUrl ||
-                (thumbnails.length > 0
-                  ? thumbnails[Math.min(thumbnails.length - 1, idx * 2)]
-                  : null);
+                clipThumbs.length > 0
+                  ? clipThumbs[
+                      Math.min(
+                        clipThumbs.length - 1,
+                        Math.floor(midRatio * clipThumbs.length)
+                      )
+                    ]
+                  : clip.thumbnailUrl || null;
 
               return (
                 <div
@@ -480,12 +503,38 @@ export default function TimelineTrackClips({
               const rightGapPx = isTrimmingThis ? trimPreview.rightGapPx : 0;
 
               const isSelected = selectedClipId === clip.id;
+              const clipThumbs = clip.isMotionPhoto
+                ? clip.thumbnailUrl
+                  ? [clip.thumbnailUrl]
+                  : thumbnails
+                : clip.thumbnails && clip.thumbnails.length > 1
+                  ? clip.thumbnails
+                  : thumbnails.length > 0
+                    ? thumbnails
+                    : clip.thumbnailUrl
+                      ? [clip.thumbnailUrl]
+                      : [];
+              const rawMediaDur = Math.max(
+                clip.sourceEnd,
+                clip.media?.duration || maxSourceDuration || 1
+              );
+              const activeSourceStart = isTrimmingThis
+                ? trimPreview.previewSourceStart
+                : clip.sourceStart;
+              const activeSourceEnd = isTrimmingThis
+                ? trimPreview.previewSourceEnd
+                : clip.sourceEnd;
+              const startRatio = Math.max(
+                0,
+                Math.min(1, activeSourceStart / rawMediaDur)
+              );
+              const endRatio = Math.max(
+                startRatio,
+                Math.min(1, activeSourceEnd / rawMediaDur)
+              );
               const thumbCount = Math.max(
                 1,
-                Math.min(
-                  clip.thumbnailUrl ? 12 : thumbnails.length || 1,
-                  Math.ceil(widthPx / 42)
-                )
+                Math.min(16, Math.ceil(widthPx / 42))
               );
 
               return (
@@ -514,27 +563,18 @@ export default function TimelineTrackClips({
                           : "border-white/15 hover:border-white/30"
                       }`}
                     >
-                      {clip.thumbnailUrl ? (
-                        Array.from({ length: thumbCount }).map((_, tIdx) => (
-                          <img
-                            key={tIdx}
-                            src={clip.thumbnailUrl}
-                            alt=""
-                            draggable={false}
-                            className="h-full flex-1 object-cover pointer-events-none select-none opacity-90"
-                          />
-                        ))
-                      ) : thumbnails.length > 0 ? (
+                      {clipThumbs.length > 0 ? (
                         Array.from({ length: thumbCount }).map((_, tIdx) => {
-                          const src =
-                            thumbnails[
-                              Math.min(
-                                thumbnails.length - 1,
-                                Math.floor(
-                                  (tIdx / Math.max(1, thumbCount)) * thumbnails.length
-                                )
-                              )
-                            ];
+                          const ratio =
+                            thumbCount <= 1
+                              ? startRatio
+                              : startRatio +
+                                (tIdx / (thumbCount - 1)) * (endRatio - startRatio);
+                          const frameIdx = Math.min(
+                            clipThumbs.length - 1,
+                            Math.max(0, Math.floor(ratio * clipThumbs.length))
+                          );
+                          const src = clipThumbs[frameIdx];
                           return (
                             <img
                               key={tIdx}
