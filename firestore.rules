@@ -10,7 +10,7 @@ service cloud.firestore {
       allow update, delete: if false;
     }
 
-    // [START] AeroCode
+    
     // Kullanıcı profilleri
     match /users/{userId} {
       allow read: if true;
@@ -27,7 +27,7 @@ service cloud.firestore {
       allow create, update: if request.auth != null && (request.resource.data.followerId == request.auth.uid || request.resource.data.followingId == request.auth.uid);
       allow delete: if request.auth != null && (resource == null || resource.data.followerId == request.auth.uid || resource.data.followingId == request.auth.uid);
     }
-    // [END] AeroCode
+    
 
     // Gönderiler ve Reels
     match /posts/{postId} {
@@ -42,7 +42,7 @@ service cloud.firestore {
       allow write: if request.auth != null;
     }
 
-    // [START] NexusAI
+    
     // Engellemeler (Blocks)
     match /blocks/{blockId} {
       allow read: if request.auth != null;
@@ -64,6 +64,6 @@ service cloud.firestore {
         resource.data.targetUid == request.auth.uid
       );
     }
-    // [END] NexusAI
+    
   }
 }
