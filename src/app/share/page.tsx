@@ -41,6 +41,8 @@ import { commitAudioClip } from "@/services/soundService";
 // [MODIFIED BY Bedirhan]
 import {
   ChevronLeft,
+  ChevronDown,
+  ArrowRight,
   Image as ImageIcon,
   Loader2,
   Trash2,
@@ -538,6 +540,8 @@ export default function ShareStoryPage() {
       if (engineRef.current && canvasRef.current) {
         if (shareModeRef.current === "post") {
           engineRef.current.updateCanvasResolution(1440, 1080);
+        } else if (shareModeRef.current === "reels") {
+          engineRef.current.updateCanvasResolution(1080, 1920);
         } else {
           const vw = window.innerWidth || 1080;
           const vh = window.innerHeight || 1920;
@@ -567,6 +571,9 @@ export default function ShareStoryPage() {
         if (mode === "post") {
           engine.setFitMode("cover");
           engine.updateCanvasResolution(1440, 1080);
+        } else if (mode === "reels") {
+          engine.setFitMode("cover");
+          engine.updateCanvasResolution(1080, 1920);
         } else {
           const vw = typeof window !== "undefined" ? window.innerWidth : 1080;
           const vh = typeof window !== "undefined" ? window.innerHeight : 1920;
@@ -655,6 +662,9 @@ export default function ShareStoryPage() {
       if (shareModeRef.current === "post") {
         engine.setFitMode("cover");
         engine.updateCanvasResolution(1440, 1080);
+      } else if (shareModeRef.current === "reels") {
+        engine.setFitMode("cover");
+        engine.updateCanvasResolution(1080, 1920);
       } else {
         const vw = typeof window !== "undefined" ? window.innerWidth : 1080;
         const vh = typeof window !== "undefined" ? window.innerHeight : 1920;
@@ -1052,11 +1062,20 @@ export default function ShareStoryPage() {
       />
 
       {/* [MODIFIED BY Bedirhan] */}
-      {/* 3. TUVAL SAHNESİ: Hikaye/Reels için 9:16 Tam Ekran, Gönderi için 4:3 Stüdyo Çerçevesi */}
+      {/* 3. TUVAL SAHNESİ: Hikaye için 9:16 Tam Ekran, Reels için Üst Yarı Yuvarlatılmış Önizleme, Gönderi için 4:3 Stüdyo Çerçevesi */}
       <div
-        className="fixed inset-0 w-full h-full flex items-center justify-center overflow-hidden select-none"
+        className={
+          shareMode === "reels" && hasMedia && !isTextEditing
+            ? "fixed inset-x-0 top-16 bottom-[345px] flex items-center justify-center px-6 py-2 overflow-hidden select-none bg-black"
+            : "fixed inset-0 w-full h-full flex items-center justify-center overflow-hidden select-none"
+        }
         style={{
-          background: shareMode === "post" ? "#09090b" : activeFilterGradient,
+          background:
+            shareMode === "reels"
+              ? "#000000"
+              : shareMode === "post"
+                ? "#09090b"
+                : activeFilterGradient,
           transition: "background 400ms cubic-bezier(0.25, 1, 0.5, 1)",
           willChange: "background",
         }}
@@ -1065,7 +1084,9 @@ export default function ShareStoryPage() {
           className={
             shareMode === "post"
               ? "w-full max-w-md aspect-[4/3] mx-3 mb-40 rounded-2xl overflow-hidden border border-white/15 shadow-2xl bg-black"
-              : "w-full h-full"
+              : shareMode === "reels" && hasMedia && !isTextEditing
+                ? "h-full aspect-[9/16] rounded-2xl overflow-hidden shadow-2xl bg-neutral-900"
+                : "w-full h-full"
           }
         >
           <canvas
@@ -1088,36 +1109,60 @@ export default function ShareStoryPage() {
         </div>
       )}
 
-      {/* 5. SOL ÜST: GERİ, MOD SEÇİCİ VE İNDİRME BUTONLARI */}
+      {/* 5. ÜST BAR: GERİ, ORTADA MOD SEÇİCİ HAP VE SAĞ ÜST PAYLAŞ / İNDİR */}
       {!isTextEditing && !isModeSelectorOpen && (
-        <div className="fixed left-4 top-6 z-40 flex items-center gap-2 pointer-events-auto">
-          <button
-            type="button"
-            onClick={handleBackClick}
-            disabled={isPublishing}
-            className="w-10 h-10 rounded-full bg-black/50 backdrop-blur-md border border-white/15 text-white hover:bg-black/70 active:scale-90 transition-all shadow-xl flex items-center justify-center"
-          >
-            <ChevronLeft className="w-5 h-5" />
-          </button>
+        <div className="fixed inset-x-0 top-4 z-40 px-4 flex items-center justify-between pointer-events-auto">
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={handleBackClick}
+              disabled={isPublishing}
+              className="w-11 h-11 rounded-full bg-[#1c1c1e] hover:bg-[#28282c] active:scale-90 transition-all shadow-xl flex items-center justify-center text-white"
+            >
+              {shareMode === "reels" ? (
+                <ChevronDown className="w-6 h-6" />
+              ) : (
+                <ChevronLeft className="w-5 h-5" />
+              )}
+            </button>
+
+            {hasMedia && (
+              <button
+                type="button"
+                onClick={handleDownloadImage}
+                disabled={isPublishing}
+                className="w-11 h-11 rounded-full bg-[#1c1c1e] hover:bg-[#28282c] active:scale-90 transition-all shadow-xl flex items-center justify-center text-white"
+              >
+                <Download className="w-4 h-4 text-zinc-300" />
+              </button>
+            )}
+          </div>
 
           <button
             type="button"
             onClick={() => setIsModeSelectorOpen(true)}
             disabled={isPublishing}
-            className="h-10 px-3.5 rounded-full bg-black/50 backdrop-blur-md border border-white/15 text-white hover:bg-black/70 active:scale-95 transition-all shadow-xl flex items-center gap-1.5 text-xs font-bold"
+            className="h-11 px-4 rounded-2xl bg-[#1c1c1e] hover:bg-[#28282c] active:scale-95 transition-all shadow-xl flex items-center gap-2 text-sm font-semibold text-white"
           >
+            <span className="w-4 h-4 rounded-md bg-gradient-to-tr from-pink-500 via-purple-500 to-amber-400 inline-block shrink-0" />
             <span>{modeLabel}</span>
           </button>
 
-          {hasMedia && (
+          {shareMode === "reels" && hasMedia ? (
             <button
               type="button"
-              onClick={handleDownloadImage}
+              onClick={handlePublish}
               disabled={isPublishing}
-              className="w-10 h-10 rounded-full bg-black/50 backdrop-blur-md border border-white/15 text-white hover:bg-black/70 active:scale-90 transition-all shadow-xl flex items-center justify-center"
+              className="w-11 h-11 rounded-full bg-white text-black hover:bg-zinc-200 active:scale-90 transition-all shadow-xl flex items-center justify-center disabled:opacity-50"
             >
-              <Download className="w-4 h-4 text-zinc-300" />
+              {isPublishing ? (
+                <Loader2 className="w-5 h-5 animate-spin" />
+              ) : (
+                <ArrowRight className="w-5 h-5 stroke-[2.5]" />
+              )}
             </button>
+          ) : (
+            <div className="w-11" />
           )}
         </div>
       )}
@@ -1178,51 +1223,33 @@ export default function ShareStoryPage() {
         </>
       )}
 
-      {/* 6B. REELS MODU (CAPCUT SÜREKLİ AÇIK ALT BAR + FOTOĞRAFTAN 5SN VİDEO) */}
+      {/* 6B. REELS MODU (FERAH STÜDYO ÖNİZLEME + ÇOK KANALLI TIMELINE + KUTU İKONLU ALT BAR) */}
       {!isTextEditing && hasMedia && shareMode === "reels" && (
-        <>
-          <div className="fixed right-4 top-6 flex flex-col gap-2.5 z-40 pointer-events-auto">
-            <button
-              type="button"
-              onClick={() => setActiveDrawer("sticker_sheet")}
-              className="w-10 h-10 rounded-full bg-black/50 backdrop-blur-md border border-white/15 text-white hover:bg-black/70 active:scale-90 transition-all shadow-xl flex items-center justify-center"
-            >
-              <Sticker className="w-5 h-5 text-emerald-400" />
-            </button>
-            <button
-              type="button"
-              onClick={() => setActiveDrawer("tag")}
-              className="w-10 h-10 rounded-full bg-black/50 backdrop-blur-md border border-white/15 text-white hover:bg-black/70 active:scale-90 transition-all shadow-xl flex items-center justify-center"
-            >
-              <AtSign className="w-5 h-5 text-cyan-400" />
-            </button>
-          </div>
-
-          <ReelsEditor
-            videoState={videoState}
-            thumbnails={videoThumbnails}
-            selectedMusic={selectedMusic}
-            musicVolume={musicVolume}
-            activeFilterIndex={activeFilterIndex}
-            activeReelsEffect={activeReelsEffect}
-            effectClips={effectClips}
-            isPublishing={isPublishing}
-            getCurrentTime={() => engineRef.current?.getCurrentTime() || 0}
-            onChangeTrim={(start, end) => engineRef.current?.setTrim(start, end)}
-            onChangeSpeed={(rate) => engineRef.current?.setSpeed(rate)}
-            onChangeVolume={(vol, muted) => engineRef.current?.setVolume(vol, muted)}
-            onChangeMusicVolume={(vol) => setMusicVolume(vol)}
-            onChangeMusicMeta={(nextMusic) => setSelectedMusic(nextMusic)}
-            onChangeEffectClips={handleChangeEffectClips}
-            onSeek={(t) => engineRef.current?.seekVideo(t)}
-            onTogglePlay={() => engineRef.current?.toggleVideoPlay()}
-            onOpenTextEditor={() => openTextEditor()}
-            onOpenMusicPicker={() => setIsMusicDrawerOpen(true)}
-            onSelectFilterIndex={handleSelectFilterIndex}
-            onSelectReelsEffect={handleSelectReelsEffect}
-            onPublish={handlePublish}
-          />
-        </>
+        <ReelsEditor
+          videoState={videoState}
+          thumbnails={videoThumbnails}
+          selectedMusic={selectedMusic}
+          musicVolume={musicVolume}
+          activeFilterIndex={activeFilterIndex}
+          activeReelsEffect={activeReelsEffect}
+          effectClips={effectClips}
+          isPublishing={isPublishing}
+          getCurrentTime={() => engineRef.current?.getCurrentTime() || 0}
+          onChangeTrim={(start, end) => engineRef.current?.setTrim(start, end)}
+          onChangeSpeed={(rate) => engineRef.current?.setSpeed(rate)}
+          onChangeVolume={(vol, muted) => engineRef.current?.setVolume(vol, muted)}
+          onChangeMusicVolume={(vol) => setMusicVolume(vol)}
+          onChangeMusicMeta={(nextMusic) => setSelectedMusic(nextMusic)}
+          onChangeEffectClips={handleChangeEffectClips}
+          onSeek={(t) => engineRef.current?.seekVideo(t)}
+          onTogglePlay={() => engineRef.current?.toggleVideoPlay()}
+          onOpenTextEditor={() => openTextEditor()}
+          onOpenMusicPicker={() => setIsMusicDrawerOpen(true)}
+          onOpenStickerSheet={() => setActiveDrawer("sticker_sheet")}
+          onSelectFilterIndex={handleSelectFilterIndex}
+          onSelectReelsEffect={handleSelectReelsEffect}
+          onPublish={handlePublish}
+        />
       )}
 
       {/* 6C. GÖNDERİ MODU (4:3 PROFESYONEL FOTOĞRAF STÜDYOSU) */}

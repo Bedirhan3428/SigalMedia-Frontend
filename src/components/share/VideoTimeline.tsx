@@ -6,11 +6,13 @@ import { useEffect, useRef, useState, useCallback } from "react";
 import {
   Play,
   Pause,
-  Scissors,
+  Plus,
   Sparkles,
   Music,
-  ArrowLeftToLine,
-  ArrowRightToLine,
+  Volume2,
+  VolumeX,
+  Undo2,
+  Scissors,
   Trash2,
 } from "lucide-react";
 import {
@@ -26,6 +28,7 @@ export interface VideoTimelineProps {
   currentTime: number;
   isPlaying: boolean;
   thumbnails: string[];
+  muted?: boolean;
   getCurrentTime?: () => number;
   playheadRef?: React.RefObject<HTMLDivElement | null>;
   trackRef?: React.RefObject<HTMLDivElement | null>;
@@ -43,6 +46,8 @@ export interface VideoTimelineProps {
   onChangeTrim: (start: number, end: number) => void;
   onSeek: (time: number) => void;
   onTogglePlay: () => void;
+  onToggleMute?: () => void;
+  onOpenMusicPicker?: () => void;
   onQuickAddEffectAtPlayhead?: () => void;
 }
 
@@ -50,8 +55,7 @@ export function formatTimelineTime(sec: number): string {
   const s = Math.max(0, Math.floor(sec));
   const mins = Math.floor(s / 60);
   const rem = s % 60;
-  const tenths = Math.floor((Math.max(0, sec) % 1) * 10);
-  return `${mins}:${rem.toString().padStart(2, "0")}.${tenths}`;
+  return `${mins}:${rem.toString().padStart(2, "0")}`;
 }
 
 type DragState =
@@ -81,6 +85,7 @@ export default function VideoTimeline({
   currentTime,
   isPlaying,
   thumbnails,
+  muted = false,
   getCurrentTime,
   playheadRef: externalPlayheadRef,
   trackRef: externalTrackRef,
@@ -94,6 +99,8 @@ export default function VideoTimeline({
   onChangeTrim,
   onSeek,
   onTogglePlay,
+  onToggleMute,
+  onOpenMusicPicker,
   onQuickAddEffectAtPlayhead,
 }: VideoTimelineProps) {
   const internalTrackRef = useRef<HTMLDivElement | null>(null);
@@ -185,69 +192,8 @@ export default function VideoTimeline({
     return Math.max(safeStart, Math.min(safeEnd, raw));
   };
 
-  // CapCut Tarzı Hassas Başını Kes / Böl / Sonunu Kes İşlemleri (Aktif kanala göre)
-  const handleTrimLeftToPlayhead = () => {
-    const cur = getActivePlayheadTime();
-    if (selectedTrack === "fx" && selectedEffectClipId && onChangeEffectClips) {
-      onChangeEffectClips(
-        effectClips.map((c) =>
-          c.id === selectedEffectClipId && cur < c.endTime - 0.15
-            ? { ...c, startTime: Number(cur.toFixed(2)) }
-            : c
-        )
-      );
-      return;
-    }
-    if (selectedTrack === "audio" && musicClip && onChangeMusicTimeline) {
-      if (cur < musicEnd - 0.2) {
-        const delta = Math.max(0, cur - musicStart);
-        onChangeMusicTimeline(
-          Number(cur.toFixed(2)),
-          Number(musicEnd.toFixed(2)),
-          Number(((musicClip.startTime || 0) + delta).toFixed(2))
-        );
-      }
-      return;
-    }
-    if (cur > safeStart + 0.15 && cur < safeEnd - 0.2) {
-      onChangeTrim(Number(cur.toFixed(2)), safeEnd);
-      syncPlayheadDom(cur);
-      onSeek(cur);
-    }
-  };
-
-  const handleTrimRightToPlayhead = () => {
-    const cur = getActivePlayheadTime();
-    if (selectedTrack === "fx" && selectedEffectClipId && onChangeEffectClips) {
-      onChangeEffectClips(
-        effectClips.map((c) =>
-          c.id === selectedEffectClipId && cur > c.startTime + 0.15
-            ? { ...c, endTime: Number(cur.toFixed(2)) }
-            : c
-        )
-      );
-      return;
-    }
-    if (selectedTrack === "audio" && musicClip && onChangeMusicTimeline) {
-      if (cur > musicStart + 0.2) {
-        onChangeMusicTimeline(
-          Number(musicStart.toFixed(2)),
-          Number(cur.toFixed(2)),
-          musicClip.startTime || 0
-        );
-      }
-      return;
-    }
-    if (cur > safeStart + 0.2 && cur < safeEnd - 0.15) {
-      onChangeTrim(safeStart, Number(cur.toFixed(2)));
-      syncPlayheadDom(cur);
-      onSeek(cur);
-    }
-  };
-
   const handleSplitAction = () => {
     const cur = getActivePlayheadTime();
-    // Seçili efekt klibi varsa playhead noktasından iki ayrı efekt klibine böl
     if (selectedEffectClipId && onChangeEffectClips) {
       const target = effectClips.find((c) => c.id === selectedEffectClipId);
       if (target && cur > target.startTime + 0.2 && cur < target.endTime - 0.2) {
@@ -270,7 +216,6 @@ export default function VideoTimeline({
       }
     }
 
-    // Seçili ses kanalıysa playhead'e göre yakın tarafı kes
     if (selectedTrack === "audio" && musicClip && onChangeMusicTimeline) {
       if (cur > musicStart + 0.25 && cur < musicEnd - 0.25) {
         const mid = (musicStart + musicEnd) / 2;
@@ -292,7 +237,6 @@ export default function VideoTimeline({
       }
     }
 
-    // Video kırpma: playhead'in yakın olduğu ucu kırp
     if (cur > safeStart + 0.25 && cur < safeEnd - 0.25) {
       const mid = (safeStart + safeEnd) / 2;
       if (cur <= mid) {
@@ -302,6 +246,15 @@ export default function VideoTimeline({
       }
       syncPlayheadDom(cur);
     }
+  };
+
+  const handleResetAllTrims = () => {
+    onChangeTrim(0, safeDuration);
+    if (musicClip && onChangeMusicTimeline) {
+      onChangeMusicTimeline(0, safeDuration, musicClip.startTime || 0);
+    }
+    syncPlayheadDom(0);
+    onSeek(0);
   };
 
   const handleDeleteSelectedFx = () => {
@@ -436,360 +389,387 @@ export default function VideoTimeline({
     setDragState(null);
   };
 
+  // Zaman cetveli etiketleri (1sn • 3sn • 5sn)
+  const tickMarks = [
+    Math.round(safeDuration * 0.2),
+    Math.round(safeDuration * 0.5),
+    Math.round(safeDuration * 0.8),
+  ];
+
   return (
-    <div className="w-full flex flex-col gap-2 select-none touch-none">
-      {/* Üst Kontrol ve CapCut Hassas Kesim Çubuğu */}
-      <div className="flex items-center justify-between px-0.5">
+    <div className="w-full flex flex-col gap-3 select-none touch-none">
+      {/* 1. Ferah Oynatma & Zaman Kontrol Satırı */}
+      <div className="flex items-center justify-between px-4">
+        <button
+          type="button"
+          onClick={onTogglePlay}
+          className="w-10 h-10 rounded-full bg-[#1c1c1e] hover:bg-[#28282c] active:scale-90 transition-all flex items-center justify-center text-white"
+        >
+          {isPlaying ? (
+            <Pause className="w-4 h-4 fill-white" />
+          ) : (
+            <Play className="w-4 h-4 fill-white ml-0.5" />
+          )}
+        </button>
+
+        <div className="flex items-center gap-1.5 text-sm font-medium text-zinc-400 tabular-nums">
+          <span ref={timeLabelRef} className="text-zinc-200">
+            {formatTimelineTime(Math.max(0, currentTime - safeStart))}
+          </span>
+          <span>/</span>
+          <span>{formatTimelineTime(trimmedDuration)}</span>
+        </div>
+
         <div className="flex items-center gap-2">
           <button
             type="button"
-            onClick={onTogglePlay}
-            className="w-8 h-8 rounded-full bg-white/10 hover:bg-white/20 active:scale-90 transition-all flex items-center justify-center text-white"
+            onClick={handleResetAllTrims}
+            title="Sıfırla"
+            className="w-10 h-10 rounded-full bg-[#1c1c1e] hover:bg-[#28282c] active:scale-90 transition-all flex items-center justify-center text-zinc-300"
           >
-            {isPlaying ? (
-              <Pause className="w-4 h-4" />
-            ) : (
-              <Play className="w-4 h-4 ml-0.5" />
-            )}
+            <Undo2 className="w-4 h-4" />
           </button>
 
-          <div className="flex items-center gap-1.5 text-xs font-semibold text-zinc-300 tabular-nums">
-            <span ref={timeLabelRef} className="text-white">
-              {formatTimelineTime(Math.max(0, currentTime - safeStart))}
-            </span>
-            <span className="text-zinc-500">/</span>
-            <span>{formatTimelineTime(trimmedDuration)}</span>
-          </div>
-
-          <span className="px-1.5 py-0.5 rounded bg-emerald-500/15 border border-emerald-400/30 text-[9px] font-extrabold text-emerald-300 tracking-wider">
-            60 FPS
-          </span>
-        </div>
-
-        {/* CapCut Hassas Kırpma & Bölme Araçları */}
-        <div className="flex items-center gap-1">
-          <button
-            type="button"
-            onClick={handleTrimLeftToPlayhead}
-            title="Başını Kes"
-            className="px-2 py-1 rounded-lg bg-white/5 hover:bg-white/15 text-zinc-200 text-[10px] font-bold flex items-center gap-1 active:scale-95 transition-all"
-          >
-            <ArrowLeftToLine className="w-3.5 h-3.5 text-emerald-400" />
-            <span>Baş</span>
-          </button>
-
-          <button
-            type="button"
-            onClick={handleSplitAction}
-            title="Playhead Noktasından Böl"
-            className="px-2 py-1 rounded-lg bg-white/5 hover:bg-white/15 text-zinc-200 text-[10px] font-bold flex items-center gap-1 active:scale-95 transition-all"
-          >
-            <Scissors className="w-3.5 h-3.5 text-amber-400" />
-            <span>Böl</span>
-          </button>
-
-          <button
-            type="button"
-            onClick={handleTrimRightToPlayhead}
-            title="Sonunu Kes"
-            className="px-2 py-1 rounded-lg bg-white/5 hover:bg-white/15 text-zinc-200 text-[10px] font-bold flex items-center gap-1 active:scale-95 transition-all"
-          >
-            <ArrowRightToLine className="w-3.5 h-3.5 text-emerald-400" />
-            <span>Son</span>
-          </button>
-
-          {selectedEffectClipId && (
+          {selectedEffectClipId ? (
             <button
               type="button"
               onClick={handleDeleteSelectedFx}
-              title="Efekt Klibini Sil"
-              className="p-1.5 rounded-lg bg-red-500/20 hover:bg-red-500/30 text-red-300 active:scale-95 transition-all"
+              title="Efekti Sil"
+              className="w-10 h-10 rounded-full bg-red-500/20 hover:bg-red-500/30 active:scale-90 transition-all flex items-center justify-center text-red-300"
             >
-              <Trash2 className="w-3.5 h-3.5" />
+              <Trash2 className="w-4 h-4" />
+            </button>
+          ) : (
+            <button
+              type="button"
+              onClick={handleSplitAction}
+              title="Böl / Kırp"
+              className="w-10 h-10 rounded-full bg-[#1c1c1e] hover:bg-[#28282c] active:scale-90 transition-all flex items-center justify-center text-zinc-300"
+            >
+              <Scissors className="w-4 h-4" />
             </button>
           )}
         </div>
       </div>
 
-      {/* Çok Kanallı CapCut Timeline Gövdesi */}
-      <div
-        ref={trackRef}
-        onPointerDown={(e) => {
-          setSelectedTrack("video");
-          onSelectEffectClip?.(null);
-          beginDrag(e, { type: "scrub" });
-        }}
-        onPointerMove={handlePointerMove}
-        onPointerUp={handlePointerUp}
-        onPointerCancel={handlePointerUp}
-        className="relative w-full rounded-xl overflow-hidden bg-zinc-900/95 border border-white/10 flex flex-col gap-1 p-1 cursor-pointer touch-none"
-      >
-        {/* 1. KANAL: ANA VİDEO ŞERİDİ */}
-        <div
-          onClick={() => setSelectedTrack("video")}
-          className="relative h-12 w-full rounded-lg overflow-hidden bg-zinc-950"
-        >
-          <div className="absolute inset-0 flex w-full h-full pointer-events-none">
-            {thumbnails.length > 0 ? (
-              thumbnails.map((src, idx) => (
-                <img
-                  key={idx}
-                  src={src}
-                  alt=""
-                  draggable={false}
-                  className="h-full flex-1 object-cover select-none"
-                />
-              ))
-            ) : (
-              <div className="w-full h-full bg-zinc-800/70" />
-            )}
+      {/* 2. Ferah Çok Kanallı Timeline Alanı */}
+      <div className="w-full border-t border-white/10 pt-2">
+        <div className="flex items-stretch w-full">
+          {/* Sol Kanal İkon Sütunu (Ses Kapat/Aç) */}
+          <div className="w-12 shrink-0 flex flex-col gap-1.5 pt-6 pr-1.5">
+            <div className="h-14 rounded-r-md bg-[#16171b] flex items-center justify-center">
+              {onToggleMute ? (
+                <button
+                  type="button"
+                  onClick={onToggleMute}
+                  className="p-2 text-zinc-400 hover:text-white transition-colors"
+                >
+                  {muted ? (
+                    <VolumeX className="w-4 h-4 text-red-400" />
+                  ) : (
+                    <Volume2 className="w-4 h-4 text-zinc-300" />
+                  )}
+                </button>
+              ) : (
+                <Volume2 className="w-4 h-4 text-zinc-400" />
+              )}
+            </div>
+            <div className="h-9 rounded-r-md bg-[#16171b]" />
+            <div className="h-9 rounded-r-md bg-[#16171b]" />
           </div>
 
-          {/* Kırpma Dışı Karartmalar */}
+          {/* Sağ Interaktif Zaman Çizelgesi Gövdesi */}
           <div
-            className="absolute inset-y-0 left-0 bg-black/75 pointer-events-none"
-            style={{ width: `${startPct}%` }}
-          />
-          <div
-            className="absolute inset-y-0 right-0 bg-black/75 pointer-events-none"
-            style={{ width: `${Math.max(0, 100 - endPct)}%` }}
-          />
-
-          {/* Aktif Video Kırpma Çerçevesi */}
-          <div
-            className={`absolute inset-y-0 border-y-2 pointer-events-none transition-colors ${
-              selectedTrack === "video" ? "border-emerald-400" : "border-emerald-500/60"
-            }`}
-            style={{
-              left: `${startPct}%`,
-              width: `${Math.max(0, endPct - startPct)}%`,
-            }}
-          />
-
-          {/* Sol Video Kırpma Tutamacı */}
-          <div
+            ref={trackRef}
             onPointerDown={(e) => {
               setSelectedTrack("video");
-              beginDrag(e, { type: "video-start" });
-            }}
-            style={{ left: `calc(${startPct}% - 10px)` }}
-            className="absolute inset-y-0 w-5 z-20 flex items-center justify-center cursor-ew-resize touch-none"
-          >
-            <div className="w-3.5 h-full rounded-l-md bg-emerald-400 flex items-center justify-center shadow-lg">
-              <div className="w-0.5 h-5 rounded-full bg-black/80" />
-            </div>
-          </div>
-
-          {/* Sağ Video Kırpma Tutamacı */}
-          <div
-            onPointerDown={(e) => {
-              setSelectedTrack("video");
-              beginDrag(e, { type: "video-end" });
-            }}
-            style={{ left: `calc(${endPct}% - 10px)` }}
-            className="absolute inset-y-0 w-5 z-20 flex items-center justify-center cursor-ew-resize touch-none"
-          >
-            <div className="w-3.5 h-full rounded-r-md bg-emerald-400 flex items-center justify-center shadow-lg">
-              <div className="w-0.5 h-5 rounded-full bg-black/80" />
-            </div>
-          </div>
-        </div>
-
-        {/* 2. KANAL: SÜRÜKLENEBİLİR & BOYUTLANDIRILABİLİR EFEKT KLİPLERİ (FX TRACK) */}
-        {onChangeEffectClips && (
-          <div
-            onClick={(e) => {
-              e.stopPropagation();
-              setSelectedTrack("fx");
-            }}
-            className="relative h-7 w-full rounded-md bg-zinc-950/90 border border-white/5 overflow-hidden flex items-center"
-          >
-            {effectClips.length === 0 ? (
-              <button
-                type="button"
-                onPointerDown={(e) => e.stopPropagation()}
-                onClick={(e) => {
-                  e.stopPropagation();
-                  setSelectedTrack("fx");
-                  onQuickAddEffectAtPlayhead?.();
-                }}
-                className="w-full h-full flex items-center justify-center gap-1.5 text-[10px] font-semibold text-pink-300/75 hover:text-pink-200 hover:bg-pink-500/10 transition-colors"
-              >
-                <Sparkles className="w-3 h-3 text-pink-400" />
-                <span>+ Efekt Klibi Ekle (Sürüklenebilir)</span>
-              </button>
-            ) : (
-              effectClips.map((clip) => {
-                const preset = REELS_EFFECT_PRESETS.find((p) => p.id === clip.effect);
-                const cStartPct = (Math.max(0, clip.startTime) / safeDuration) * 100;
-                const cEndPct =
-                  (Math.min(safeDuration, Math.max(clip.startTime + 0.15, clip.endTime)) /
-                    safeDuration) *
-                  100;
-                const isSelected = selectedEffectClipId === clip.id;
-                const color = preset?.color || "#ec4899";
-
-                return (
-                  <div
-                    key={clip.id}
-                    onPointerDown={(e) => {
-                      setSelectedTrack("fx");
-                      onSelectEffectClip?.(clip.id);
-                      beginDrag(e, {
-                        type: "fx-move",
-                        clipId: clip.id,
-                        initialPointerTime: clientXToTime(e.clientX),
-                        initialStart: clip.startTime,
-                        initialEnd: clip.endTime,
-                      });
-                    }}
-                    style={{
-                      left: `${cStartPct}%`,
-                      width: `${Math.max(3, cEndPct - cStartPct)}%`,
-                      backgroundColor: `${color}38`,
-                      borderColor: isSelected ? "#ffffff" : color,
-                    }}
-                    className={`absolute inset-y-0.5 rounded-md border flex items-center justify-between px-2 cursor-grab active:cursor-grabbing z-10 select-none ${
-                      isSelected ? "ring-1 ring-white shadow-md" : ""
-                    }`}
-                  >
-                    {/* Sol FX Resize Tutamacı */}
-                    <div
-                      onPointerDown={(e) => {
-                        setSelectedTrack("fx");
-                        onSelectEffectClip?.(clip.id);
-                        beginDrag(e, {
-                          type: "fx-start",
-                          clipId: clip.id,
-                          initialPointerTime: clientXToTime(e.clientX),
-                          initialStart: clip.startTime,
-                          initialEnd: clip.endTime,
-                        });
-                      }}
-                      className="absolute inset-y-0 left-0 w-2.5 bg-white/30 hover:bg-white/60 rounded-l cursor-ew-resize z-20"
-                    />
-
-                    <div className="flex items-center gap-1 overflow-hidden pointer-events-none mx-auto">
-                      <Sparkles className="w-2.5 h-2.5 text-white shrink-0" />
-                      <span className="text-[10px] font-bold text-white truncate">
-                        {preset?.name || clip.effect}
-                      </span>
-                    </div>
-
-                    {/* Sağ FX Resize Tutamacı */}
-                    <div
-                      onPointerDown={(e) => {
-                        setSelectedTrack("fx");
-                        onSelectEffectClip?.(clip.id);
-                        beginDrag(e, {
-                          type: "fx-end",
-                          clipId: clip.id,
-                          initialPointerTime: clientXToTime(e.clientX),
-                          initialStart: clip.startTime,
-                          initialEnd: clip.endTime,
-                        });
-                      }}
-                      className="absolute inset-y-0 right-0 w-2.5 bg-white/30 hover:bg-white/60 rounded-r cursor-ew-resize z-20"
-                    />
-                  </div>
-                );
-              })
-            )}
-          </div>
-        )}
-
-        {/* 3. KANAL: SÜRÜKLENEBİLİR & KESİLEBİLİR ŞARKI / SES ŞERİDİ (AUDIO TRACK) */}
-        {musicClip && onChangeMusicTimeline && (
-          <div
-            onClick={(e) => {
-              e.stopPropagation();
-              setSelectedTrack("audio");
               onSelectEffectClip?.(null);
+              beginDrag(e, { type: "scrub" });
             }}
-            className="relative h-7 w-full rounded-md bg-zinc-950/90 border border-white/5 overflow-hidden flex items-center"
+            onPointerMove={handlePointerMove}
+            onPointerUp={handlePointerUp}
+            onPointerCancel={handlePointerUp}
+            className="relative flex-1 flex flex-col gap-1.5 cursor-pointer touch-none pr-3"
           >
-            <div
-              onPointerDown={(e) => {
-                setSelectedTrack("audio");
-                onSelectEffectClip?.(null);
-                beginDrag(e, {
-                  type: "audio-move",
-                  initialPointerTime: clientXToTime(e.clientX),
-                  initialStart: musicStart,
-                  initialEnd: musicEnd,
-                  initialSongOffset: musicClip.startTime || 0,
-                });
-              }}
-              style={{
-                left: `${musicStartPct}%`,
-                width: `${Math.max(4, musicEndPct - musicStartPct)}%`,
-              }}
-              className={`absolute inset-y-0.5 rounded-md bg-purple-600/35 border flex items-center justify-between px-2.5 cursor-grab active:cursor-grabbing z-10 ${
-                selectedTrack === "audio"
-                  ? "border-purple-300 ring-1 ring-purple-300/60"
-                  : "border-purple-400/60"
-              }`}
-            >
-              {/* Sol Ses Kesme Tutamacı */}
-              <div
-                onPointerDown={(e) => {
-                  setSelectedTrack("audio");
-                  beginDrag(e, {
-                    type: "audio-start",
-                    initialPointerTime: clientXToTime(e.clientX),
-                    initialStart: musicStart,
-                    initialEnd: musicEnd,
-                    initialSongOffset: musicClip.startTime || 0,
-                  });
-                }}
-                className="absolute inset-y-0 left-0 w-2.5 bg-purple-300/60 hover:bg-purple-200 rounded-l cursor-ew-resize z-20"
-              />
+            {/* Üst Saniye Cetveli (1sn • 3sn) */}
+            <div className="h-5 flex items-center justify-evenly text-[11px] font-medium text-zinc-400 pointer-events-none select-none">
+              <span>{tickMarks[0] || 1}sn</span>
+              <span className="text-zinc-600">•</span>
+              <span>{tickMarks[1] || 3}sn</span>
+              <span className="text-zinc-600">•</span>
+              <span>{tickMarks[2] || 5}sn</span>
+            </div>
 
-              <div className="flex items-center gap-1.5 overflow-hidden pointer-events-none w-full justify-between px-1">
-                <div className="flex items-center gap-1 overflow-hidden">
-                  <Music className="w-2.5 h-2.5 text-purple-200 shrink-0" />
-                  <span className="text-[10px] font-bold text-purple-100 truncate">
-                    {musicClip.title}
-                  </span>
-                </div>
-                <span className="text-[9px] font-semibold text-purple-200/80 tabular-nums shrink-0">
-                  +{Math.round(musicClip.startTime || 0)}s
-                </span>
+            {/* 1. KANAL: VİDEO FİLM ŞERİDİ */}
+            <div
+              onClick={() => setSelectedTrack("video")}
+              className="relative h-14 w-full rounded-md overflow-visible bg-[#16171b]"
+            >
+              <div className="absolute inset-0 rounded-md overflow-hidden flex w-full h-full pointer-events-none">
+                {thumbnails.length > 0 ? (
+                  thumbnails.map((src, idx) => (
+                    <img
+                      key={idx}
+                      src={src}
+                      alt=""
+                      draggable={false}
+                      className="h-full flex-1 object-cover select-none"
+                    />
+                  ))
+                ) : (
+                  <div className="w-full h-full bg-zinc-800/70" />
+                )}
+
+                {/* Kırpma Dışı Karartmalar */}
+                <div
+                  className="absolute inset-y-0 left-0 bg-black/75"
+                  style={{ width: `${startPct}%` }}
+                />
+                <div
+                  className="absolute inset-y-0 right-0 bg-black/75"
+                  style={{ width: `${Math.max(0, 100 - endPct)}%` }}
+                />
               </div>
 
-              {/* Sağ Ses Kesme Tutamacı */}
+              {/* Sol Beyaz Hap Tutamaç (Görseldeki Gibi) */}
               <div
                 onPointerDown={(e) => {
-                  setSelectedTrack("audio");
-                  beginDrag(e, {
-                    type: "audio-end",
-                    initialPointerTime: clientXToTime(e.clientX),
-                    initialStart: musicStart,
-                    initialEnd: musicEnd,
-                    initialSongOffset: musicClip.startTime || 0,
-                  });
+                  setSelectedTrack("video");
+                  beginDrag(e, { type: "video-start" });
                 }}
-                className="absolute inset-y-0 right-0 w-2.5 bg-purple-300/60 hover:bg-purple-200 rounded-r cursor-ew-resize z-20"
-              />
+                style={{ left: `calc(${startPct}% - 10px)` }}
+                className="absolute inset-y-0 w-5 z-20 flex items-center justify-center cursor-ew-resize touch-none"
+              >
+                <div className="w-4 h-7 rounded-full bg-white text-black flex items-center justify-center shadow-lg">
+                  <div className="w-0.5 h-3 bg-zinc-700 rounded-full mx-[1px]" />
+                  <div className="w-0.5 h-3 bg-zinc-700 rounded-full mx-[1px]" />
+                </div>
+              </div>
+
+              {/* Sağ Beyaz Hap Tutamaç */}
+              <div
+                onPointerDown={(e) => {
+                  setSelectedTrack("video");
+                  beginDrag(e, { type: "video-end" });
+                }}
+                style={{ left: `calc(${endPct}% - 10px)` }}
+                className="absolute inset-y-0 w-5 z-20 flex items-center justify-center cursor-ew-resize touch-none"
+              >
+                <div className="w-4 h-7 rounded-full bg-white text-black flex items-center justify-center shadow-lg">
+                  <div className="w-0.5 h-3 bg-zinc-700 rounded-full mx-[1px]" />
+                  <div className="w-0.5 h-3 bg-zinc-700 rounded-full mx-[1px]" />
+                </div>
+              </div>
+            </div>
+
+            {/* 2. KANAL: SES / MÜZİK ŞERİDİ ("+ Ses ekle" veya Sürüklenebilir Şarkı) */}
+            <div
+              onClick={(e) => {
+                e.stopPropagation();
+                setSelectedTrack("audio");
+                onSelectEffectClip?.(null);
+              }}
+              className="relative h-9 w-full rounded-md bg-[#16171b] overflow-hidden flex items-center"
+            >
+              {!musicClip ? (
+                <button
+                  type="button"
+                  onPointerDown={(e) => e.stopPropagation()}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onOpenMusicPicker?.();
+                  }}
+                  className="w-full h-full px-3 flex items-center gap-2 text-xs font-medium text-zinc-400 hover:text-white transition-colors"
+                >
+                  <Plus className="w-4 h-4 text-zinc-400" />
+                  <span>Ses ekle</span>
+                </button>
+              ) : (
+                <div
+                  onPointerDown={(e) => {
+                    setSelectedTrack("audio");
+                    onSelectEffectClip?.(null);
+                    beginDrag(e, {
+                      type: "audio-move",
+                      initialPointerTime: clientXToTime(e.clientX),
+                      initialStart: musicStart,
+                      initialEnd: musicEnd,
+                      initialSongOffset: musicClip.startTime || 0,
+                    });
+                  }}
+                  style={{
+                    left: `${musicStartPct}%`,
+                    width: `${Math.max(5, musicEndPct - musicStartPct)}%`,
+                  }}
+                  className={`absolute inset-y-0.5 rounded-md bg-purple-600/35 border flex items-center justify-between px-3 cursor-grab active:cursor-grabbing z-10 ${
+                    selectedTrack === "audio"
+                      ? "border-purple-300 ring-1 ring-purple-300/50"
+                      : "border-purple-400/50"
+                  }`}
+                >
+                  <div
+                    onPointerDown={(e) => {
+                      setSelectedTrack("audio");
+                      beginDrag(e, {
+                        type: "audio-start",
+                        initialPointerTime: clientXToTime(e.clientX),
+                        initialStart: musicStart,
+                        initialEnd: musicEnd,
+                        initialSongOffset: musicClip.startTime || 0,
+                      });
+                    }}
+                    className="absolute inset-y-0 left-0 w-3 bg-white/40 hover:bg-white rounded-l cursor-ew-resize z-20"
+                  />
+
+                  <div className="flex items-center gap-1.5 overflow-hidden pointer-events-none w-full justify-between px-1">
+                    <div className="flex items-center gap-1.5 overflow-hidden">
+                      <Music className="w-3 h-3 text-purple-200 shrink-0" />
+                      <span className="text-xs font-semibold text-purple-100 truncate">
+                        {musicClip.title}
+                      </span>
+                    </div>
+                    <span className="text-[10px] font-medium text-purple-200/80 tabular-nums shrink-0">
+                      +{Math.round(musicClip.startTime || 0)}s
+                    </span>
+                  </div>
+
+                  <div
+                    onPointerDown={(e) => {
+                      setSelectedTrack("audio");
+                      beginDrag(e, {
+                        type: "audio-end",
+                        initialPointerTime: clientXToTime(e.clientX),
+                        initialStart: musicStart,
+                        initialEnd: musicEnd,
+                        initialSongOffset: musicClip.startTime || 0,
+                      });
+                    }}
+                    className="absolute inset-y-0 right-0 w-3 bg-white/40 hover:bg-white rounded-r cursor-ew-resize z-20"
+                  />
+                </div>
+              )}
+            </div>
+
+            {/* 3. KANAL: EFEKT ŞERİDİ ("+ Efekt ekle" veya Sürüklenebilir FX Klipleri) */}
+            <div
+              onClick={(e) => {
+                e.stopPropagation();
+                setSelectedTrack("fx");
+              }}
+              className="relative h-9 w-full rounded-md bg-[#16171b] overflow-hidden flex items-center"
+            >
+              {effectClips.length === 0 ? (
+                <button
+                  type="button"
+                  onPointerDown={(e) => e.stopPropagation()}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setSelectedTrack("fx");
+                    onQuickAddEffectAtPlayhead?.();
+                  }}
+                  className="w-full h-full px-3 flex items-center gap-2 text-xs font-medium text-zinc-400 hover:text-white transition-colors"
+                >
+                  <Plus className="w-4 h-4 text-zinc-400" />
+                  <span>Efekt ekle</span>
+                </button>
+              ) : (
+                effectClips.map((clip) => {
+                  const preset = REELS_EFFECT_PRESETS.find((p) => p.id === clip.effect);
+                  const cStartPct = (Math.max(0, clip.startTime) / safeDuration) * 100;
+                  const cEndPct =
+                    (Math.min(
+                      safeDuration,
+                      Math.max(clip.startTime + 0.15, clip.endTime)
+                    ) /
+                      safeDuration) *
+                    100;
+                  const isSelected = selectedEffectClipId === clip.id;
+                  const color = preset?.color || "#ec4899";
+
+                  return (
+                    <div
+                      key={clip.id}
+                      onPointerDown={(e) => {
+                        setSelectedTrack("fx");
+                        onSelectEffectClip?.(clip.id);
+                        beginDrag(e, {
+                          type: "fx-move",
+                          clipId: clip.id,
+                          initialPointerTime: clientXToTime(e.clientX),
+                          initialStart: clip.startTime,
+                          initialEnd: clip.endTime,
+                        });
+                      }}
+                      style={{
+                        left: `${cStartPct}%`,
+                        width: `${Math.max(5, cEndPct - cStartPct)}%`,
+                        backgroundColor: `${color}38`,
+                        borderColor: isSelected ? "#ffffff" : color,
+                      }}
+                      className={`absolute inset-y-0.5 rounded-md border flex items-center justify-between px-2.5 cursor-grab active:cursor-grabbing z-10 select-none ${
+                        isSelected ? "ring-1 ring-white shadow-md" : ""
+                      }`}
+                    >
+                      <div
+                        onPointerDown={(e) => {
+                          setSelectedTrack("fx");
+                          onSelectEffectClip?.(clip.id);
+                          beginDrag(e, {
+                            type: "fx-start",
+                            clipId: clip.id,
+                            initialPointerTime: clientXToTime(e.clientX),
+                            initialStart: clip.startTime,
+                            initialEnd: clip.endTime,
+                          });
+                        }}
+                        className="absolute inset-y-0 left-0 w-3 bg-white/40 hover:bg-white rounded-l cursor-ew-resize z-20"
+                      />
+
+                      <div className="flex items-center gap-1.5 overflow-hidden pointer-events-none mx-auto">
+                        <Sparkles className="w-3 h-3 text-white shrink-0" />
+                        <span className="text-xs font-semibold text-white truncate">
+                          {preset?.name || clip.effect}
+                        </span>
+                      </div>
+
+                      <div
+                        onPointerDown={(e) => {
+                          setSelectedTrack("fx");
+                          onSelectEffectClip?.(clip.id);
+                          beginDrag(e, {
+                            type: "fx-end",
+                            clipId: clip.id,
+                            initialPointerTime: clientXToTime(e.clientX),
+                            initialStart: clip.startTime,
+                            initialEnd: clip.endTime,
+                          });
+                        }}
+                        className="absolute inset-y-0 right-0 w-3 bg-white/40 hover:bg-white rounded-r cursor-ew-resize z-20"
+                      />
+                    </div>
+                  );
+                })
+              )}
+            </div>
+
+            {/* Oynatma Çubuğu (Playhead) - Cetvelden en alt kanala kadar uzanan ince beyaz çizgi */}
+            <div
+              ref={playheadRef}
+              style={{
+                left: 0,
+                transform: "translate3d(0px, 0, 0)",
+                willChange: "transform",
+              }}
+              className="absolute inset-y-0 w-[2px] bg-white shadow-[0_0_10px_rgba(255,255,255,0.9)] z-30 pointer-events-none"
+            >
+              <div className="w-2 h-2 rounded-full bg-white -ml-[3px] mt-1.5 shadow" />
             </div>
           </div>
-        )}
-
-        {/* Oynatma Çubuğu (Playhead) - Tüm Kanalları Keser, useRef + style.transform ile 60 FPS */}
-        <div
-          ref={playheadRef}
-          style={{
-            left: 0,
-            transform: "translate3d(0px, 0, 0)",
-            willChange: "transform",
-          }}
-          className="absolute inset-y-0 w-0.5 bg-white shadow-[0_0_10px_rgba(255,255,255,0.95)] z-30 pointer-events-none"
-        >
-          <div className="w-2.5 h-2.5 rounded-full bg-white -ml-[4px] -mt-0.5 shadow" />
         </div>
       </div>
     </div>
   );
 }
 // [END] CREATED BY Bedirhan
+
 
