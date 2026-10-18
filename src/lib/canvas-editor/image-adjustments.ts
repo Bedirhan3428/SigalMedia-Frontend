@@ -71,6 +71,12 @@ export const POST_STUDIO_FILTERS: PostStudioFilterConfig[] = [
   },
 ];
 
+export const POST_STUDIO_FILTER_MAP: Record<PostStudioFilterId, PostStudioFilterConfig> =
+  POST_STUDIO_FILTERS.reduce((acc, item) => {
+    acc[item.id] = item;
+    return acc;
+  }, {} as Record<PostStudioFilterId, PostStudioFilterConfig>);
+
 export interface ReelsEffectConfig {
   id: ReelsEffectId;
   name: string;
@@ -191,7 +197,7 @@ export class ImageAdjustmentsEngine {
       parts.push(`blur(${blurPx}px)`);
     }
 
-    const studioPreset = POST_STUDIO_FILTERS.find((f) => f.id === adj.filterPreset);
+    const studioPreset = POST_STUDIO_FILTER_MAP[adj.filterPreset];
     if (studioPreset && studioPreset.cssFilter !== 'none') {
       parts.push(studioPreset.cssFilter);
     }
@@ -250,6 +256,13 @@ export class ImageAdjustmentsEngine {
   ): void {
     const adj = adjustments || DEFAULT_POST_ADJUSTMENTS;
     const activeEffects = this.resolveActiveEffects(reelsEffect, effectClips, timeSec);
+    if (activeEffects.length === 0 && this.isDefaultAdjustments(adj)) {
+      ctx.filter = baseFilter;
+      ctx.drawImage(source, box.x, box.y, box.width, box.height);
+      ctx.filter = 'none';
+      return;
+    }
+
     const combinedFilter = this.buildCssFilter(adj, baseFilter, activeEffects);
     const phase = timeSec + 0.28; // Duraklatılmış 0.00sn anında da efektin görünür olması için faz farkı
 
@@ -274,7 +287,7 @@ export class ImageAdjustmentsEngine {
     ctx.filter = 'none';
 
     // 1. Stüdyo Filtre Tonlaması (Tint)
-    const studioPreset = POST_STUDIO_FILTERS.find((f) => f.id === adj.filterPreset);
+    const studioPreset = POST_STUDIO_FILTER_MAP[adj.filterPreset];
     if (studioPreset?.tintColor && studioPreset.tintOpacity) {
       ctx.save();
       ctx.globalCompositeOperation = studioPreset.blendMode || 'overlay';

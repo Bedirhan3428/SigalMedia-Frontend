@@ -55,10 +55,23 @@ export class VideoExporter {
       this.sharedExportCanvas.width = width;
       this.sharedExportCanvas.height = height;
     }
+    this.sharedExportCtx.imageSmoothingEnabled = true;
+    this.sharedExportCtx.imageSmoothingQuality = 'high';
     return {
       canvas: this.sharedExportCanvas,
       ctx: this.sharedExportCtx,
     };
+  }
+
+  private static yieldToMain(): Promise<void> {
+    if (typeof MessageChannel !== 'undefined') {
+      return new Promise<void>((resolve) => {
+        const ch = new MessageChannel();
+        ch.port1.onmessage = () => resolve();
+        ch.port2.postMessage(null);
+      });
+    }
+    return new Promise<void>((r) => setTimeout(r, 0));
   }
   // [END] CREATED BY Bedirhan
 
@@ -70,18 +83,6 @@ export class VideoExporter {
     );
   }
 
-  private static isLowPowerDevice(): boolean {
-    if (typeof navigator === 'undefined') return false;
-    const nav = navigator as Navigator & { deviceMemory?: number };
-    if (typeof nav.deviceMemory === 'number' && nav.deviceMemory <= 2) {
-      return true;
-    }
-    if (typeof navigator.hardwareConcurrency === 'number' && navigator.hardwareConcurrency <= 2) {
-      return true;
-    }
-    return false;
-  }
-
   private static async findSupportedVideoConfig(
     preferredWidth: number,
     preferredHeight: number,
@@ -90,11 +91,21 @@ export class VideoExporter {
   ): Promise<{ config: VideoEncoderConfig; width: number; height: number; fps: number } | null> {
     if (!this.isWebCodecsSupported()) return null;
 
-    const attempts = [
-      { width: preferredWidth & ~1, height: preferredHeight & ~1, fps, bitrate },
-      { width: 720, height: 1280, fps, bitrate: Math.min(bitrate, 8_000_000) },
-      { width: preferredWidth & ~1, height: preferredHeight & ~1, fps: 30, bitrate: Math.min(bitrate, 10_000_000) },
-      { width: 720, height: 1280, fps: 30, bitrate: 6_000_000 },
+    const targetW = (preferredWidth || 720) & ~1;
+    const targetH = (preferredHeight || 1280) & ~1;
+    const targetFps = 60;
+
+    const attempts: Array<{
+      width: number;
+      height: number;
+      fps: number;
+      bitrate: number;
+      latencyMode?: LatencyMode;
+    }> = [
+      { width: targetW, height: targetH, fps: targetFps, bitrate, latencyMode: 'realtime' },
+      { width: targetW, height: targetH, fps: targetFps, bitrate },
+      { width: 720, height: 1280, fps: targetFps, bitrate: Math.min(bitrate, 6_800_000), latencyMode: 'realtime' },
+      { width: 720, height: 1280, fps: targetFps, bitrate: Math.min(bitrate, 6_800_000) },
     ];
 
     for (const attempt of attempts) {
@@ -106,6 +117,7 @@ export class VideoExporter {
           bitrate: attempt.bitrate,
           framerate: attempt.fps,
           hardwareAcceleration: 'prefer-hardware',
+          ...(attempt.latencyMode ? { latencyMode: attempt.latencyMode } : {}),
           avc: { format: 'avc' },
         };
         try {
@@ -142,8 +154,8 @@ export class VideoExporter {
       engine.getShareMode() === 'reels' && engine.getVideoClips().length > 0;
     const clips = engine.getVideoClips();
     const hasVideoAudio = isReelsNle
-      ? !state.isMotionPhoto && clips.some((c) => !c.muted && c.volume > 0)
-      : !state.muted && state.volume > 0;
+      ? clips.some((c) => !c.isMotionPhoto && !c.muted && c.volume > 0)
+      : !state.isMotionPhoto && !state.muted && state.volume > 0;
     const hasMusicAudio = Boolean(music && music.streamUrl && musicVolume > 0);
 
     if (!hasVideoAudio && !hasMusicAudio) {
@@ -179,7 +191,7 @@ export class VideoExporter {
             let accOutTime = 0;
             for (const clip of clips) {
               const clipOutDur = Math.max(0.1, clip.duration);
-              if (!clip.muted && clip.volume > 0) {
+              if (!clip.isMotionPhoto && !clip.muted && clip.volume > 0) {
                 const sourceNode = offlineCtx.createBufferSource();
                 sourceNode.buffer = decodedVideoAudio;
                 sourceNode.playbackRate.value = clip.playbackRate || 1.0;
@@ -224,36 +236,58 @@ export class VideoExporter {
           const musicBuf = await resp.arrayBuffer();
           if (musicBuf.byteLength > 0) {
             const decodedMusic = await offlineCtx.decodeAudioData(musicBuf.slice(0));
-            const musicNode = offlineCtx.createBufferSource();
-            musicNode.buffer = decodedMusic;
 
-            const musicGain = offlineCtx.createGain();
-            musicGain.gain.value = Math.max(0, Math.min(1, musicVolume));
+            if (isReelsNle && music.segments && music.segments.length > 0) {
+              for (const seg of music.segments) {
+                const segStart = Math.max(0, seg.timelineStart);
+                const segEnd = Math.min(outputDuration, seg.timelineEnd);
+                if (segEnd > segStart + 0.05) {
+                  const musicNode = offlineCtx.createBufferSource();
+                  musicNode.buffer = decodedMusic;
+                  const musicGain = offlineCtx.createGain();
+                  musicGain.gain.value = Math.max(0, Math.min(1, musicVolume));
+                  musicNode.connect(musicGain);
+                  musicGain.connect(offlineCtx.destination);
 
-            musicNode.connect(musicGain);
-            musicGain.connect(offlineCtx.destination);
+                  const offset = Math.max(
+                    0,
+                    (music.startTime || 0) + (seg.songOffset || 0)
+                  );
+                  musicNode.start(segStart, offset, segEnd - segStart);
+                  hasAnySource = true;
+                }
+              }
+            } else {
+              const musicNode = offlineCtx.createBufferSource();
+              musicNode.buffer = decodedMusic;
 
-            // CapCut tarzı ses klibi zaman aralığı (timelineStart .. timelineEnd)
-            const clipStart =
-              typeof music.timelineStart === 'number' ? music.timelineStart : trimStart;
-            const clipEnd =
-              typeof music.timelineEnd === 'number' && music.timelineEnd > clipStart
-                ? music.timelineEnd
-                : trimEnd;
-            const activeStart = Math.max(trimStart, clipStart);
-            const activeEnd = Math.min(trimEnd, clipEnd);
+              const musicGain = offlineCtx.createGain();
+              musicGain.gain.value = Math.max(0, Math.min(1, musicVolume));
 
-            if (activeEnd > activeStart) {
-              const effectiveRate = isReelsNle ? 1.0 : playbackRate;
-              const delayInOutSec = Math.max(0, (activeStart - trimStart) / effectiveRate);
-              const playDurInOutSec = Math.max(
-                0.05,
-                Math.min(outputDuration - delayInOutSec, (activeEnd - activeStart) / effectiveRate)
-              );
-              const songOffsetSec =
-                Math.max(0, music.startTime || 0) + Math.max(0, trimStart - clipStart);
-              musicNode.start(delayInOutSec, songOffsetSec, playDurInOutSec);
-              hasAnySource = true;
+              musicNode.connect(musicGain);
+              musicGain.connect(offlineCtx.destination);
+
+              const clipStart =
+                typeof music.timelineStart === 'number' ? music.timelineStart : trimStart;
+              const clipEnd =
+                typeof music.timelineEnd === 'number' && music.timelineEnd > clipStart
+                  ? music.timelineEnd
+                  : trimEnd;
+              const activeStart = Math.max(trimStart, clipStart);
+              const activeEnd = Math.min(trimEnd, clipEnd);
+
+              if (activeEnd > activeStart) {
+                const effectiveRate = isReelsNle ? 1.0 : playbackRate;
+                const delayInOutSec = Math.max(0, (activeStart - trimStart) / effectiveRate);
+                const playDurInOutSec = Math.max(
+                  0.05,
+                  Math.min(outputDuration - delayInOutSec, (activeEnd - activeStart) / effectiveRate)
+                );
+                const songOffsetSec =
+                  Math.max(0, music.startTime || 0) + Math.max(0, trimStart - clipStart);
+                musicNode.start(delayInOutSec, songOffsetSec, playDurInOutSec);
+                hasAnySource = true;
+              }
             }
           }
         }
@@ -280,13 +314,11 @@ export class VideoExporter {
       throw new Error('Aktif medya bir video değil');
     }
 
-    const use720p =
-      options?.resolution === '720p' ||
-      (!options?.resolution && this.isLowPowerDevice());
-    const preferredW = options?.width || (use720p ? 720 : 1080);
-    const preferredH = options?.height || (use720p ? 1280 : 1920);
-    const requestedFps = options?.fps || 60;
-    const bitrate = options?.bitrate || (use720p ? 8_000_000 : 14_000_000);
+    // Her zaman 720p (720x1280) ve sabit 60 FPS yüksek hızlı & kaliteli sıkıştırma
+    const preferredW = options?.width || 720;
+    const preferredH = options?.height || 1280;
+    const requestedFps = 60;
+    const bitrate = options?.bitrate || 6_800_000;
     const signal = options?.signal;
 
     const supportedVideo = await this.findSupportedVideoConfig(
@@ -336,9 +368,7 @@ export class VideoExporter {
         throw new DOMException('Export cancelled', 'AbortError');
       }
 
-      // 1. Ses miksajı ve AAC AudioEncoder kontrolü
-      let renderedAudio: AudioBuffer | null = null;
-      let audioConfigSupported = false;
+      // 1. Ses miksajı ve mp4-muxer yüklemesini paralel başlat
       const aacConfig: AudioEncoderConfig = {
         codec: 'mp4a.40.2',
         sampleRate: 44100,
@@ -346,32 +376,33 @@ export class VideoExporter {
         bitrate: 192_000,
       };
 
-      if (typeof AudioEncoder !== 'undefined' && typeof AudioData !== 'undefined') {
-        try {
-          const support = await AudioEncoder.isConfigSupported(aacConfig);
-          audioConfigSupported = Boolean(support.supported);
-        } catch {
-          audioConfigSupported = false;
-        }
-      }
+      const audioSupportPromise =
+        typeof AudioEncoder !== 'undefined' && typeof AudioData !== 'undefined'
+          ? AudioEncoder.isConfigSupported(aacConfig)
+              .then((s) => Boolean(s.supported))
+              .catch(() => false)
+          : Promise.resolve(false);
 
-      if (audioConfigSupported) {
-        renderedAudio = await this.renderMixedAudio(
-          engine,
-          outputDuration,
-          options?.music,
-          options?.musicVolume ?? 0.85,
-          signal
-        );
-      }
+      const [audioConfigSupported, { Muxer, ArrayBufferTarget }] = await Promise.all([
+        audioSupportPromise,
+        import('mp4-muxer'),
+      ]);
+
+      const renderedAudio = audioConfigSupported
+        ? await this.renderMixedAudio(
+            engine,
+            outputDuration,
+            options?.music,
+            options?.musicVolume ?? 0.85,
+            signal
+          )
+        : null;
 
       if (signal?.aborted) {
         throw new DOMException('Export cancelled', 'AbortError');
       }
 
-      // [MODIFIED BY Bedirhan]
-      // 2. mp4-muxer kurulumu (tarayıcıda dinamik import, SSR'dan izole)
-      const { Muxer, ArrayBufferTarget } = await import('mp4-muxer');
+      // 2. mp4-muxer kurulumu
       const target = new ArrayBufferTarget();
       const muxer = new Muxer({
         target,
@@ -413,7 +444,6 @@ export class VideoExporter {
         });
         audioEncoder.configure(aacConfig);
 
-        // [MODIFIED BY Bedirhan]
         // Sesi 4096 örnekli bloklar halinde kodla (Bellek tahsisini döngü dışına çıkar)
         const ch0 = renderedAudio.getChannelData(0);
         const ch1 =
@@ -449,7 +479,7 @@ export class VideoExporter {
         }
       }
 
-      // 3. Paylaşımlı çizim tuvali (Döngü dışında tek seferlik boyutlandırma ve tahsis)
+      // 3. Paylaşımlı 720p çizim tuvali (Döngü dışında tek seferlik boyutlandırma ve tahsis)
       const { canvas: exportCanvas, ctx: exportCtx } = this.getExportSurface(
         exportWidth,
         exportHeight
@@ -462,7 +492,8 @@ export class VideoExporter {
         state.isMotionPhoto &&
           mediaLayer &&
           !mediaLayer.isTimeDependentEffect() &&
-          !hasTimedOverlays
+          !hasTimedOverlays &&
+          (!isReelsNle || engine.getVideoClips().length === 1)
       );
 
       // 5 saniyelik statik fotoğraf->video dönüşümünde tüm sahneyi döngü dışında 1 kez çiz ve önbelleğe al
@@ -470,7 +501,9 @@ export class VideoExporter {
         await engine.renderFrameAt(exportCtx, trimStart, exportWidth, exportHeight);
       }
 
-      // 4. Kare kare render ve H.264 encode döngüsü
+      let lastReportedPct = -1;
+
+      // 4. Kare kare 720p @ 60 FPS render ve donanım H.264 encode döngüsü
       for (let i = 0; i < totalFrames; i++) {
         if (signal?.aborted) {
           throw new DOMException('Export cancelled', 'AbortError');
@@ -500,18 +533,23 @@ export class VideoExporter {
         }
 
         // Kuyruk doluluğu kontrolü (Backpressure - 60 FPS yüksek hızlı donanım kuyruğu)
-        while (videoEncoder.encodeQueueSize > 16) {
+        while (videoEncoder.encodeQueueSize > 24) {
           if (signal?.aborted) {
             throw new DOMException('Export cancelled', 'AbortError');
           }
-          await new Promise((r) => setTimeout(r, 2));
+          await this.yieldToMain();
         }
 
-        options?.onProgress?.(Math.min(0.96, (i + 1) / totalFrames));
+        const rawProgress = Math.min(0.96, (i + 1) / totalFrames);
+        const pct = Math.floor(rawProgress * 100);
+        if (pct !== lastReportedPct) {
+          lastReportedPct = pct;
+          options?.onProgress?.(rawProgress);
+        }
 
-        // Yalnızca 16 karede bir UI thread'e nefes ver
-        if ((i & 15) === 15) {
-          await new Promise((r) => setTimeout(r, 0));
+        // 24 karede bir 4ms setTimeout gecikmesi olmadan MessageChannel ile UI thread'e mikro nefes ver
+        if ((i % 24) === 23) {
+          await this.yieldToMain();
         }
       }
 

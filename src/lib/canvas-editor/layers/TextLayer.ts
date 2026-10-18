@@ -220,13 +220,25 @@ export class TextLayer extends BaseLayer {
     return next;
   }
 
+  private cachedBounds: Rect | null = null;
+  private cachedBoundsKey = '';
+
   private getFontString(): string {
     return `${this.style.fontStyle} ${this.style.fontWeight} ${this.style.fontSize}px ${this.style.fontFamily}`;
   }
 
   public override getBoundingBox(ctx: CanvasRenderingContext2D, _canvasWidth: number, _canvasHeight: number): Rect {
+    const fontStr = this.getFontString();
+    const hasBg = this.bgPreset === 'solid' || this.bgPreset === 'translucent';
+    const padding = hasBg ? (this.style.backgroundPadding ?? 24) : 16;
+    const key = `${fontStr}|${padding}|${this.style.text}`;
+
+    if (this.cachedBounds && this.cachedBoundsKey === key) {
+      return this.cachedBounds;
+    }
+
     ctx.save();
-    ctx.font = this.getFontString();
+    ctx.font = fontStr;
 
     const lines = this.style.text.split('\n');
     let maxLineWidth = 0;
@@ -240,17 +252,17 @@ export class TextLayer extends BaseLayer {
     }
     ctx.restore();
 
-    const hasBg = this.bgPreset === 'solid' || this.bgPreset === 'translucent';
-    const padding = hasBg ? (this.style.backgroundPadding ?? 24) : 16;
     const totalW = Math.max(180, maxLineWidth + padding * 2);
     const totalH = Math.max(110, lines.length * lineHeight + padding * 2);
 
-    return {
+    this.cachedBoundsKey = key;
+    this.cachedBounds = {
       x: -totalW / 2,
       y: -totalH / 2,
       width: totalW,
       height: totalH
     };
+    return this.cachedBounds;
   }
 
   public override render(ctx: CanvasRenderingContext2D, canvasWidth: number, canvasHeight: number): void {
@@ -262,6 +274,7 @@ export class TextLayer extends BaseLayer {
     const lineHeight = this.style.fontSize * 1.25;
     const hasBg = this.bgPreset === 'solid' || this.bgPreset === 'translucent';
     const padding = hasBg ? (this.style.backgroundPadding ?? 18) : 8;
+    const resScale = canvasWidth / 1080;
 
     ctx.save();
     // 0. Story filtrelerinden kesinlikle etkilenmesin (Metin her zaman berrak ve net kalır)
@@ -270,7 +283,7 @@ export class TextLayer extends BaseLayer {
     ctx.translate(center.x, center.y);
     ctx.rotate((this.transform.rotation * Math.PI) / 180);
     const interactionScale = this.isInteracting ? 1.015 : 1.0;
-    const finalScale = this.transform.scale * interactionScale * this.pulseScale;
+    const finalScale = this.transform.scale * interactionScale * this.pulseScale * resScale;
     ctx.scale(finalScale, finalScale);
 
     // 1. Arka Plan Kutusu (Solid veya Translucent)
@@ -279,7 +292,7 @@ export class TextLayer extends BaseLayer {
       const baseRadius = (this.style.borderRadius !== undefined && this.style.borderRadius !== 9999)
         ? this.style.borderRadius
         : 12;
-      const scaledRadius = Math.round(baseRadius * (canvasWidth / 414));
+      const scaledRadius = Math.round(baseRadius * (1080 / 414));
       const maxRadius = Math.min(bounds.width / 2, bounds.height / 2);
       const radius = Math.min(maxRadius, scaledRadius);
 

@@ -41,19 +41,23 @@ export class MediaRecorderFallback {
       throw new Error('Aktif medya bir video değil');
     }
 
-    const width = options?.width || 1080;
-    const height = options?.height || 1920;
-    const fps = options?.fps || 60;
-    const bitrate = options?.bitrate || 12_000_000;
+    const width = options?.width || 720;
+    const height = options?.height || 1280;
+    const fps = 60;
+    const bitrate = options?.bitrate || 6_800_000;
     const signal = options?.signal;
 
     const exportCanvas = document.createElement('canvas');
     exportCanvas.width = width;
     exportCanvas.height = height;
-    const exportCtx = exportCanvas.getContext('2d');
+    const exportCtx =
+      exportCanvas.getContext('2d', { alpha: false, desynchronized: true }) ||
+      exportCanvas.getContext('2d');
     if (!exportCtx) {
       throw new Error('Export canvas oluşturulamadı');
     }
+    exportCtx.imageSmoothingEnabled = true;
+    exportCtx.imageSmoothingQuality = 'high';
 
     const trimStart = state.trimStart;
     const trimEnd = state.trimEnd > trimStart ? state.trimEnd : state.duration;

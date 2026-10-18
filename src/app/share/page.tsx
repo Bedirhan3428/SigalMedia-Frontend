@@ -932,6 +932,10 @@ export default function ShareStoryPage() {
         const abortCtrl = new AbortController();
         exportAbortRef.current = abortCtrl;
         const blob = await VideoExporter.exportToBlob(engine, {
+          resolution: "720p",
+          width: 720,
+          height: 1280,
+          fps: 60,
           music: selectedMusic,
           musicVolume,
           onProgress: (p) => setExportProgress(p),
@@ -977,6 +981,10 @@ export default function ShareStoryPage() {
         exportAbortRef.current = abortCtrl;
 
         blob = await VideoExporter.exportToBlob(engineRef.current, {
+          resolution: "720p",
+          width: 720,
+          height: 1280,
+          fps: 60,
           music: selectedMusic,
           musicVolume,
           onProgress: (p) => setExportProgress(p),

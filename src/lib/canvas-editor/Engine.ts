@@ -85,11 +85,21 @@ export class CanvasEngine {
   private overlayCacheCanvas: HTMLCanvasElement | null = null;
   private overlayCacheCtx: CanvasRenderingContext2D | null = null;
   private overlayCacheDirty = true;
+
+  private ambientBgCacheCanvas: HTMLCanvasElement | null = null;
+  private ambientBgCacheCtx: CanvasRenderingContext2D | null = null;
+  private ambientBgCacheKey = '';
+
+  private lastActiveEffectsKey = '';
+  private lastExportSourceTime = -1;
+  private lastExportClipId = '';
   // [END] CREATED BY Bedirhan
 
   constructor(options: EngineOptions) {
     this.canvas = options.canvas;
-    const ctx = this.canvas.getContext('2d');
+    const ctx =
+      this.canvas.getContext('2d', { desynchronized: true }) ||
+      this.canvas.getContext('2d');
     if (!ctx) throw new Error('Could not get 2D rendering context from canvas');
     this.ctx = ctx;
 
@@ -689,6 +699,35 @@ export class CanvasEngine {
       return;
     }
 
+    const cacheKey = `${width}x${height}:${preset.bgCenterColor}`;
+    if (typeof document !== 'undefined') {
+      if (!this.ambientBgCacheCanvas) {
+        this.ambientBgCacheCanvas = document.createElement('canvas');
+        this.ambientBgCacheCtx = this.ambientBgCacheCanvas.getContext('2d', { alpha: false });
+      }
+      if (this.ambientBgCacheKey !== cacheKey && this.ambientBgCacheCtx) {
+        this.ambientBgCacheCanvas.width = width;
+        this.ambientBgCacheCanvas.height = height;
+        const centerX = width * 0.5;
+        const centerY = height * 0.5;
+        const radius = Math.hypot(width, height) * 0.55;
+        const radGrad = this.ambientBgCacheCtx.createRadialGradient(
+          centerX, centerY, 10,
+          centerX, centerY, radius
+        );
+        radGrad.addColorStop(0, preset.bgCenterColor);
+        radGrad.addColorStop(0.75, '#000000');
+        radGrad.addColorStop(1, '#000000');
+        this.ambientBgCacheCtx.fillStyle = radGrad;
+        this.ambientBgCacheCtx.fillRect(0, 0, width, height);
+        this.ambientBgCacheKey = cacheKey;
+      }
+      if (this.ambientBgCacheCanvas) {
+        ctx.drawImage(this.ambientBgCacheCanvas, 0, 0, width, height);
+        return;
+      }
+    }
+
     const centerX = width * 0.5;
     const centerY = height * 0.5;
     const radius = Math.hypot(width, height) * 0.55;
@@ -705,13 +744,42 @@ export class CanvasEngine {
     ctx.fillRect(0, 0, width, height);
   }
 
+  private getActiveEffectsSignature(t: number): string {
+    const ml = this.mediaLayer;
+    if (!ml) return '';
+    if (ml.effectClips.length === 0) return ml.reelsEffect;
+    let sig = '';
+    for (let i = 0; i < ml.effectClips.length; i++) {
+      const c = ml.effectClips[i];
+      if (c.effect !== 'none' && t >= c.startTime - 0.01 && t <= c.endTime + 0.01) {
+        sig += `${c.id}:${c.effect}:${c.intensity ?? 80}|`;
+      }
+    }
+    return sig;
+  }
+
+  private hasDynamicOverlay(): boolean {
+    for (let i = 0; i < this.overlayLayers.length; i++) {
+      const l = this.overlayLayers[i];
+      if (l.isInteracting) return true;
+      if (l instanceof TextLayer && l.pulseScale !== 1.0) return true;
+    }
+    return false;
+  }
+
   // [MODIFIED BY Bedirhan]
   public syncTemporalVisibility(t?: number): boolean {
     const curT = typeof t === 'number' ? t : this.getCurrentTime();
+    let changed = false;
     if (this.mediaLayer) {
       this.mediaLayer.timelineTime = curT;
+      const nextEffKey = this.getActiveEffectsSignature(curT);
+      if (nextEffKey !== this.lastActiveEffectsKey) {
+        this.lastActiveEffectsKey = nextEffKey;
+        this.staticSceneCacheDirty = true;
+        changed = true;
+      }
     }
-    let changed = false;
     for (let i = 0; i < this.overlayLayers.length; i++) {
       const layer = this.overlayLayers[i];
       const nextVis =
@@ -797,7 +865,13 @@ export class CanvasEngine {
     const sel = this.interactionManager.getSelectedLayer();
 
     // 5sn statik fotoğraf->video modunda değişmeyen katmanları tek offscreen tampondan bas
-    if (ml && ml.isMotionPhoto && !ml.isTimeDependentEffect() && !ml.isInteracting) {
+    if (
+      ml &&
+      ml.isMotionPhoto &&
+      !ml.isActiveEffectTimeDependentAt(ml.timelineTime) &&
+      !ml.isInteracting &&
+      !this.hasDynamicOverlay()
+    ) {
       const cached = this.ensureStaticSceneCache(this.width, this.height);
       if (cached) {
         this.ctx.drawImage(cached, 0, 0, this.width, this.height);
@@ -810,10 +884,19 @@ export class CanvasEngine {
       if (ml && ml.visible) {
         ml.render(this.ctx, this.width, this.height);
       }
-      for (let i = 0; i < this.overlayLayers.length; i++) {
-        const layer = this.overlayLayers[i];
-        if (layer.visible && layer.temporalVisible) {
-          layer.render(this.ctx, this.width, this.height);
+      if (this.overlayLayers.length > 0) {
+        if (!this.hasDynamicOverlay()) {
+          const overlayCached = this.ensureOverlayCache(this.width, this.height);
+          if (overlayCached) {
+            this.ctx.drawImage(overlayCached, 0, 0, this.width, this.height);
+          }
+        } else {
+          for (let i = 0; i < this.overlayLayers.length; i++) {
+            const layer = this.overlayLayers[i];
+            if (layer.visible && layer.temporalVisible) {
+              layer.render(this.ctx, this.width, this.height);
+            }
+          }
         }
       }
     }
@@ -849,29 +932,13 @@ export class CanvasEngine {
     const ml = this.mediaLayer;
 
     // 5 saniyelik statik fotoğraf->video dönüşümünde değişmeyen katmanları tek offscreen tamponda önbelleğe al
-    if (ml && ml.isMotionPhoto) {
-      if (!ml.isTimeDependentEffect()) {
-        const cached = this.ensureStaticSceneCache(width, height);
-        if (cached) {
-          targetCtx.clearRect(0, 0, width, height);
-          targetCtx.drawImage(cached, 0, 0, width, height);
-          return;
-        }
-      } else {
-        targetCtx.clearRect(0, 0, width, height);
-        this.renderAmbientBackground(targetCtx, width, height);
-        if (ml.visible) {
-          ml.render(targetCtx, width, height);
-        }
-        const overlayCached = this.ensureOverlayCache(width, height);
-        if (overlayCached) {
-          targetCtx.drawImage(overlayCached, 0, 0, width, height);
-        }
+    if (ml && ml.isMotionPhoto && !ml.isActiveEffectTimeDependentAt(ml.timelineTime)) {
+      const cached = this.ensureStaticSceneCache(width, height);
+      if (cached) {
+        targetCtx.drawImage(cached, 0, 0, width, height);
         return;
       }
     }
-
-    targetCtx.clearRect(0, 0, width, height);
 
     // Dışa aktarmada da aynı büyüleyici ışık süzmesi ve arka plan atmosferi korunur (kılavuz çizgileri basılmaz)
     this.renderAmbientBackground(targetCtx, width, height);
@@ -879,10 +946,20 @@ export class CanvasEngine {
     if (ml && ml.visible) {
       ml.render(targetCtx, width, height);
     }
-    for (let i = 0; i < this.overlayLayers.length; i++) {
-      const layer = this.overlayLayers[i];
-      if (layer.visible && layer.temporalVisible) {
-        layer.render(targetCtx, width, height);
+
+    if (this.overlayLayers.length > 0) {
+      if (!this.hasDynamicOverlay()) {
+        const overlayCached = this.ensureOverlayCache(width, height);
+        if (overlayCached) {
+          targetCtx.drawImage(overlayCached, 0, 0, width, height);
+        }
+      } else {
+        for (let i = 0; i < this.overlayLayers.length; i++) {
+          const layer = this.overlayLayers[i];
+          if (layer.visible && layer.temporalVisible) {
+            layer.render(targetCtx, width, height);
+          }
+        }
       }
     }
   }
@@ -1816,6 +1893,8 @@ export class CanvasEngine {
 
   public setExportingVideo(exporting: boolean): void {
     this.isExportingVideo = exporting;
+    this.lastExportSourceTime = -1;
+    this.lastExportClipId = '';
     this.invalidateStaticCache();
     if (exporting) {
       this.pauseVideo();
@@ -1920,7 +1999,7 @@ export class CanvasEngine {
         }
 
         // Statik 5sn fotoğrafta yalnızca efekt zamana bağlıysa veya önbellek kirliyse yeniden çiz
-        if (ml.isTimeDependentEffect() || this.staticSceneCacheDirty) {
+        if (ml.isActiveEffectTimeDependentAt(ml.virtualTime) || this.staticSceneCacheDirty) {
           this.render();
         }
         this.emit('video-progress', ml.virtualTime);
@@ -1980,15 +2059,31 @@ export class CanvasEngine {
 
     if (this.shareMode === 'reels' && this.videoClips.length > 0) {
       this.nleTimelineTime = t;
-      this.syncTemporalVisibility(t);
+      const visChanged = this.syncTemporalVisibility(t);
       const active = this.getActiveClipAtTime(t);
       if (ml && active) {
-        this.applyClipTransformToMediaLayer(active.clip);
+        const clipChanged = this.applyClipTransformToMediaLayer(active.clip);
         ml.timelineTime = t;
+        const isAnimated = ml.isActiveEffectTimeDependentAt(t);
+
         if (ml.isMotionPhoto) {
           ml.virtualTime = t;
+          if (!visChanged && !clipChanged && !isAnimated && this.lastExportClipId === active.clip.id) {
+            return;
+          }
+          this.lastExportClipId = active.clip.id;
         } else {
-          await ml.seek(active.localSourceTime);
+          const sameFrame =
+            this.lastExportClipId === active.clip.id &&
+            Math.abs(active.localSourceTime - this.lastExportSourceTime) < 0.015;
+          if (!sameFrame) {
+            await ml.seek(active.localSourceTime);
+            this.lastExportSourceTime = active.localSourceTime;
+            this.lastExportClipId = active.clip.id;
+          } else if (!visChanged && !clipChanged && !isAnimated) {
+            // Aynı kaynak video karesi ve aktif animasyonlu efekt yok -> targetCtx zaten güncel!
+            return;
+          }
         }
       }
       this.renderClean(targetCtx, w, h);
@@ -1996,11 +2091,24 @@ export class CanvasEngine {
     }
 
     if (ml) {
+      const visChanged = this.syncTemporalVisibility(t);
       ml.timelineTime = t;
+      const isAnimated = ml.isActiveEffectTimeDependentAt(t);
       if (ml.isMotionPhoto) {
         ml.virtualTime = t;
+        if (!visChanged && !isAnimated && this.lastExportSourceTime >= 0) {
+          return;
+        }
+        this.lastExportSourceTime = t;
       } else {
-        await ml.seek(t);
+        const sameFrame =
+          this.lastExportSourceTime >= 0 && Math.abs(t - this.lastExportSourceTime) < 0.015;
+        if (!sameFrame) {
+          await ml.seek(t);
+          this.lastExportSourceTime = t;
+        } else if (!visChanged && !isAnimated) {
+          return;
+        }
       }
     }
     this.renderClean(targetCtx, w, h);
@@ -2059,6 +2167,8 @@ export class CanvasEngine {
     this.staticSceneCacheCtx = null;
     this.overlayCacheCanvas = null;
     this.overlayCacheCtx = null;
+    this.ambientBgCacheCanvas = null;
+    this.ambientBgCacheCtx = null;
     try {
       this.ctx.clearRect(0, 0, this.width, this.height);
     } catch {}

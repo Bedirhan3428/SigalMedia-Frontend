@@ -73,6 +73,21 @@ export class MediaLayer extends BaseLayer {
       this.reelsEffect === 'shake'
     );
   }
+
+  public isActiveEffectTimeDependentAt(timeSec: number): boolean {
+    const active = ImageAdjustmentsEngine.resolveActiveEffects(
+      this.reelsEffect,
+      this.effectClips,
+      timeSec
+    );
+    for (let i = 0; i < active.length; i++) {
+      const e = active[i].effect;
+      if (e === 'zoom_pulse' || e === 'glitch' || e === 'flash' || e === 'shake') {
+        return true;
+      }
+    }
+    return false;
+  }
   // [END] CREATED BY Bedirhan
 
   // [MODIFIED BY Bedirhan]
@@ -562,8 +577,8 @@ export class MediaLayer extends BaseLayer {
     const video = this.getVideoElement();
     if (!video) return;
 
-    // 60 FPS export sırasında aynı kaynak kare içindeysek (10ms tolerans) gereksiz GOP seek yapma
-    if (Math.abs(video.currentTime - clamped) < 0.01 && video.readyState >= 2 && !video.seeking) {
+    // 60 FPS export sırasında aynı kaynak kare içindeysek (15ms tolerans) gereksiz GOP seek yapma
+    if (Math.abs(video.currentTime - clamped) < 0.015 && video.readyState >= 2 && !video.seeking) {
       return;
     }
 
@@ -582,7 +597,7 @@ export class MediaLayer extends BaseLayer {
         finish();
       };
 
-      const timer = setTimeout(finish, 110);
+      const timer = setTimeout(finish, 42);
       video.addEventListener('seeked', onSeeked, { once: true });
       video.currentTime = clamped;
     });
