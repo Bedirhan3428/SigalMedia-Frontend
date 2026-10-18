@@ -2,7 +2,7 @@
 // [MODIFIED BY Bedirhan]
 "use client";
 
-import { useEffect, useRef, useState, useCallback } from "react";
+import { useEffect, useRef, useState, useCallback, useMemo } from "react";
 import {
   Play,
   Pause,
@@ -27,6 +27,7 @@ export interface VideoTimelineProps {
   trimEnd: number;
   currentTime: number;
   isPlaying: boolean;
+  isMotionPhoto?: boolean;
   thumbnails: string[];
   muted?: boolean;
   getCurrentTime?: () => number;
@@ -49,6 +50,7 @@ export interface VideoTimelineProps {
   onToggleMute?: () => void;
   onOpenMusicPicker?: () => void;
   onQuickAddEffectAtPlayhead?: () => void;
+  splitTriggerRef?: React.MutableRefObject<(() => void) | null>;
 }
 
 export function formatTimelineTime(sec: number): string {
@@ -60,14 +62,28 @@ export function formatTimelineTime(sec: number): string {
 
 type DragState =
   | { type: "scrub" }
-  | { type: "video-start" }
-  | { type: "video-end" }
+  | {
+      type: "video-start" | "video-end" | "video-move";
+      initialPointerTime: number;
+      initialStart: number;
+      initialEnd: number;
+      initialClientX: number;
+      hasMoved: boolean;
+    }
+  | {
+      type: "video-split-handle";
+      splitIndex: number;
+      initialPointerTime: number;
+      initialSplitTime: number;
+    }
   | {
       type: "fx-move" | "fx-start" | "fx-end";
       clipId: string;
       initialPointerTime: number;
       initialStart: number;
       initialEnd: number;
+      initialClientX: number;
+      hasMoved: boolean;
     }
   | {
       type: "audio-move" | "audio-start" | "audio-end";
@@ -75,6 +91,14 @@ type DragState =
       initialStart: number;
       initialEnd: number;
       initialSongOffset: number;
+      initialClientX: number;
+      hasMoved: boolean;
+    }
+  | {
+      type: "audio-split-handle";
+      splitIndex: number;
+      initialPointerTime: number;
+      initialSplitTime: number;
     }
   | null;
 
@@ -84,6 +108,7 @@ export default function VideoTimeline({
   trimEnd,
   currentTime,
   isPlaying,
+  isMotionPhoto = false,
   thumbnails,
   muted = false,
   getCurrentTime,
@@ -102,6 +127,7 @@ export default function VideoTimeline({
   onToggleMute,
   onOpenMusicPicker,
   onQuickAddEffectAtPlayhead,
+  splitTriggerRef,
 }: VideoTimelineProps) {
   const internalTrackRef = useRef<HTMLDivElement | null>(null);
   const internalPlayheadRef = useRef<HTMLDivElement | null>(null);
@@ -113,50 +139,102 @@ export default function VideoTimeline({
 
   const [dragState, setDragState] = useState<DragState>(null);
   const [selectedTrack, setSelectedTrack] = useState<"video" | "fx" | "audio">("video");
+
+  // Bölme (Split) noktaları: klibin süresini düşürmeden 2 (veya daha fazla) parçaya ayırır
+  const [videoSplits, setVideoSplits] = useState<number[]>([]);
+  const [selectedVideoSegIdx, setSelectedVideoSegIdx] = useState<number>(0);
+
+  const [audioSplits, setAudioSplits] = useState<number[]>([]);
+  const [selectedAudioSegIdx, setSelectedAudioSegIdx] = useState<number>(0);
+
   const currentTimeRef = useRef<number>(currentTime);
 
-  const safeDuration = Math.max(0.1, Math.min(duration || 0.1, 60));
-  const safeStart = Math.max(0, Math.min(trimStart, safeDuration - 0.1));
+  const baseDuration = Math.max(0.5, Math.min(duration || 5, 60));
+  const safeStart = Math.max(0, Math.min(trimStart, 59.5));
   const safeEnd = Math.max(
-    safeStart + 0.1,
-    Math.min(trimEnd || safeDuration, safeDuration)
+    safeStart + 0.5,
+    Math.min(trimEnd || baseDuration, isMotionPhoto ? 60 : baseDuration)
   );
-  const trimmedDuration = Math.max(0.1, safeEnd - safeStart);
-
-  const startPct = (safeStart / safeDuration) * 100;
-  const endPct = (safeEnd / safeDuration) * 100;
+  const trimmedDuration = Math.max(0.5, safeEnd - safeStart);
 
   const musicStart =
     musicClip && typeof musicClip.timelineStart === "number"
-      ? Math.max(0, Math.min(musicClip.timelineStart, safeDuration - 0.2))
+      ? Math.max(0, Math.min(musicClip.timelineStart, 59.5))
       : safeStart;
   const musicEnd =
     musicClip &&
     typeof musicClip.timelineEnd === "number" &&
-    musicClip.timelineEnd > musicStart + 0.1
-      ? Math.min(safeDuration, musicClip.timelineEnd)
+    musicClip.timelineEnd > musicStart + 0.3
+      ? Math.min(60, musicClip.timelineEnd)
       : safeEnd;
 
-  const musicStartPct = (musicStart / safeDuration) * 100;
-  const musicEndPct = (musicEnd / safeDuration) * 100;
+  // Görsel (isMotionPhoto) veya müzik uzatılırken sağda her zaman rahat kaydırma/uzatma alanı bırak
+  const timelineSpan = useMemo(() => {
+    const maxEdge = Math.max(
+      safeEnd,
+      musicClip ? musicEnd : 0,
+      ...effectClips.map((c) => c.endTime)
+    );
+    if (isMotionPhoto) {
+      return Math.min(60, Math.max(10, Math.ceil((maxEdge + 3) / 5) * 5));
+    }
+    return Math.max(baseDuration, maxEdge);
+  }, [baseDuration, effectClips, isMotionPhoto, musicClip, musicEnd, safeEnd]);
+
+  // Geçerli aralık içindeki video parçaları (Segments)
+  const validVideoSplits = useMemo(
+    () =>
+      videoSplits
+        .filter((pt) => pt > safeStart + 0.25 && pt < safeEnd - 0.25)
+        .sort((a, b) => a - b),
+    [safeEnd, safeStart, videoSplits]
+  );
+
+  const videoSegments = useMemo(() => {
+    const pts = [safeStart, ...validVideoSplits, safeEnd];
+    const segs: { index: number; start: number; end: number }[] = [];
+    for (let i = 0; i < pts.length - 1; i++) {
+      segs.push({ index: i, start: pts[i], end: pts[i + 1] });
+    }
+    return segs;
+  }, [safeEnd, safeStart, validVideoSplits]);
+
+  // Geçerli aralık içindeki ses/müzik parçaları (Segments)
+  const validAudioSplits = useMemo(
+    () =>
+      audioSplits
+        .filter((pt) => pt > musicStart + 0.25 && pt < musicEnd - 0.25)
+        .sort((a, b) => a - b),
+    [audioSplits, musicEnd, musicStart]
+  );
+
+  const audioSegments = useMemo(() => {
+    const pts = [musicStart, ...validAudioSplits, musicEnd];
+    const segs: { index: number; start: number; end: number }[] = [];
+    for (let i = 0; i < pts.length - 1; i++) {
+      segs.push({ index: i, start: pts[i], end: pts[i + 1] });
+    }
+    return segs;
+  }, [musicEnd, musicStart, validAudioSplits]);
 
   // Playhead konumunu React state kullanmadan doğrudan DOM style.transform ile 60 FPS güncelle
   const syncPlayheadDom = useCallback(
     (rawTime: number) => {
       currentTimeRef.current = rawTime;
-      const clamped = Math.max(safeStart, Math.min(rawTime, safeEnd));
+      const clamped = Math.max(0, Math.min(rawTime, timelineSpan));
       const trackEl = trackRef.current;
       const playheadEl = playheadRef.current;
       if (trackEl && playheadEl) {
         const trackW = trackEl.clientWidth || 1;
-        const xPx = (clamped / safeDuration) * trackW;
+        const xPx = (clamped / timelineSpan) * trackW;
         playheadEl.style.transform = `translate3d(${xPx.toFixed(2)}px, 0, 0)`;
       }
       if (timeLabelRef.current) {
-        timeLabelRef.current.textContent = formatTimelineTime(clamped - safeStart);
+        const rel = Math.max(0, Math.min(trimmedDuration, clamped - safeStart));
+        timeLabelRef.current.textContent = formatTimelineTime(rel);
       }
     },
-    [playheadRef, safeDuration, safeEnd, safeStart, timeLabelRef, trackRef]
+    [playheadRef, safeStart, timeLabelRef, timelineSpan, trackRef, trimmedDuration]
   );
 
   useEffect(() => {
@@ -184,83 +262,168 @@ export default function VideoTimeline({
     if (!el) return 0;
     const rect = el.getBoundingClientRect();
     const ratio = Math.max(0, Math.min(1, (clientX - rect.left) / (rect.width || 1)));
-    return ratio * safeDuration;
+    return ratio * timelineSpan;
   };
 
-  const getActivePlayheadTime = (): number => {
+  const getActivePlayheadTime = useCallback((): number => {
     const raw = getCurrentTime ? getCurrentTime() : currentTimeRef.current;
-    return Math.max(safeStart, Math.min(safeEnd, raw));
-  };
+    return Math.max(0, Math.min(timelineSpan, raw));
+  }, [getCurrentTime, timelineSpan]);
 
-  const handleSplitAction = () => {
+  // BÖL (SPLIT) İŞLEMİ: Klibin süresini düşürmez, playhead noktasından 2 parçaya ayırır!
+  const handleSplitAction = useCallback(() => {
     const cur = getActivePlayheadTime();
-    if (selectedEffectClipId && onChangeEffectClips) {
+
+    // 1. Seçili Efekt klibi varsa 2 ayrı efekt klibine böl
+    if (selectedTrack === "fx" && selectedEffectClipId && onChangeEffectClips) {
       const target = effectClips.find((c) => c.id === selectedEffectClipId);
-      if (target && cur > target.startTime + 0.2 && cur < target.endTime - 0.2) {
-        const firstHalf: ReelsEffectClip = {
-          ...target,
-          endTime: Number(cur.toFixed(2)),
-        };
-        const secondHalf: ReelsEffectClip = {
-          ...target,
-          id: `fx-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
-          startTime: Number((cur + 0.02).toFixed(2)),
-        };
-        onChangeEffectClips(
-          effectClips.flatMap((c) =>
-            c.id === target.id ? [firstHalf, secondHalf] : [c]
-          )
-        );
-        onSelectEffectClip?.(secondHalf.id);
-        return;
-      }
-    }
-
-    if (selectedTrack === "audio" && musicClip && onChangeMusicTimeline) {
-      if (cur > musicStart + 0.25 && cur < musicEnd - 0.25) {
-        const mid = (musicStart + musicEnd) / 2;
-        if (cur <= mid) {
-          const delta = Math.max(0, cur - musicStart);
-          onChangeMusicTimeline(
-            Number(cur.toFixed(2)),
-            Number(musicEnd.toFixed(2)),
-            Number(((musicClip.startTime || 0) + delta).toFixed(2))
+      if (target) {
+        const splitPt =
+          cur > target.startTime + 0.2 && cur < target.endTime - 0.2
+            ? cur
+            : (target.startTime + target.endTime) / 2;
+        if (splitPt > target.startTime + 0.15 && splitPt < target.endTime - 0.15) {
+          const firstHalf: ReelsEffectClip = {
+            ...target,
+            endTime: Number(splitPt.toFixed(2)),
+          };
+          const secondHalf: ReelsEffectClip = {
+            ...target,
+            id: `fx-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+            startTime: Number(splitPt.toFixed(2)),
+          };
+          onChangeEffectClips(
+            effectClips.flatMap((c) =>
+              c.id === target.id ? [firstHalf, secondHalf] : [c]
+            )
           );
-        } else {
-          onChangeMusicTimeline(
-            Number(musicStart.toFixed(2)),
-            Number(cur.toFixed(2)),
-            musicClip.startTime || 0
-          );
+          onSelectEffectClip?.(secondHalf.id);
+          return;
         }
-        return;
       }
     }
 
-    if (cur > safeStart + 0.25 && cur < safeEnd - 0.25) {
-      const mid = (safeStart + safeEnd) / 2;
-      if (cur <= mid) {
-        onChangeTrim(Number(cur.toFixed(2)), safeEnd);
-      } else {
-        onChangeTrim(safeStart, Number(cur.toFixed(2)));
+    // 2. Seçili Ses/Müzik kanalıysa şarkıyı 2 parçaya ayır (süresi düşmez)
+    if (selectedTrack === "audio" && musicClip) {
+      const splitPt =
+        cur > musicStart + 0.25 && cur < musicEnd - 0.25
+          ? cur
+          : (musicStart + musicEnd) / 2;
+      if (
+        splitPt > musicStart + 0.2 &&
+        splitPt < musicEnd - 0.2 &&
+        !validAudioSplits.some((p) => Math.abs(p - splitPt) < 0.2)
+      ) {
+        const nextSplits = [...validAudioSplits, Number(splitPt.toFixed(2))].sort(
+          (a, b) => a - b
+        );
+        setAudioSplits(nextSplits);
+        setSelectedAudioSegIdx(nextSplits.indexOf(Number(splitPt.toFixed(2))) + 1);
       }
-      syncPlayheadDom(cur);
+      return;
     }
-  };
+
+    // 3. Video / Görsel kanalını 2 parçaya ayır (süresi düşmez!)
+    const splitPt =
+      cur > safeStart + 0.25 && cur < safeEnd - 0.25
+        ? cur
+        : (safeStart + safeEnd) / 2;
+    if (
+      splitPt > safeStart + 0.2 &&
+      splitPt < safeEnd - 0.2 &&
+      !validVideoSplits.some((p) => Math.abs(p - splitPt) < 0.2)
+    ) {
+      const rounded = Number(splitPt.toFixed(2));
+      const nextSplits = [...validVideoSplits, rounded].sort((a, b) => a - b);
+      setVideoSplits(nextSplits);
+      setSelectedTrack("video");
+      setSelectedVideoSegIdx(nextSplits.indexOf(rounded) + 1);
+    }
+  }, [
+    effectClips,
+    getActivePlayheadTime,
+    musicClip,
+    musicEnd,
+    musicStart,
+    onChangeEffectClips,
+    onSelectEffectClip,
+    safeEnd,
+    safeStart,
+    selectedEffectClipId,
+    selectedTrack,
+    validAudioSplits,
+    validVideoSplits,
+  ]);
+
+  // ReelsEditor alt barındaki "Kes" butonu da aynı ikiye bölme fonksiyonunu tetiklesin
+  useEffect(() => {
+    if (splitTriggerRef) {
+      splitTriggerRef.current = handleSplitAction;
+    }
+  }, [handleSplitAction, splitTriggerRef]);
 
   const handleResetAllTrims = () => {
-    onChangeTrim(0, safeDuration);
+    setVideoSplits([]);
+    setAudioSplits([]);
+    setSelectedVideoSegIdx(0);
+    setSelectedAudioSegIdx(0);
+    onChangeTrim(0, isMotionPhoto ? 5 : baseDuration);
     if (musicClip && onChangeMusicTimeline) {
-      onChangeMusicTimeline(0, safeDuration, musicClip.startTime || 0);
+      onChangeMusicTimeline(0, isMotionPhoto ? 5 : baseDuration, musicClip.startTime || 0);
     }
     syncPlayheadDom(0);
     onSeek(0);
   };
 
-  const handleDeleteSelectedFx = () => {
-    if (!selectedEffectClipId || !onChangeEffectClips) return;
-    onChangeEffectClips(effectClips.filter((c) => c.id !== selectedEffectClipId));
-    onSelectEffectClip?.(null);
+  // Seçili parçayı (Efekt veya bölünmüş Video/Ses parçası) silme
+  const handleDeleteSelectedPiece = () => {
+    if (selectedTrack === "fx" && selectedEffectClipId && onChangeEffectClips) {
+      onChangeEffectClips(effectClips.filter((c) => c.id !== selectedEffectClipId));
+      onSelectEffectClip?.(null);
+      return;
+    }
+    if (selectedTrack === "audio" && audioSegments.length > 1 && onChangeMusicTimeline) {
+      const seg = audioSegments[selectedAudioSegIdx] || audioSegments[0];
+      if (seg.index === 0) {
+        const nextStart = seg.end;
+        const delta = Math.max(0, nextStart - musicStart);
+        setAudioSplits(validAudioSplits.slice(1));
+        setSelectedAudioSegIdx(0);
+        onChangeMusicTimeline(
+          Number(nextStart.toFixed(2)),
+          Number(musicEnd.toFixed(2)),
+          Number(((musicClip?.startTime || 0) + delta).toFixed(2))
+        );
+      } else if (seg.index === audioSegments.length - 1) {
+        const nextEnd = seg.start;
+        setAudioSplits(validAudioSplits.slice(0, -1));
+        setSelectedAudioSegIdx(Math.max(0, seg.index - 1));
+        onChangeMusicTimeline(
+          Number(musicStart.toFixed(2)),
+          Number(nextEnd.toFixed(2)),
+          musicClip?.startTime || 0
+        );
+      }
+      return;
+    }
+    if (selectedTrack === "video" && videoSegments.length > 1) {
+      const seg = videoSegments[selectedVideoSegIdx] || videoSegments[0];
+      if (seg.index === 0) {
+        const nextStart = seg.end;
+        setVideoSplits(validVideoSplits.slice(1));
+        setSelectedVideoSegIdx(0);
+        onChangeTrim(Number(nextStart.toFixed(2)), safeEnd);
+        syncPlayheadDom(nextStart);
+        onSeek(nextStart);
+      } else if (seg.index === videoSegments.length - 1) {
+        const nextEnd = seg.start;
+        setVideoSplits(validVideoSplits.slice(0, -1));
+        setSelectedVideoSegIdx(Math.max(0, seg.index - 1));
+        onChangeTrim(safeStart, Number(nextEnd.toFixed(2)));
+        syncPlayheadDom(nextEnd);
+        onSeek(nextEnd);
+      }
+    }
   };
 
   const beginDrag = (e: React.PointerEvent<HTMLElement>, state: DragState) => {
@@ -274,9 +437,9 @@ export default function VideoTimeline({
     setDragState(state);
 
     if (state?.type === "scrub") {
-      const t = Math.max(safeStart, Math.min(safeEnd, clientXToTime(e.clientX)));
+      const t = Math.max(0, Math.min(timelineSpan, clientXToTime(e.clientX)));
       syncPlayheadDom(t);
-      onSeek(t);
+      onSeek(Math.max(safeStart, Math.min(safeEnd, t)));
     }
   };
 
@@ -284,29 +447,102 @@ export default function VideoTimeline({
     if (!dragState) return;
     e.stopPropagation();
     const t = clientXToTime(e.clientX);
+    const maxAllowed = isMotionPhoto ? 60 : baseDuration;
 
-    if (dragState.type === "video-start") {
-      const nextStart = Math.max(0, Math.min(t, safeEnd - 0.25));
-      onChangeTrim(Number(nextStart.toFixed(2)), safeEnd);
-      syncPlayheadDom(nextStart);
-      onSeek(nextStart);
-    } else if (dragState.type === "video-end") {
-      const nextEnd = Math.max(safeStart + 0.25, Math.min(t, safeDuration));
-      onChangeTrim(safeStart, Number(nextEnd.toFixed(2)));
-      syncPlayheadDom(nextEnd);
-      onSeek(nextEnd);
-    } else if (dragState.type === "scrub") {
-      const nextTime = Math.max(safeStart, Math.min(safeEnd, t));
+    if (dragState.type === "scrub") {
+      const nextTime = Math.max(0, Math.min(timelineSpan, t));
       syncPlayheadDom(nextTime);
-      onSeek(nextTime);
-    } else if (
+      onSeek(Math.max(safeStart, Math.min(safeEnd, nextTime)));
+      return;
+    }
+
+    if (
+      dragState.type === "video-start" ||
+      dragState.type === "video-end" ||
+      dragState.type === "video-move"
+    ) {
+      const movedPx = Math.abs(e.clientX - dragState.initialClientX);
+      if (movedPx > 3 && !dragState.hasMoved) {
+        dragState.hasMoved = true;
+      }
+      const delta = t - dragState.initialPointerTime;
+      const clipLen = Math.max(0.5, dragState.initialEnd - dragState.initialStart);
+
+      if (dragState.type === "video-start") {
+        const maxStart =
+          validVideoSplits.length > 0
+            ? validVideoSplits[0] - 0.25
+            : dragState.initialEnd - 0.5;
+        const nextStart = Math.max(0, Math.min(maxStart, dragState.initialStart + delta));
+        onChangeTrim(Number(nextStart.toFixed(2)), dragState.initialEnd);
+        syncPlayheadDom(nextStart);
+        onSeek(nextStart);
+      } else if (dragState.type === "video-end") {
+        const minEnd =
+          validVideoSplits.length > 0
+            ? validVideoSplits[validVideoSplits.length - 1] + 0.25
+            : dragState.initialStart + 0.5;
+        const nextEnd = Math.max(
+          minEnd,
+          Math.min(maxAllowed, dragState.initialEnd + delta)
+        );
+        onChangeTrim(dragState.initialStart, Number(nextEnd.toFixed(2)));
+        syncPlayheadDom(nextEnd);
+        onSeek(nextEnd);
+      } else if (dragState.type === "video-move" && dragState.hasMoved) {
+        const nextStart = Math.max(
+          0,
+          Math.min(maxAllowed - clipLen, dragState.initialStart + delta)
+        );
+        const shift = nextStart - dragState.initialStart;
+        if (validVideoSplits.length > 0) {
+          setVideoSplits(validVideoSplits.map((pt) => Number((pt + shift).toFixed(2))));
+        }
+        onChangeTrim(
+          Number(nextStart.toFixed(2)),
+          Number((nextStart + clipLen).toFixed(2))
+        );
+        syncPlayheadDom(nextStart);
+      }
+      return;
+    }
+
+    if (dragState.type === "video-split-handle") {
+      const delta = t - dragState.initialPointerTime;
+      const prevBound =
+        dragState.splitIndex > 0
+          ? validVideoSplits[dragState.splitIndex - 1] + 0.25
+          : safeStart + 0.25;
+      const nextBound =
+        dragState.splitIndex < validVideoSplits.length - 1
+          ? validVideoSplits[dragState.splitIndex + 1] - 0.25
+          : safeEnd - 0.25;
+      const nextSplit = Math.max(
+        prevBound,
+        Math.min(nextBound, dragState.initialSplitTime + delta)
+      );
+      setVideoSplits(
+        validVideoSplits.map((pt, idx) =>
+          idx === dragState.splitIndex ? Number(nextSplit.toFixed(2)) : pt
+        )
+      );
+      syncPlayheadDom(nextSplit);
+      onSeek(nextSplit);
+      return;
+    }
+
+    if (
       (dragState.type === "fx-move" ||
         dragState.type === "fx-start" ||
         dragState.type === "fx-end") &&
       onChangeEffectClips
     ) {
+      const movedPx = Math.abs(e.clientX - dragState.initialClientX);
+      if (movedPx > 3 && !dragState.hasMoved) {
+        dragState.hasMoved = true;
+      }
       const delta = t - dragState.initialPointerTime;
-      const clipLen = Math.max(0.2, dragState.initialEnd - dragState.initialStart);
+      const clipLen = Math.max(0.25, dragState.initialEnd - dragState.initialStart);
 
       onChangeEffectClips(
         effectClips.map((c) => {
@@ -314,7 +550,7 @@ export default function VideoTimeline({
           if (dragState.type === "fx-move") {
             const nextStart = Math.max(
               0,
-              Math.min(safeDuration - clipLen, dragState.initialStart + delta)
+              Math.min(maxAllowed - clipLen, dragState.initialStart + delta)
             );
             return {
               ...c,
@@ -325,40 +561,55 @@ export default function VideoTimeline({
           if (dragState.type === "fx-start") {
             const nextStart = Math.max(
               0,
-              Math.min(dragState.initialEnd - 0.2, dragState.initialStart + delta)
+              Math.min(dragState.initialEnd - 0.25, dragState.initialStart + delta)
             );
             return { ...c, startTime: Number(nextStart.toFixed(2)) };
           }
           const nextEnd = Math.max(
-            dragState.initialStart + 0.2,
-            Math.min(safeDuration, dragState.initialEnd + delta)
+            dragState.initialStart + 0.25,
+            Math.min(maxAllowed, dragState.initialEnd + delta)
           );
           return { ...c, endTime: Number(nextEnd.toFixed(2)) };
         })
       );
-    } else if (
+      return;
+    }
+
+    if (
       (dragState.type === "audio-move" ||
         dragState.type === "audio-start" ||
         dragState.type === "audio-end") &&
       onChangeMusicTimeline
     ) {
+      const movedPx = Math.abs(e.clientX - dragState.initialClientX);
+      if (movedPx > 3 && !dragState.hasMoved) {
+        dragState.hasMoved = true;
+      }
       const delta = t - dragState.initialPointerTime;
       const clipLen = Math.max(0.3, dragState.initialEnd - dragState.initialStart);
 
       if (dragState.type === "audio-move") {
         const nextStart = Math.max(
           0,
-          Math.min(safeDuration - clipLen, dragState.initialStart + delta)
+          Math.min(maxAllowed - clipLen, dragState.initialStart + delta)
         );
+        const shift = nextStart - dragState.initialStart;
+        if (validAudioSplits.length > 0) {
+          setAudioSplits(validAudioSplits.map((pt) => Number((pt + shift).toFixed(2))));
+        }
         onChangeMusicTimeline(
           Number(nextStart.toFixed(2)),
           Number((nextStart + clipLen).toFixed(2)),
           dragState.initialSongOffset
         );
       } else if (dragState.type === "audio-start") {
+        const maxStart =
+          validAudioSplits.length > 0
+            ? validAudioSplits[0] - 0.25
+            : dragState.initialEnd - 0.3;
         const nextStart = Math.max(
           0,
-          Math.min(dragState.initialEnd - 0.3, dragState.initialStart + delta)
+          Math.min(maxStart, dragState.initialStart + delta)
         );
         const startShift = nextStart - dragState.initialStart;
         onChangeMusicTimeline(
@@ -367,9 +618,13 @@ export default function VideoTimeline({
           Number(Math.max(0, dragState.initialSongOffset + startShift).toFixed(2))
         );
       } else {
+        const minEnd =
+          validAudioSplits.length > 0
+            ? validAudioSplits[validAudioSplits.length - 1] + 0.25
+            : dragState.initialStart + 0.3;
         const nextEnd = Math.max(
-          dragState.initialStart + 0.3,
-          Math.min(safeDuration, dragState.initialEnd + delta)
+          minEnd,
+          Math.min(maxAllowed, dragState.initialEnd + delta)
         );
         onChangeMusicTimeline(
           Number(dragState.initialStart.toFixed(2)),
@@ -377,23 +632,64 @@ export default function VideoTimeline({
           dragState.initialSongOffset
         );
       }
+      return;
+    }
+
+    if (dragState.type === "audio-split-handle") {
+      const delta = t - dragState.initialPointerTime;
+      const prevBound =
+        dragState.splitIndex > 0
+          ? validAudioSplits[dragState.splitIndex - 1] + 0.25
+          : musicStart + 0.25;
+      const nextBound =
+        dragState.splitIndex < validAudioSplits.length - 1
+          ? validAudioSplits[dragState.splitIndex + 1] - 0.25
+          : musicEnd - 0.25;
+      const nextSplit = Math.max(
+        prevBound,
+        Math.min(nextBound, dragState.initialSplitTime + delta)
+      );
+      setAudioSplits(
+        validAudioSplits.map((pt, idx) =>
+          idx === dragState.splitIndex ? Number(nextSplit.toFixed(2)) : pt
+        )
+      );
+      syncPlayheadDom(nextSplit);
     }
   };
 
   const handlePointerUp = (e: React.PointerEvent<HTMLDivElement>) => {
     if (!dragState) return;
     e.stopPropagation();
+
+    // Eğer kullanıcı klibi sürüklemeden sadece dokunduysa, playhead'i o noktaya taşı!
+    if (
+      (dragState.type === "video-move" ||
+        dragState.type === "audio-move" ||
+        dragState.type === "fx-move") &&
+      !dragState.hasMoved
+    ) {
+      const clickTime = Math.max(safeStart, Math.min(safeEnd, clientXToTime(e.clientX)));
+      syncPlayheadDom(clickTime);
+      onSeek(clickTime);
+    }
+
     try {
       e.currentTarget.releasePointerCapture(e.pointerId);
     } catch {}
     setDragState(null);
   };
 
+  const canDeleteSelectedPiece =
+    (selectedTrack === "fx" && Boolean(selectedEffectClipId)) ||
+    (selectedTrack === "video" && videoSegments.length > 1) ||
+    (selectedTrack === "audio" && audioSegments.length > 1);
+
   // Zaman cetveli etiketleri (1sn • 3sn • 5sn)
   const tickMarks = [
-    Math.round(safeDuration * 0.2),
-    Math.round(safeDuration * 0.5),
-    Math.round(safeDuration * 0.8),
+    Math.max(1, Math.round(timelineSpan * 0.2)),
+    Math.max(2, Math.round(timelineSpan * 0.5)),
+    Math.max(3, Math.round(timelineSpan * 0.8)),
   ];
 
   return (
@@ -430,25 +726,25 @@ export default function VideoTimeline({
             <Undo2 className="w-4 h-4" />
           </button>
 
-          {selectedEffectClipId ? (
+          {canDeleteSelectedPiece && (
             <button
               type="button"
-              onClick={handleDeleteSelectedFx}
-              title="Efekti Sil"
+              onClick={handleDeleteSelectedPiece}
+              title="Seçili Parçayı Sil"
               className="w-10 h-10 rounded-full bg-red-500/20 hover:bg-red-500/30 active:scale-90 transition-all flex items-center justify-center text-red-300"
             >
               <Trash2 className="w-4 h-4" />
             </button>
-          ) : (
-            <button
-              type="button"
-              onClick={handleSplitAction}
-              title="Böl / Kırp"
-              className="w-10 h-10 rounded-full bg-[#1c1c1e] hover:bg-[#28282c] active:scale-90 transition-all flex items-center justify-center text-zinc-300"
-            >
-              <Scissors className="w-4 h-4" />
-            </button>
           )}
+
+          <button
+            type="button"
+            onClick={handleSplitAction}
+            title="İki Parçaya Böl"
+            className="w-10 h-10 rounded-full bg-[#1c1c1e] hover:bg-[#28282c] active:scale-90 transition-all flex items-center justify-center text-zinc-200"
+          >
+            <Scissors className="w-4 h-4" />
+          </button>
         </div>
       </div>
 
@@ -482,8 +778,6 @@ export default function VideoTimeline({
           <div
             ref={trackRef}
             onPointerDown={(e) => {
-              setSelectedTrack("video");
-              onSelectEffectClip?.(null);
               beginDrag(e, { type: "scrub" });
             }}
             onPointerMove={handlePointerMove}
@@ -491,53 +785,111 @@ export default function VideoTimeline({
             onPointerCancel={handlePointerUp}
             className="relative flex-1 flex flex-col gap-1.5 cursor-pointer touch-none pr-3"
           >
-            {/* Üst Saniye Cetveli (1sn • 3sn) */}
-            <div className="h-5 flex items-center justify-evenly text-[11px] font-medium text-zinc-400 pointer-events-none select-none">
-              <span>{tickMarks[0] || 1}sn</span>
+            {/* Üst Saniye Cetveli (Dokunarak/Sürükleyerek Playhead Taşınır) */}
+            <div className="h-5 flex items-center justify-evenly text-[11px] font-medium text-zinc-400 select-none">
+              <span>{tickMarks[0]}sn</span>
               <span className="text-zinc-600">•</span>
-              <span>{tickMarks[1] || 3}sn</span>
+              <span>{tickMarks[1]}sn</span>
               <span className="text-zinc-600">•</span>
-              <span>{tickMarks[2] || 5}sn</span>
+              <span>{tickMarks[2]}sn</span>
             </div>
 
-            {/* 1. KANAL: VİDEO FİLM ŞERİDİ */}
+            {/* 1. KANAL: VİDEO / GÖRSEL FİLM ŞERİDİ (Bölünebilir, Uzatılıp Kısaltılabilir, Sağa/Sola Kaydırılabilir) */}
             <div
               onClick={() => setSelectedTrack("video")}
               className="relative h-14 w-full rounded-md overflow-visible bg-[#16171b]"
             >
-              <div className="absolute inset-0 rounded-md overflow-hidden flex w-full h-full pointer-events-none">
-                {thumbnails.length > 0 ? (
-                  thumbnails.map((src, idx) => (
-                    <img
-                      key={idx}
-                      src={src}
-                      alt=""
-                      draggable={false}
-                      className="h-full flex-1 object-cover select-none"
-                    />
-                  ))
-                ) : (
-                  <div className="w-full h-full bg-zinc-800/70" />
-                )}
+              {/* Parçalar (Bölündüğünde 2 veya daha fazla bağımsız parça olarak görünür) */}
+              {videoSegments.map((seg) => {
+                const segStartPct = (seg.start / timelineSpan) * 100;
+                const segEndPct = (seg.end / timelineSpan) * 100;
+                const isSelectedSeg =
+                  selectedTrack === "video" && selectedVideoSegIdx === seg.index;
 
-                {/* Kırpma Dışı Karartmalar */}
-                <div
-                  className="absolute inset-y-0 left-0 bg-black/75"
-                  style={{ width: `${startPct}%` }}
-                />
-                <div
-                  className="absolute inset-y-0 right-0 bg-black/75"
-                  style={{ width: `${Math.max(0, 100 - endPct)}%` }}
-                />
-              </div>
+                return (
+                  <div
+                    key={`vseg-${seg.index}`}
+                    onPointerDown={(e) => {
+                      setSelectedTrack("video");
+                      setSelectedVideoSegIdx(seg.index);
+                      onSelectEffectClip?.(null);
+                      beginDrag(e, {
+                        type: "video-move",
+                        initialPointerTime: clientXToTime(e.clientX),
+                        initialStart: safeStart,
+                        initialEnd: safeEnd,
+                        initialClientX: e.clientX,
+                        hasMoved: false,
+                      });
+                    }}
+                    style={{
+                      left: `${segStartPct}%`,
+                      width: `${Math.max(2, segEndPct - segStartPct)}%`,
+                    }}
+                    className={`absolute inset-y-0 rounded-md overflow-hidden cursor-grab active:cursor-grabbing border-2 transition-colors ${
+                      isSelectedSeg
+                        ? "border-white z-10 shadow-md"
+                        : "border-white/30 z-0"
+                    }`}
+                  >
+                    <div className="w-full h-full flex pointer-events-none">
+                      {thumbnails.length > 0 ? (
+                        thumbnails.map((src, idx) => (
+                          <img
+                            key={idx}
+                            src={src}
+                            alt=""
+                            draggable={false}
+                            className="h-full flex-1 object-cover select-none"
+                          />
+                        ))
+                      ) : (
+                        <div className="w-full h-full bg-zinc-800/70" />
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
 
-              {/* Sol Beyaz Hap Tutamaç (Görseldeki Gibi) */}
+              {/* Bölme (Split) Noktası Ayırıcı Tutamaçları */}
+              {validVideoSplits.map((splitPt, idx) => {
+                const splitPct = (splitPt / timelineSpan) * 100;
+                return (
+                  <div
+                    key={`vsplit-${idx}`}
+                    onPointerDown={(e) => {
+                      setSelectedTrack("video");
+                      setSelectedVideoSegIdx(idx + 1);
+                      beginDrag(e, {
+                        type: "video-split-handle",
+                        splitIndex: idx,
+                        initialPointerTime: clientXToTime(e.clientX),
+                        initialSplitTime: splitPt,
+                      });
+                    }}
+                    style={{ left: `calc(${splitPct}% - 6px)` }}
+                    className="absolute inset-y-0 w-3 z-20 flex items-center justify-center cursor-ew-resize touch-none"
+                  >
+                    <div className="w-1.5 h-full bg-black border-x border-white/80 shadow" />
+                  </div>
+                );
+              })}
+
+              {/* Sol Beyaz Hap Tutamaç (Kısalt / Uzat) */}
               <div
                 onPointerDown={(e) => {
                   setSelectedTrack("video");
-                  beginDrag(e, { type: "video-start" });
+                  setSelectedVideoSegIdx(0);
+                  beginDrag(e, {
+                    type: "video-start",
+                    initialPointerTime: clientXToTime(e.clientX),
+                    initialStart: safeStart,
+                    initialEnd: safeEnd,
+                    initialClientX: e.clientX,
+                    hasMoved: true,
+                  });
                 }}
-                style={{ left: `calc(${startPct}% - 10px)` }}
+                style={{ left: `calc(${(safeStart / timelineSpan) * 100}% - 10px)` }}
                 className="absolute inset-y-0 w-5 z-20 flex items-center justify-center cursor-ew-resize touch-none"
               >
                 <div className="w-4 h-7 rounded-full bg-white text-black flex items-center justify-center shadow-lg">
@@ -546,13 +898,21 @@ export default function VideoTimeline({
                 </div>
               </div>
 
-              {/* Sağ Beyaz Hap Tutamaç */}
+              {/* Sağ Beyaz Hap Tutamaç (Uzat / Kısalt) */}
               <div
                 onPointerDown={(e) => {
                   setSelectedTrack("video");
-                  beginDrag(e, { type: "video-end" });
+                  setSelectedVideoSegIdx(videoSegments.length - 1);
+                  beginDrag(e, {
+                    type: "video-end",
+                    initialPointerTime: clientXToTime(e.clientX),
+                    initialStart: safeStart,
+                    initialEnd: safeEnd,
+                    initialClientX: e.clientX,
+                    hasMoved: true,
+                  });
                 }}
-                style={{ left: `calc(${endPct}% - 10px)` }}
+                style={{ left: `calc(${(safeEnd / timelineSpan) * 100}% - 10px)` }}
                 className="absolute inset-y-0 w-5 z-20 flex items-center justify-center cursor-ew-resize touch-none"
               >
                 <div className="w-4 h-7 rounded-full bg-white text-black flex items-center justify-center shadow-lg">
@@ -562,14 +922,14 @@ export default function VideoTimeline({
               </div>
             </div>
 
-            {/* 2. KANAL: SES / MÜZİK ŞERİDİ ("+ Ses ekle" veya Sürüklenebilir Şarkı) */}
+            {/* 2. KANAL: SES / MÜZİK ŞERİDİ ("+ Ses ekle" veya Sürüklenebilir / Uzatılabilir / Bölünebilir Şarkı) */}
             <div
               onClick={(e) => {
                 e.stopPropagation();
                 setSelectedTrack("audio");
                 onSelectEffectClip?.(null);
               }}
-              className="relative h-9 w-full rounded-md bg-[#16171b] overflow-hidden flex items-center"
+              className="relative h-9 w-full rounded-md bg-[#16171b] overflow-visible flex items-center"
             >
               {!musicClip ? (
                 <button
@@ -585,78 +945,133 @@ export default function VideoTimeline({
                   <span>Ses ekle</span>
                 </button>
               ) : (
-                <div
-                  onPointerDown={(e) => {
-                    setSelectedTrack("audio");
-                    onSelectEffectClip?.(null);
-                    beginDrag(e, {
-                      type: "audio-move",
-                      initialPointerTime: clientXToTime(e.clientX),
-                      initialStart: musicStart,
-                      initialEnd: musicEnd,
-                      initialSongOffset: musicClip.startTime || 0,
-                    });
-                  }}
-                  style={{
-                    left: `${musicStartPct}%`,
-                    width: `${Math.max(5, musicEndPct - musicStartPct)}%`,
-                  }}
-                  className={`absolute inset-y-0.5 rounded-md bg-purple-600/35 border flex items-center justify-between px-3 cursor-grab active:cursor-grabbing z-10 ${
-                    selectedTrack === "audio"
-                      ? "border-purple-300 ring-1 ring-purple-300/50"
-                      : "border-purple-400/50"
-                  }`}
-                >
+                <>
+                  {audioSegments.map((seg) => {
+                    const segStartPct = (seg.start / timelineSpan) * 100;
+                    const segEndPct = (seg.end / timelineSpan) * 100;
+                    const isSelectedAudioSeg =
+                      selectedTrack === "audio" && selectedAudioSegIdx === seg.index;
+
+                    return (
+                      <div
+                        key={`aseg-${seg.index}`}
+                        onPointerDown={(e) => {
+                          setSelectedTrack("audio");
+                          setSelectedAudioSegIdx(seg.index);
+                          onSelectEffectClip?.(null);
+                          beginDrag(e, {
+                            type: "audio-move",
+                            initialPointerTime: clientXToTime(e.clientX),
+                            initialStart: musicStart,
+                            initialEnd: musicEnd,
+                            initialSongOffset: musicClip.startTime || 0,
+                            initialClientX: e.clientX,
+                            hasMoved: false,
+                          });
+                        }}
+                        style={{
+                          left: `${segStartPct}%`,
+                          width: `${Math.max(4, segEndPct - segStartPct)}%`,
+                        }}
+                        className={`absolute inset-y-0.5 rounded-md bg-purple-600/40 border flex items-center justify-between px-3 cursor-grab active:cursor-grabbing ${
+                          isSelectedAudioSeg
+                            ? "border-white ring-1 ring-white/50 z-10"
+                            : "border-purple-400/60 z-0"
+                        }`}
+                      >
+                        <div className="flex items-center gap-1.5 overflow-hidden pointer-events-none w-full justify-between px-1">
+                          <div className="flex items-center gap-1.5 overflow-hidden">
+                            <Music className="w-3 h-3 text-purple-200 shrink-0" />
+                            <span className="text-xs font-semibold text-purple-100 truncate">
+                              {musicClip.title}
+                            </span>
+                          </div>
+                          {seg.index === 0 && (
+                            <span className="text-[10px] font-medium text-purple-200/80 tabular-nums shrink-0">
+                              +{Math.round(musicClip.startTime || 0)}s
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })}
+
+                  {/* Ses Bölme Noktası Tutamaçları */}
+                  {validAudioSplits.map((splitPt, idx) => {
+                    const splitPct = (splitPt / timelineSpan) * 100;
+                    return (
+                      <div
+                        key={`asplit-${idx}`}
+                        onPointerDown={(e) => {
+                          setSelectedTrack("audio");
+                          setSelectedAudioSegIdx(idx + 1);
+                          beginDrag(e, {
+                            type: "audio-split-handle",
+                            splitIndex: idx,
+                            initialPointerTime: clientXToTime(e.clientX),
+                            initialSplitTime: splitPt,
+                          });
+                        }}
+                        style={{ left: `calc(${splitPct}% - 6px)` }}
+                        className="absolute inset-y-0 w-3 z-20 flex items-center justify-center cursor-ew-resize touch-none"
+                      >
+                        <div className="w-1.5 h-full bg-black border-x border-purple-200 shadow" />
+                      </div>
+                    );
+                  })}
+
+                  {/* Sol Ses Uzatma/Kısaltma Hap Tutamacı */}
                   <div
                     onPointerDown={(e) => {
                       setSelectedTrack("audio");
+                      setSelectedAudioSegIdx(0);
                       beginDrag(e, {
                         type: "audio-start",
                         initialPointerTime: clientXToTime(e.clientX),
                         initialStart: musicStart,
                         initialEnd: musicEnd,
                         initialSongOffset: musicClip.startTime || 0,
+                        initialClientX: e.clientX,
+                        hasMoved: true,
                       });
                     }}
-                    className="absolute inset-y-0 left-0 w-3 bg-white/40 hover:bg-white rounded-l cursor-ew-resize z-20"
-                  />
-
-                  <div className="flex items-center gap-1.5 overflow-hidden pointer-events-none w-full justify-between px-1">
-                    <div className="flex items-center gap-1.5 overflow-hidden">
-                      <Music className="w-3 h-3 text-purple-200 shrink-0" />
-                      <span className="text-xs font-semibold text-purple-100 truncate">
-                        {musicClip.title}
-                      </span>
-                    </div>
-                    <span className="text-[10px] font-medium text-purple-200/80 tabular-nums shrink-0">
-                      +{Math.round(musicClip.startTime || 0)}s
-                    </span>
+                    style={{ left: `calc(${(musicStart / timelineSpan) * 100}% - 8px)` }}
+                    className="absolute inset-y-0 w-4 z-20 flex items-center justify-center cursor-ew-resize touch-none"
+                  >
+                    <div className="w-2.5 h-6 rounded-full bg-white shadow-md" />
                   </div>
 
+                  {/* Sağ Ses Uzatma/Kısaltma Hap Tutamacı */}
                   <div
                     onPointerDown={(e) => {
                       setSelectedTrack("audio");
+                      setSelectedAudioSegIdx(audioSegments.length - 1);
                       beginDrag(e, {
                         type: "audio-end",
                         initialPointerTime: clientXToTime(e.clientX),
                         initialStart: musicStart,
                         initialEnd: musicEnd,
                         initialSongOffset: musicClip.startTime || 0,
+                        initialClientX: e.clientX,
+                        hasMoved: true,
                       });
                     }}
-                    className="absolute inset-y-0 right-0 w-3 bg-white/40 hover:bg-white rounded-r cursor-ew-resize z-20"
-                  />
-                </div>
+                    style={{ left: `calc(${(musicEnd / timelineSpan) * 100}% - 8px)` }}
+                    className="absolute inset-y-0 w-4 z-20 flex items-center justify-center cursor-ew-resize touch-none"
+                  >
+                    <div className="w-2.5 h-6 rounded-full bg-white shadow-md" />
+                  </div>
+                </>
               )}
             </div>
 
-            {/* 3. KANAL: EFEKT ŞERİDİ ("+ Efekt ekle" veya Sürüklenebilir FX Klipleri) */}
+            {/* 3. KANAL: EFEKT ŞERİDİ ("+ Efekt ekle" veya Sürüklenebilir / Uzatılabilir FX Klipleri) */}
             <div
               onClick={(e) => {
                 e.stopPropagation();
                 setSelectedTrack("fx");
               }}
-              className="relative h-9 w-full rounded-md bg-[#16171b] overflow-hidden flex items-center"
+              className="relative h-9 w-full rounded-md bg-[#16171b] overflow-visible flex items-center"
             >
               {effectClips.length === 0 ? (
                 <button
@@ -675,13 +1090,13 @@ export default function VideoTimeline({
               ) : (
                 effectClips.map((clip) => {
                   const preset = REELS_EFFECT_PRESETS.find((p) => p.id === clip.effect);
-                  const cStartPct = (Math.max(0, clip.startTime) / safeDuration) * 100;
+                  const cStartPct = (Math.max(0, clip.startTime) / timelineSpan) * 100;
                   const cEndPct =
                     (Math.min(
-                      safeDuration,
-                      Math.max(clip.startTime + 0.15, clip.endTime)
+                      timelineSpan,
+                      Math.max(clip.startTime + 0.2, clip.endTime)
                     ) /
-                      safeDuration) *
+                      timelineSpan) *
                     100;
                   const isSelected = selectedEffectClipId === clip.id;
                   const color = preset?.color || "#ec4899";
@@ -698,12 +1113,14 @@ export default function VideoTimeline({
                           initialPointerTime: clientXToTime(e.clientX),
                           initialStart: clip.startTime,
                           initialEnd: clip.endTime,
+                          initialClientX: e.clientX,
+                          hasMoved: false,
                         });
                       }}
                       style={{
                         left: `${cStartPct}%`,
                         width: `${Math.max(5, cEndPct - cStartPct)}%`,
-                        backgroundColor: `${color}38`,
+                        backgroundColor: `${color}40`,
                         borderColor: isSelected ? "#ffffff" : color,
                       }}
                       className={`absolute inset-y-0.5 rounded-md border flex items-center justify-between px-2.5 cursor-grab active:cursor-grabbing z-10 select-none ${
@@ -720,10 +1137,14 @@ export default function VideoTimeline({
                             initialPointerTime: clientXToTime(e.clientX),
                             initialStart: clip.startTime,
                             initialEnd: clip.endTime,
+                            initialClientX: e.clientX,
+                            hasMoved: true,
                           });
                         }}
-                        className="absolute inset-y-0 left-0 w-3 bg-white/40 hover:bg-white rounded-l cursor-ew-resize z-20"
-                      />
+                        className="absolute inset-y-0 -left-1.5 w-4 flex items-center justify-center cursor-ew-resize z-20"
+                      >
+                        <div className="w-2 h-5 rounded-full bg-white shadow" />
+                      </div>
 
                       <div className="flex items-center gap-1.5 overflow-hidden pointer-events-none mx-auto">
                         <Sparkles className="w-3 h-3 text-white shrink-0" />
@@ -742,10 +1163,14 @@ export default function VideoTimeline({
                             initialPointerTime: clientXToTime(e.clientX),
                             initialStart: clip.startTime,
                             initialEnd: clip.endTime,
+                            initialClientX: e.clientX,
+                            hasMoved: true,
                           });
                         }}
-                        className="absolute inset-y-0 right-0 w-3 bg-white/40 hover:bg-white rounded-r cursor-ew-resize z-20"
-                      />
+                        className="absolute inset-y-0 -right-1.5 w-4 flex items-center justify-center cursor-ew-resize z-20"
+                      >
+                        <div className="w-2 h-5 rounded-full bg-white shadow" />
+                      </div>
                     </div>
                   );
                 })
@@ -771,5 +1196,6 @@ export default function VideoTimeline({
   );
 }
 // [END] CREATED BY Bedirhan
+
 
 

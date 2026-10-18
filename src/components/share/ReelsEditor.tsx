@@ -2,7 +2,7 @@
 // [MODIFIED BY Bedirhan]
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useRef, useState } from "react";
 import {
   Scissors,
   Sparkles,
@@ -24,7 +24,7 @@ import {
   StoryAudioMeta,
   VideoState,
 } from "@/lib/canvas-editor";
-import VideoTimeline, { formatTimelineTime } from "./VideoTimeline";
+import VideoTimeline from "./VideoTimeline";
 
 export interface ReelsEditorProps {
   videoState: VideoState;
@@ -86,60 +86,27 @@ export default function ReelsEditor({
   const playheadRef = useRef<HTMLDivElement | null>(null);
   const trackRef = useRef<HTMLDivElement | null>(null);
   const timeLabelRef = useRef<HTMLSpanElement | null>(null);
-  const currentTimeRef = useRef<number>(videoState.currentTime);
+  const splitTriggerRef = useRef<(() => void) | null>(null);
 
-  const safeDuration = Math.max(0.1, Math.min(videoState.duration || 0.1, 60));
+  const safeDuration = Math.max(
+    0.5,
+    Math.min(
+      videoState.duration || 0.5,
+      60
+    )
+  );
   const safeStart = Math.max(0, Math.min(videoState.trimStart, safeDuration - 0.1));
   const safeEnd = Math.max(
     safeStart + 0.1,
     Math.min(videoState.trimEnd || safeDuration, safeDuration)
   );
 
-  useEffect(() => {
-    const updateScrubberTransform = () => {
-      const rawTime = getCurrentTime ? getCurrentTime() : currentTimeRef.current;
-      currentTimeRef.current = rawTime;
-      const clamped = Math.max(safeStart, Math.min(rawTime, safeEnd));
-      const trackEl = trackRef.current;
-      const playheadEl = playheadRef.current;
-
-      if (trackEl && playheadEl) {
-        const trackW = trackEl.clientWidth || 1;
-        const xPx = (clamped / safeDuration) * trackW;
-        playheadEl.style.transform = `translate3d(${xPx.toFixed(2)}px, 0, 0)`;
-      }
-      if (timeLabelRef.current) {
-        timeLabelRef.current.textContent = formatTimelineTime(clamped - safeStart);
-      }
-    };
-
-    updateScrubberTransform();
-
-    if (!videoState.isPlaying) return;
-    let rafId: number | null = null;
-    const tick = () => {
-      updateScrubberTransform();
-      rafId = requestAnimationFrame(tick);
-    };
-    rafId = requestAnimationFrame(tick);
-
-    return () => {
-      if (rafId !== null) cancelAnimationFrame(rafId);
-    };
-  }, [
-    getCurrentTime,
-    safeDuration,
-    safeEnd,
-    safeStart,
-    videoState.isPlaying,
-  ]);
-
   const toggleStrip = (strip: ActiveToolStrip) => {
     setActiveStrip((prev) => (prev === strip ? "none" : strip));
   };
 
   const getPlayheadTime = () => {
-    const raw = getCurrentTime ? getCurrentTime() : currentTimeRef.current;
+    const raw = getCurrentTime ? getCurrentTime() : videoState.currentTime;
     return Math.max(safeStart, Math.min(safeEnd, raw));
   };
 
@@ -199,38 +166,8 @@ export default function ReelsEditor({
   };
 
   const handleSplitAtPlayhead = () => {
-    const cur = getPlayheadTime();
-    if (selectedEffectClip && onChangeEffectClips) {
-      if (
-        cur > selectedEffectClip.startTime + 0.2 &&
-        cur < selectedEffectClip.endTime - 0.2
-      ) {
-        const leftClip: ReelsEffectClip = {
-          ...selectedEffectClip,
-          endTime: Number(cur.toFixed(2)),
-        };
-        const rightClip: ReelsEffectClip = {
-          ...selectedEffectClip,
-          id: `fx-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
-          startTime: Number((cur + 0.02).toFixed(2)),
-        };
-        onChangeEffectClips(
-          effectClips.flatMap((c) =>
-            c.id === selectedEffectClip.id ? [leftClip, rightClip] : [c]
-          )
-        );
-        setSelectedEffectClipId(rightClip.id);
-        return;
-      }
-    }
-
-    if (cur > safeStart + 0.25 && cur < safeEnd - 0.25) {
-      const mid = (safeStart + safeEnd) / 2;
-      if (cur <= mid) {
-        onChangeTrim(Number(cur.toFixed(2)), safeEnd);
-      } else {
-        onChangeTrim(safeStart, Number(cur.toFixed(2)));
-      }
+    if (splitTriggerRef.current) {
+      splitTriggerRef.current();
     }
   };
 
@@ -260,12 +197,14 @@ export default function ReelsEditor({
         trimEnd={videoState.trimEnd}
         currentTime={videoState.currentTime}
         isPlaying={videoState.isPlaying}
+        isMotionPhoto={videoState.isMotionPhoto}
         thumbnails={thumbnails}
         muted={videoState.muted || effectiveVolume === 0}
         getCurrentTime={getCurrentTime}
         playheadRef={playheadRef}
         trackRef={trackRef}
         timeLabelRef={timeLabelRef}
+        splitTriggerRef={splitTriggerRef}
         effectClips={effectClips}
         selectedEffectClipId={selectedEffectClipId}
         onSelectEffectClip={(id) => {

@@ -476,19 +476,24 @@ export class MediaLayer extends BaseLayer {
   }
 
   public setTrim(start: number, end: number): void {
+    if (this.isMotionPhoto) {
+      const clampedStart = Math.max(0, Math.min(start, 59.5));
+      const clampedEnd = Math.max(clampedStart + 0.5, Math.min(end, 60));
+      this.trimStart = clampedStart;
+      this.trimEnd = clampedEnd;
+      this.media.duration = Math.max(5, clampedEnd);
+      if (this.virtualTime < this.trimStart || this.virtualTime > this.trimEnd) {
+        this.virtualTime = this.trimStart;
+      }
+      return;
+    }
+
     const dur = this.getDuration();
     const maxEnd = dur > 0 ? dur : Math.max(end, start + 0.1);
     const clampedStart = Math.max(0, Math.min(start, maxEnd - 0.1));
     const clampedEnd = Math.max(clampedStart + 0.1, Math.min(end, maxEnd, clampedStart + 60));
     this.trimStart = clampedStart;
     this.trimEnd = clampedEnd;
-
-    if (this.isMotionPhoto) {
-      if (this.virtualTime < this.trimStart || this.virtualTime > this.trimEnd) {
-        this.virtualTime = this.trimStart;
-      }
-      return;
-    }
 
     const video = this.getVideoElement();
     if (video) {
