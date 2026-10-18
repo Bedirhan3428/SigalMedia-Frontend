@@ -103,15 +103,18 @@ export default function ChatRoomPage() {
   const [peerTyping, setPeerTyping] = useState(false);
 
   const mainScrollRef = useRef<HTMLElement | null>(null);
+  const listContainerRef = useRef<HTMLDivElement | null>(null);
   const bottomRef = useRef<HTMLDivElement | null>(null);
   const inputRef = useRef<HTMLTextAreaElement | null>(null);
   const typingTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const isLocalTypingRef = useRef<boolean>(false);
   const initialHistoryLoadedRef = useRef<boolean>(false);
   const initialMessageIdsRef = useRef<Set<string>>(new Set());
-  // Optimistic ID -> Gerçek RTDB ID eşleşmesini tutarak mesaj onaylandığında DOM düğümünün yeniden mount olmasını engeller
   const stableKeyMapRef = useRef<Map<string, string>>(new Map());
   const lastSendTimestampRef = useRef<number>(0);
+  // Mobil klavye IME/otomatik düzeltme tamponunun gönderimden hemen sonra eski metni input'a geri yazmasını engeller
+  const ignoreInputUntilRef = useRef<number>(0);
+  const prevDisplayedCountRef = useRef<number>(0);
 
   const showError = (msg: string) => {
     setErrorToast(msg);
@@ -152,6 +155,7 @@ export default function ChatRoomPage() {
       if (!initialHistoryLoadedRef.current) {
         initialHistoryLoadedRef.current = true;
         initialMessageIdsRef.current = new Set(list.map((m) => m.id));
+        prevDisplayedCountRef.current = list.length;
       }
       setMessages(list);
       markChatAsRead(chatId, profile.uid, myReadReceipts, list);
@@ -205,27 +209,44 @@ export default function ChatRoomPage() {
     return [...messages, ...stillPending];
   }, [messages, pendingMessages]);
 
-  // Yeni mesaj geldiğinde 0fr->1fr genişleme animasyonu boyunca kapsayıcıyı akıcı şekilde kaydırarak üstteki mesajların yukarı kaymasını sağlar
+  // Yeni mesaj eklendiğinde metinleri kesmeden tüm kutucukları aşağıdan yukarıya doğru akıcı şekilde kaydırır
   useEffect(() => {
     const el = mainScrollRef.current;
-    if (!el) return;
-
-    let rafId: number;
-    const start = performance.now();
-    const duration = 380;
-
-    const syncScroll = (now: number) => {
+    if (el) {
       el.scrollTop = el.scrollHeight;
-      if (now - start < duration) {
-        rafId = requestAnimationFrame(syncScroll);
-      }
-    };
+    }
 
-    rafId = requestAnimationFrame(syncScroll);
-    return () => cancelAnimationFrame(rafId);
+    if (
+      initialHistoryLoadedRef.current &&
+      displayedMessages.length > prevDisplayedCountRef.current &&
+      listContainerRef.current &&
+      typeof listContainerRef.current.animate === "function"
+    ) {
+      listContainerRef.current.animate(
+        [
+          { transform: "translate3d(0, 22px, 0)" },
+          { transform: "translate3d(0, 0, 0)" },
+        ],
+        {
+          duration: 260,
+          easing: "cubic-bezier(0.22, 1, 0.36, 1)",
+        }
+      );
+    }
+    prevDisplayedCountRef.current = displayedMessages.length;
   }, [displayedMessages.length, peerTyping]);
 
   const handleInputChange = (val: string) => {
+    // Gönder butonuna basıldıktan hemen sonraki 80ms içinde mobil klavyenin eski kelimeyi geri basmasını engelle
+    if (Date.now() < ignoreInputUntilRef.current) {
+      if (inputRef.current) {
+        inputRef.current.value = "";
+        inputRef.current.style.height = "auto";
+      }
+      setInputText("");
+      return;
+    }
+
     setInputText(val);
 
     if (inputRef.current) {
@@ -260,7 +281,6 @@ export default function ChatRoomPage() {
   };
 
   const handleSend = () => {
-    // Klavyenin kapanmaması için odağı anında koru
     inputRef.current?.focus();
 
     if (!peerUid || !profile?.uid) return;
@@ -274,13 +294,15 @@ export default function ChatRoomPage() {
       return;
     }
     lastSendTimestampRef.current = now;
+    ignoreInputUntilRef.current = now + 80;
 
+    // Input alanını hem React state hem de DOM üzerinden kesin olarak temizle
+    setInputText("");
     if (inputRef.current) {
       inputRef.current.value = "";
       inputRef.current.style.height = "auto";
       inputRef.current.focus();
     }
-    setInputText("");
 
     const tempId = `optimistic_${now}_${Math.random()
       .toString(36)
@@ -334,54 +356,20 @@ export default function ChatRoomPage() {
 
   return (
     <div className="h-[100dvh] bg-zinc-950 text-zinc-100 flex flex-col overflow-hidden">
-      {/* Yukarı Kaydırma (Slide-Up) ve Yaylı Pop-in GPU Animasyonları */}
+      {/* Yalnızca Mesaj Kutucuğunun Aşağıdan Yukarı Çıkma (Slide-Up) Animasyonu */}
       <style>{`
-        @keyframes sigalRowExpand {
-          0% {
-            grid-template-rows: 0fr;
-          }
-          100% {
-            grid-template-rows: 1fr;
-          }
-        }
-        @keyframes sigalMsgPopInMine {
+        @keyframes sigalBubbleSlideUp {
           0% {
             opacity: 0;
-            transform: translate3d(14px, 28px, 0) scale(0.52);
-          }
-          62% {
-            opacity: 1;
-            transform: translate3d(-2px, -4px, 0) scale(1.04);
+            transform: translate3d(0, 26px, 0) scale(0.95);
           }
           100% {
             opacity: 1;
             transform: translate3d(0, 0, 0) scale(1);
           }
         }
-        @keyframes sigalMsgPopInPeer {
-          0% {
-            opacity: 0;
-            transform: translate3d(-14px, 28px, 0) scale(0.52);
-          }
-          62% {
-            opacity: 1;
-            transform: translate3d(2px, -4px, 0) scale(1.04);
-          }
-          100% {
-            opacity: 1;
-            transform: translate3d(0, 0, 0) scale(1);
-          }
-        }
-        .msg-row-slide {
-          display: grid;
-          animation: sigalRowExpand 320ms cubic-bezier(0.22, 1, 0.36, 1) both;
-        }
-        .msg-pop-in-mine {
-          animation: sigalMsgPopInMine 380ms cubic-bezier(0.22, 1.35, 0.36, 1) both;
-          will-change: transform, opacity;
-        }
-        .msg-pop-in-peer {
-          animation: sigalMsgPopInPeer 380ms cubic-bezier(0.22, 1.35, 0.36, 1) both;
+        .msg-bubble-slide-up {
+          animation: sigalBubbleSlideUp 260ms cubic-bezier(0.22, 1, 0.36, 1) both;
           will-change: transform, opacity;
         }
       `}</style>
@@ -449,7 +437,7 @@ export default function ChatRoomPage() {
             Henüz mesaj yok.
           </div>
         ) : (
-          <div className="mt-auto flex flex-col">
+          <div ref={listContainerRef} className="mt-auto flex flex-col">
             {displayedMessages.map((msg, idx) => {
               const isMine = msg.senderUid === profile?.uid;
               const prevMsg = idx > 0 ? displayedMessages[idx - 1] : null;
@@ -492,7 +480,6 @@ export default function ChatRoomPage() {
                 nextSameCluster
               );
 
-              // Kutucuklar arası mesafe yarıya indirildi (aynı grup: 2px, farklı grup: 6px)
               const marginTopClass =
                 idx === 0 || showTimeHeader
                   ? "mt-0"
@@ -516,29 +503,22 @@ export default function ChatRoomPage() {
                     </div>
                   )}
 
-                  <div className={isNewMessage ? "msg-row-slide" : ""}>
+                  <div
+                    className={`flex ${
+                      isMine ? "justify-end" : "justify-start"
+                    } ${marginTopClass}`}
+                  >
+                    {/* Animasyon metinde değil doğrudan kutucuğun kendisinde (msg-bubble-slide-up) */}
                     <div
-                      className={`overflow-hidden flex ${
-                        isMine ? "justify-end" : "justify-start"
-                      } ${marginTopClass}`}
+                      className={`max-w-[78%] px-[11px] py-[9.5px] text-[15.5px] leading-[1.35] break-words transform-gpu ${
+                        isNewMessage ? "msg-bubble-slide-up" : ""
+                      } ${radiusClass} ${
+                        isMine
+                          ? "bg-emerald-600 text-white"
+                          : "bg-zinc-900 text-zinc-100 border border-zinc-800/80"
+                      }`}
                     >
-                      <div
-                        className={`max-w-[78%] px-3.5 py-2 text-[15.5px] leading-[1.35] break-words transform-gpu ${
-                          isMine ? "origin-bottom-right" : "origin-bottom-left"
-                        } ${
-                          isNewMessage
-                            ? isMine
-                              ? "msg-pop-in-mine"
-                              : "msg-pop-in-peer"
-                            : ""
-                        } ${radiusClass} ${
-                          isMine
-                            ? "bg-emerald-600 text-white"
-                            : "bg-zinc-900 text-zinc-100 border border-zinc-800/80"
-                        }`}
-                      >
-                        <span className="whitespace-pre-wrap">{msg.text}</span>
-                      </div>
+                      <span className="whitespace-pre-wrap">{msg.text}</span>
                     </div>
                   </div>
                 </div>
@@ -549,13 +529,11 @@ export default function ChatRoomPage() {
 
         {/* Mesaj Kutusu Kalınlığında ve Belirgin Yazıyor... Balonu */}
         {peerTyping && (
-          <div className="msg-row-slide">
-            <div className="overflow-hidden mt-1.5 flex justify-start">
-              <div className="bg-zinc-900 border border-zinc-800/80 px-4 py-3 rounded-2xl rounded-bl-[4px] inline-flex items-center gap-2 transform-gpu msg-pop-in-peer origin-bottom-left">
-                <span className="w-2 h-2 rounded-full bg-emerald-400 animate-bounce shadow-[0_0_8px_rgba(52,211,153,0.65)]" />
-                <span className="w-2 h-2 rounded-full bg-emerald-400 animate-bounce [animation-delay:150ms] shadow-[0_0_8px_rgba(52,211,153,0.65)]" />
-                <span className="w-2 h-2 rounded-full bg-emerald-400 animate-bounce [animation-delay:300ms] shadow-[0_0_8px_rgba(52,211,153,0.65)]" />
-              </div>
+          <div className="mt-1.5 flex justify-start">
+            <div className="bg-zinc-900 border border-zinc-800/80 px-4 py-3 rounded-2xl rounded-bl-[4px] inline-flex items-center gap-2 transform-gpu msg-bubble-slide-up">
+              <span className="w-2 h-2 rounded-full bg-emerald-400 animate-bounce shadow-[0_0_8px_rgba(52,211,153,0.65)]" />
+              <span className="w-2 h-2 rounded-full bg-emerald-400 animate-bounce [animation-delay:150ms] shadow-[0_0_8px_rgba(52,211,153,0.65)]" />
+              <span className="w-2 h-2 rounded-full bg-emerald-400 animate-bounce [animation-delay:300ms] shadow-[0_0_8px_rgba(52,211,153,0.65)]" />
             </div>
           </div>
         )}
@@ -563,7 +541,7 @@ export default function ChatRoomPage() {
         <div ref={bottomRef} />
       </main>
 
-      {/* Giriş Çubuğu (Enter = Yeni Satır, Gönder Butonu = Klavyeyi Kapatmadan Gönder) */}
+      {/* Giriş Çubuğu (Enter = Yeni Satır, Gönder Butonu = Klavyeyi Kapatmadan Tek Sefer Gönder) */}
       <footer className="border-t border-zinc-900 bg-zinc-950 shrink-0 pb-[env(safe-area-inset-bottom,0px)]">
         <div className="max-w-md mx-auto px-3 py-2.5 flex items-end gap-2">
           <textarea
@@ -581,16 +559,8 @@ export default function ChatRoomPage() {
             aria-disabled={!inputText.trim()}
             onMouseDown={(e) => e.preventDefault()}
             onPointerDown={(e) => e.preventDefault()}
-            onTouchStart={(e) => {
-              e.preventDefault();
-              if (inputText.trim()) {
-                handleSend();
-              } else {
-                inputRef.current?.focus();
-              }
-            }}
             onClick={() => {
-              if (inputText.trim()) {
+              if (inputText.trim() || inputRef.current?.value.trim()) {
                 handleSend();
               } else {
                 inputRef.current?.focus();

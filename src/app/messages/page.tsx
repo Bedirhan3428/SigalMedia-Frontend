@@ -9,9 +9,7 @@ import {
   User as UserIcon,
   Plus,
   X,
-  Settings,
 } from "lucide-react";
-import Link from "next/link";
 import { useAuth } from "@/context/AuthContext";
 import BottomNav from "@/components/BottomNav";
 // [START] CREATED BY Umut
@@ -143,25 +141,15 @@ export default function MessagesPage() {
           </span>
 
           {/* [MODIFIED BY Umut] */}
-          <div className="flex items-center gap-1 -mr-2">
-            <Link
-              href="/settings/messages"
-              title="Mesaj Ayarları"
-              aria-label="Mesaj Ayarları"
-              className="p-2 text-zinc-400 hover:text-white hover:bg-zinc-900 rounded-xl transition-colors btn-press-subtle"
-            >
-              <Settings className="w-5 h-5" />
-            </Link>
-            <button
-              type="button"
-              onClick={() => setNewChatOpen(true)}
-              title="Yeni Mesaj"
-              aria-label="Yeni Mesaj"
-              className="p-2 text-zinc-300 hover:text-white hover:bg-zinc-900 rounded-xl transition-colors btn-press-subtle"
-            >
-              <SquarePen className="w-5 h-5" />
-            </button>
-          </div>
+          <button
+            type="button"
+            onClick={() => setNewChatOpen(true)}
+            title="Yeni Mesaj"
+            aria-label="Yeni Mesaj"
+            className="p-2 -mr-2 text-zinc-300 hover:text-white hover:bg-zinc-900 rounded-xl transition-colors btn-press-subtle"
+          >
+            <SquarePen className="w-5 h-5" />
+          </button>
         </div>
       </header>
 
