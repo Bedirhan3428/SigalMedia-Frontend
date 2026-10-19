@@ -229,8 +229,14 @@ export class MediaLayer extends BaseLayer {
     };
   }
 
-  public override render(ctx: CanvasRenderingContext2D, canvasWidth: number, canvasHeight: number): void {
-    if (!this.visible || !this.media.element) return;
+  public override render(
+    ctx: CanvasRenderingContext2D,
+    canvasWidth: number,
+    canvasHeight: number,
+    externalSource?: CanvasImageSource
+  ): void {
+    const baseSource: CanvasImageSource | undefined = externalSource || this.media.element;
+    if (!this.visible || !baseSource) return;
 
     const center = this.getPixelPosition(canvasWidth, canvasHeight);
     const dims = this.getBaseDimensions(canvasWidth, canvasHeight);
@@ -301,7 +307,7 @@ export class MediaLayer extends BaseLayer {
     const filterStr = this.getFilterString();
 
     // A. Taban Çizim Kaynağı (Lo-Res: 1/6 oranında küçültülüp yumuşatma kapalı tekrar büyütülür)
-    let drawSource: CanvasImageSource = this.media.element;
+    let drawSource: CanvasImageSource = baseSource;
     let usePixelated = false;
 
     if (this.activeEffect === 'pixelate') {
@@ -320,7 +326,7 @@ export class MediaLayer extends BaseLayer {
       if (offCtx) {
         offCtx.imageSmoothingEnabled = false;
         offCtx.clearRect(0, 0, offW, offH);
-        offCtx.drawImage(this.media.element, 0, 0, offW, offH);
+        offCtx.drawImage(baseSource, 0, 0, offW, offH);
         drawSource = this.pixelCanvas;
         usePixelated = true;
       }

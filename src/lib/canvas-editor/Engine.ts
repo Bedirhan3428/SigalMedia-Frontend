@@ -964,6 +964,89 @@ export class CanvasEngine {
     }
   }
 
+  /**
+   * Zero-Seek Export Hat 2/3: Sadece atmosferik arka planı ve baz medya katmanını (veya harici WebCodecs VideoFrame'i) çizer.
+   */
+  public drawBaseMedia(
+    targetCtx: CanvasRenderingContext2D,
+    width: number,
+    height: number,
+    t: number,
+    externalFrame?: CanvasImageSource
+  ): void {
+    this.nleTimelineTime = t;
+    const ml = this.mediaLayer;
+    if (ml) {
+      ml.timelineTime = t;
+    }
+
+    this.renderAmbientBackground(targetCtx, width, height);
+
+    if (ml && ml.visible) {
+      ml.render(targetCtx, width, height, externalFrame);
+    }
+  }
+
+  /**
+   * Zero-Seek Export Hat 2/3: Zamansal görünürlüğü senkronize eder ve tüm metin/sticker katmanlarını
+   * tek bir GPU dokusu (overlayCacheCanvas) olarak hedef tuvale 0ms'de damgalar.
+   */
+  public drawCachedOverlays(
+    targetCtx: CanvasRenderingContext2D,
+    width: number,
+    height: number,
+    t: number
+  ): void {
+    this.syncTemporalVisibility(t);
+    if (this.overlayLayers.length === 0) return;
+
+    const overlayCached = this.ensureOverlayCache(width, height);
+    if (overlayCached) {
+      targetCtx.drawImage(overlayCached, 0, 0, width, height);
+    } else {
+      for (let i = 0; i < this.overlayLayers.length; i++) {
+        const layer = this.overlayLayers[i];
+        if (layer.visible && layer.temporalVisible) {
+          layer.render(targetCtx, width, height);
+        }
+      }
+    }
+  }
+
+  /**
+   * Zero-Seek Export Hat 1: Sahnenin tamamen statik (Fotoğraf + sabit metin/çıkartma/efekt)
+   * olup olmadığını tespit eder. True dönerse sahne yalnızca 1 kez çizilir (N=1) ve VideoFrame klonlanır.
+   */
+  public isPureStaticExport(): boolean {
+    const ml = this.mediaLayer;
+    if (!ml || !ml.isMotionPhoto) return false;
+
+    const totalDur = this.getTotalTimelineDuration();
+
+    if (ml.isActiveEffectTimeDependentAt(0)) return false;
+
+    for (let i = 0; i < ml.effectClips.length; i++) {
+      const c = ml.effectClips[i];
+      if (c.effect === 'none') continue;
+      if (ml.isActiveEffectTimeDependentAt((c.startTime + c.endTime) * 0.5)) {
+        return false;
+      }
+      if (c.startTime > 0.05 || c.endTime < totalDur - 0.05) {
+        return false;
+      }
+    }
+
+    for (let i = 0; i < this.overlayLayers.length; i++) {
+      const layer = this.overlayLayers[i];
+      if (!layer.visible) continue;
+      if (layer.timelineStart > 0.05 || layer.timelineEnd < totalDur - 0.05) {
+        return false;
+      }
+    }
+
+    return true;
+  }
+
   // [START] CREATED BY Bedirhan
   // ─────────────────────────────────────────────────────────────
   // NLE ÇOKLU KLİP (MAGNETIC RIPPLE TRACK) & ZAMANSAL MOTOR METOTLARI

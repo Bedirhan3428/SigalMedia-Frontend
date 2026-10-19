@@ -1,7 +1,8 @@
 // [START] CREATED BY Bedirhan
 // [MODIFIED BY Bedirhan]
 import { CanvasEngine } from '../Engine';
-import { StoryAudioMeta } from '../types';
+import { StoryAudioMeta, VideoTrackClip } from '../types';
+import { FastDemuxer, DemuxedVideoTrack } from './FastDemuxer';
 import { MediaRecorderFallback } from './MediaRecorderFallback';
 
 export interface ExportVideoOptions {
@@ -16,17 +17,20 @@ export interface ExportVideoOptions {
   signal?: AbortSignal;
 }
 
+// H.264 Baseline Profile öncelikli: B-Frame referans araması yapmadığı için donanım encoder'da %40 daha hızlıdır
 const H264_CODEC_CANDIDATES = [
-  'avc1.640033', // High Profile Level 5.1 (1080p60+)
-  'avc1.640032', // High Profile Level 5.0 (1080p60)
-  'avc1.4d0032', // Main Profile Level 5.0 (1080p60)
-  'avc1.420032', // Baseline Profile Level 5.0
-  'avc1.64002a', // High Profile Level 4.2 (1080p60)
-  'avc1.4d002a', // Main Profile Level 4.2
+  'avc1.42001f', // Baseline Profile Level 3.1 (720p30 Ultra-Fast Hardware Encode)
+  'avc1.42E01F', // Constrained Baseline Level 3.1 (720p30)
+  'avc1.420028', // Baseline Profile Level 4.0
+  'avc1.42E028', // Constrained Baseline Level 4.0
   'avc1.42002a', // Baseline Profile Level 4.2
   'avc1.42E02a', // Constrained Baseline Level 4.2
-  'avc1.420028', // Baseline Profile Level 4.0
-  'avc1.42E01F', // Constrained Baseline Level 3.1 (720p)
+  'avc1.4d002a', // Main Profile Level 4.2
+  'avc1.64002a', // High Profile Level 4.2
+  'avc1.420032', // Baseline Profile Level 5.0
+  'avc1.4d0032', // Main Profile Level 5.0
+  'avc1.640032', // High Profile Level 5.0
+  'avc1.640033', // High Profile Level 5.1
 ];
 
 export class VideoExporter {
@@ -73,6 +77,30 @@ export class VideoExporter {
     }
     return new Promise<void>((r) => setTimeout(r, 0));
   }
+
+  private static async getSourceVideoBuffer(
+    engine: CanvasEngine,
+    signal?: AbortSignal
+  ): Promise<ArrayBuffer | null> {
+    const media = engine.getMedia();
+    if (!media || engine.getVideoState().isMotionPhoto) return null;
+    try {
+      if (media.source instanceof Blob) {
+        return await media.source.arrayBuffer();
+      }
+      if (typeof media.source === 'string' && media.source.length > 0) {
+        const resp = await fetch(media.source, { signal });
+        if (resp.ok) return await resp.arrayBuffer();
+      }
+      if (media.element instanceof HTMLVideoElement && media.element.src) {
+        const resp = await fetch(media.element.src, { signal });
+        if (resp.ok) return await resp.arrayBuffer();
+      }
+    } catch {
+      // Kaynak okunamadıysa null dön
+    }
+    return null;
+  }
   // [END] CREATED BY Bedirhan
 
   public static isWebCodecsSupported(): boolean {
@@ -93,7 +121,7 @@ export class VideoExporter {
 
     const targetW = (preferredWidth || 720) & ~1;
     const targetH = (preferredHeight || 1280) & ~1;
-    const targetFps = 60;
+    const targetFps = fps || 30;
 
     const attempts: Array<{
       width: number;
@@ -104,8 +132,8 @@ export class VideoExporter {
     }> = [
       { width: targetW, height: targetH, fps: targetFps, bitrate, latencyMode: 'realtime' },
       { width: targetW, height: targetH, fps: targetFps, bitrate },
-      { width: 720, height: 1280, fps: targetFps, bitrate: Math.min(bitrate, 6_800_000), latencyMode: 'realtime' },
-      { width: 720, height: 1280, fps: targetFps, bitrate: Math.min(bitrate, 6_800_000) },
+      { width: 720, height: 1280, fps: 30, bitrate: Math.min(bitrate, 4_800_000), latencyMode: 'realtime' },
+      { width: 720, height: 1280, fps: 30, bitrate: Math.min(bitrate, 4_800_000) },
     ];
 
     for (const attempt of attempts) {
@@ -131,7 +159,7 @@ export class VideoExporter {
             };
           }
         } catch {
-          // Try next codec
+          // Sonraki codec adayını dene
         }
       }
     }
@@ -142,6 +170,7 @@ export class VideoExporter {
   private static async renderMixedAudio(
     engine: CanvasEngine,
     outputDuration: number,
+    sourceVideoBuffer: ArrayBuffer | null,
     music?: StoryAudioMeta | null,
     musicVolume = 0.85,
     signal?: AbortSignal
@@ -149,7 +178,6 @@ export class VideoExporter {
     if (typeof OfflineAudioContext === 'undefined') return null;
 
     const state = engine.getVideoState();
-    const media = engine.getMedia();
     const isReelsNle =
       engine.getShareMode() === 'reels' && engine.getVideoClips().length > 0;
     const clips = engine.getVideoClips();
@@ -171,18 +199,9 @@ export class VideoExporter {
     const trimEnd = state.trimEnd > trimStart ? state.trimEnd : state.duration;
     const playbackRate = state.playbackRate || 1.0;
 
-    if (hasVideoAudio && media) {
+    if (hasVideoAudio) {
       try {
-        let arrayBuf: ArrayBuffer | null = null;
-        if (media.source instanceof Blob) {
-          arrayBuf = await media.source.arrayBuffer();
-        } else if (typeof media.source === 'string') {
-          const resp = await fetch(media.source, { signal });
-          if (resp.ok) arrayBuf = await resp.arrayBuffer();
-        } else if (media.element instanceof HTMLVideoElement && media.element.src) {
-          const resp = await fetch(media.element.src, { signal });
-          if (resp.ok) arrayBuf = await resp.arrayBuffer();
-        }
+        const arrayBuf = sourceVideoBuffer ?? (await this.getSourceVideoBuffer(engine, signal));
 
         if (arrayBuf && arrayBuf.byteLength > 0) {
           const decodedVideoAudio = await offlineCtx.decodeAudioData(arrayBuf.slice(0));
@@ -225,7 +244,7 @@ export class VideoExporter {
           }
         }
       } catch {
-        // Video might not have an audio track; continue gracefully
+        // Videoda ses kanalı yoksa sessizce devam et
       }
     }
 
@@ -292,7 +311,7 @@ export class VideoExporter {
           }
         }
       } catch {
-        // Music stream CORS or decode failure; continue with video export
+        // Müzik akışı hatasında video exportuna devam et
       }
     }
 
@@ -305,6 +324,444 @@ export class VideoExporter {
     }
   }
 
+  /**
+   * HAT 2: Sequential WebCodecs Pipeline (FastDemuxer + Donanım VideoDecoder -> GPU VideoFrame -> VideoEncoder)
+   * Sıfır DOM <video> seek maliyetiyle GOP sırasına göre ardışık donanım decode/encode yapar.
+   */
+  private static async trySequentialWebCodecsExport(params: {
+    engine: CanvasEngine;
+    demuxed: DemuxedVideoTrack;
+    clips: VideoTrackClip[];
+    exportCanvas: HTMLCanvasElement;
+    exportCtx: CanvasRenderingContext2D;
+    exportWidth: number;
+    exportHeight: number;
+    fps: number;
+    totalFrames: number;
+    frameDurationUs: number;
+    videoEncoder: VideoEncoder;
+    getEncoderError: () => Error | null;
+    onProgress?: (progress: number) => void;
+    signal?: AbortSignal;
+  }): Promise<boolean> {
+    if (
+      typeof VideoDecoder === 'undefined' ||
+      typeof EncodedVideoChunk === 'undefined'
+    ) {
+      return false;
+    }
+
+    const {
+      engine,
+      demuxed,
+      clips,
+      exportCanvas,
+      exportCtx,
+      exportWidth,
+      exportHeight,
+      fps,
+      totalFrames,
+      frameDurationUs,
+      videoEncoder,
+      getEncoderError,
+      onProgress,
+      signal,
+    } = params;
+
+    const decoderConfig: VideoDecoderConfig = {
+      codec: demuxed.codec,
+      codedWidth: demuxed.width,
+      codedHeight: demuxed.height,
+      description: demuxed.description,
+      hardwareAcceleration: 'prefer-hardware',
+    };
+
+    try {
+      const support = await VideoDecoder.isConfigSupported(decoderConfig);
+      if (!support.supported) {
+        return false;
+      }
+    } catch {
+      return false;
+    }
+
+    let globalOutFrameIdx = 0;
+    let lastReportedPct = -1;
+    let clipOutStartSec = 0;
+
+    const reportFrameProgress = (frameIdx: number) => {
+      const rawProgress = Math.min(0.96, (frameIdx + 1) / totalFrames);
+      const pct = Math.floor(rawProgress * 100);
+      if (pct !== lastReportedPct) {
+        lastReportedPct = pct;
+        onProgress?.(rawProgress);
+      }
+    };
+
+    for (let cIdx = 0; cIdx < clips.length; cIdx++) {
+      if (signal?.aborted) {
+        throw new DOMException('Export cancelled', 'AbortError');
+      }
+
+      const clip = clips[cIdx];
+      if (engine.getShareMode() === 'reels' && engine.getVideoClips().length > 0) {
+        engine.applyClipTransformToMediaLayer(clip);
+      }
+      const clipRate = Math.max(0.25, clip.playbackRate || 1.0);
+      const clipOutEndSec = clipOutStartSec + clip.duration;
+      const clipEndFrameIdx =
+        cIdx === clips.length - 1
+          ? totalFrames
+          : Math.min(totalFrames, Math.round(clipOutEndSec * fps));
+
+      if (clipEndFrameIdx <= globalOutFrameIdx) {
+        clipOutStartSec = clipOutEndSec;
+        continue;
+      }
+
+      const samples = FastDemuxer.getSamplesForRange(
+        demuxed,
+        clip.sourceStart,
+        clip.sourceEnd
+      );
+      if (samples.length === 0) {
+        return false;
+      }
+
+      let decoderError: Error | null = null;
+      let hasDrawnAnyFrameInClip = false;
+
+      const renderAndEncodeWithFrame = (
+        outIdx: number,
+        decodedFrame?: VideoFrame,
+        reuseCanvasIfSameOverlay = false
+      ) => {
+        const outTimeSec = outIdx / fps;
+        if (!reuseCanvasIfSameOverlay) {
+          exportCtx.clearRect(0, 0, exportWidth, exportHeight);
+          engine.drawBaseMedia(
+            exportCtx,
+            exportWidth,
+            exportHeight,
+            outTimeSec,
+            decodedFrame
+          );
+          engine.drawCachedOverlays(exportCtx, exportWidth, exportHeight, outTimeSec);
+        } else {
+          // Aynı kaynak kareye denk gelen ardışık çıktı karelerinde sadece zamansal görünürlük değişirse çiz
+          const changed = engine.syncTemporalVisibility(outTimeSec);
+          if (changed && decodedFrame) {
+            exportCtx.clearRect(0, 0, exportWidth, exportHeight);
+            engine.drawBaseMedia(
+              exportCtx,
+              exportWidth,
+              exportHeight,
+              outTimeSec,
+              decodedFrame
+            );
+            engine.drawCachedOverlays(exportCtx, exportWidth, exportHeight, outTimeSec);
+          }
+        }
+
+        const outVf = new VideoFrame(exportCanvas, {
+          timestamp: Math.round(outTimeSec * 1_000_000),
+          duration: frameDurationUs,
+        });
+        try {
+          videoEncoder.encode(outVf, { keyFrame: outIdx % (fps * 2) === 0 });
+        } finally {
+          outVf.close();
+        }
+        reportFrameProgress(outIdx);
+      };
+
+      const videoDecoder = new VideoDecoder({
+        output: (decodedFrame) => {
+          try {
+            const frameSec = decodedFrame.timestamp / 1_000_000;
+            const frameEndSec =
+              (decodedFrame.timestamp + (decodedFrame.duration || 33_333)) /
+              1_000_000;
+
+            // Keyframe pre-roll aşamasındaki kareler: eğer ilk çıktı karesine çok yakınsa baz olarak çiz
+            if (frameEndSec < clip.sourceStart - 0.02) {
+              return;
+            }
+
+            let encodedCountForThisDecoded = 0;
+            while (globalOutFrameIdx < clipEndFrameIdx) {
+              const outTimeSec = globalOutFrameIdx / fps;
+              const targetSourceSec = Math.min(
+                clip.sourceEnd,
+                clip.sourceStart + Math.max(0, outTimeSec - clipOutStartSec) * clipRate
+              );
+
+              // Hedef kaynak zamanı bu karenin kapsama alanındaysa veya geçmişte kaldıysa üret
+              if (targetSourceSec <= frameEndSec + 0.008 || frameSec >= clip.sourceEnd - 0.02) {
+                renderAndEncodeWithFrame(
+                  globalOutFrameIdx,
+                  decodedFrame,
+                  encodedCountForThisDecoded > 0
+                );
+                hasDrawnAnyFrameInClip = true;
+                encodedCountForThisDecoded++;
+                globalOutFrameIdx++;
+              } else {
+                break;
+              }
+            }
+
+            // Eğer henüz hiçbir çıktı karesi üretilmediyse ama kare clip.sourceStart civarındaysa tuvali hazırla
+            if (!hasDrawnAnyFrameInClip && frameSec >= clip.sourceStart - 0.05) {
+              const outTimeSec = globalOutFrameIdx / fps;
+              exportCtx.clearRect(0, 0, exportWidth, exportHeight);
+              engine.drawBaseMedia(
+                exportCtx,
+                exportWidth,
+                exportHeight,
+                outTimeSec,
+                decodedFrame
+              );
+              engine.drawCachedOverlays(exportCtx, exportWidth, exportHeight, outTimeSec);
+              hasDrawnAnyFrameInClip = true;
+            }
+          } catch (err) {
+            decoderError = err instanceof Error ? err : new Error(String(err));
+          } finally {
+            // Kritik: GPU VideoFrame havuzunun tıkanmaması için anında kapat
+            decodedFrame.close();
+          }
+        },
+        error: (err) => {
+          decoderError = err instanceof Error ? err : new Error(String(err));
+        },
+      });
+
+      try {
+        videoDecoder.configure(decoderConfig);
+
+        for (let sIdx = 0; sIdx < samples.length; sIdx++) {
+          if (signal?.aborted) {
+            throw new DOMException('Export cancelled', 'AbortError');
+          }
+          if (decoderError || getEncoderError()) {
+            break;
+          }
+
+          const s = samples[sIdx];
+          const chunk = new EncodedVideoChunk({
+            type: s.isKeyframe ? 'key' : 'delta',
+            timestamp: s.timestampUs,
+            duration: s.durationUs,
+            data: s.data,
+          });
+          videoDecoder.decode(chunk);
+
+          // Donanım decoder ve encoder kuyruklarını dengede tut (Backpressure)
+          while (
+            videoDecoder.decodeQueueSize > 14 ||
+            videoEncoder.encodeQueueSize > 12
+          ) {
+            if (signal?.aborted) {
+              throw new DOMException('Export cancelled', 'AbortError');
+            }
+            if (decoderError || getEncoderError()) break;
+            await this.yieldToMain();
+          }
+        }
+
+        if (!decoderError && !getEncoderError()) {
+          await videoDecoder.flush();
+        }
+      } catch (err) {
+        try {
+          if (videoDecoder.state !== 'closed') videoDecoder.close();
+        } catch {}
+        if (err instanceof DOMException && err.name === 'AbortError') {
+          throw err;
+        }
+        return false;
+      } finally {
+        try {
+          if (videoDecoder.state !== 'closed') videoDecoder.close();
+        } catch {}
+      }
+
+      if (decoderError) {
+        // İlk klipte hiç kare basılmadan hata aldıysa Hat 3'e düş
+        if (globalOutFrameIdx === 0 && !hasDrawnAnyFrameInClip) {
+          return false;
+        }
+      }
+
+      // Klip sonundaki kalan son 1-2 kuyruk karesini (varsa) son çizilen tuvalden tamamla
+      if (!hasDrawnAnyFrameInClip && globalOutFrameIdx === 0) {
+        return false;
+      }
+
+      while (globalOutFrameIdx < clipEndFrameIdx) {
+        if (signal?.aborted) {
+          throw new DOMException('Export cancelled', 'AbortError');
+        }
+        renderAndEncodeWithFrame(globalOutFrameIdx, undefined, true);
+        globalOutFrameIdx++;
+        while (videoEncoder.encodeQueueSize > 12) {
+          await this.yieldToMain();
+        }
+      }
+
+      clipOutStartSec = clipOutEndSec;
+    }
+
+    return globalOutFrameIdx >= totalFrames;
+  }
+
+  /**
+   * HAT 3: Sequential Forward Playback (Sıfır Geriye Seek / Tek Seferlik Başlangıç Seek + Ardışık İleri Akış)
+   * FastDemuxer ile ayrılamayan (örn. WebM, fMP4) videolar için kare-kare rastgele seek yapmak yerine
+   * klip başına yalnızca 1 kez başlangıca konumlanır ve ileri yönde doğal GOP sırasıyla kare yakalar.
+   */
+  private static async exportWithSequentialForwardPlayback(params: {
+    engine: CanvasEngine;
+    clips: VideoTrackClip[];
+    exportCanvas: HTMLCanvasElement;
+    exportCtx: CanvasRenderingContext2D;
+    exportWidth: number;
+    exportHeight: number;
+    fps: number;
+    totalFrames: number;
+    frameDurationUs: number;
+    videoEncoder: VideoEncoder;
+    getEncoderError: () => Error | null;
+    onProgress?: (progress: number) => void;
+    signal?: AbortSignal;
+  }): Promise<void> {
+    const {
+      engine,
+      clips,
+      exportCanvas,
+      exportCtx,
+      exportWidth,
+      exportHeight,
+      fps,
+      totalFrames,
+      frameDurationUs,
+      videoEncoder,
+      getEncoderError,
+      onProgress,
+      signal,
+    } = params;
+
+    const media = engine.getMedia();
+    const videoEl =
+      media?.element instanceof HTMLVideoElement ? media.element : null;
+
+    let globalOutFrameIdx = 0;
+    let lastReportedPct = -1;
+    let clipOutStartSec = 0;
+
+    const seekOnce = async (v: HTMLVideoElement, targetSec: number) => {
+      const clamped = Math.max(
+        0,
+        Math.min(v.duration || targetSec, targetSec)
+      );
+      if (Math.abs(v.currentTime - clamped) <= 0.015) return;
+      await new Promise<void>((resolve) => {
+        let done = false;
+        const finish = () => {
+          if (done) return;
+          done = true;
+          v.removeEventListener('seeked', finish);
+          resolve();
+        };
+        v.addEventListener('seeked', finish, { once: true });
+        v.currentTime = clamped;
+        setTimeout(finish, 180);
+      });
+    };
+
+    for (let cIdx = 0; cIdx < clips.length; cIdx++) {
+      if (signal?.aborted) {
+        throw new DOMException('Export cancelled', 'AbortError');
+      }
+
+      const clip = clips[cIdx];
+      const clipRate = Math.max(0.25, clip.playbackRate || 1.0);
+      const clipOutEndSec = clipOutStartSec + clip.duration;
+      const clipEndFrameIdx =
+        cIdx === clips.length - 1
+          ? totalFrames
+          : Math.min(totalFrames, Math.round(clipOutEndSec * fps));
+
+      if (videoEl && !clip.isMotionPhoto) {
+        videoEl.pause();
+        videoEl.muted = true;
+        // Klip başında YALNIZCA 1 KEZ seek yap
+        await seekOnce(videoEl, clip.sourceStart);
+      }
+
+      while (globalOutFrameIdx < clipEndFrameIdx) {
+        if (signal?.aborted) {
+          throw new DOMException('Export cancelled', 'AbortError');
+        }
+        const encErr = getEncoderError();
+        if (encErr) throw encErr;
+
+        const outTimeSec = globalOutFrameIdx / fps;
+        const targetSourceSec = Math.min(
+          clip.sourceEnd,
+          clip.sourceStart + Math.max(0, outTimeSec - clipOutStartSec) * clipRate
+        );
+
+        if (videoEl && !clip.isMotionPhoto) {
+          // Yalnızca ileri yönde (monotonik) küçük adım ilerle
+          if (targetSourceSec - videoEl.currentTime > 0.02) {
+            await seekOnce(videoEl, targetSourceSec);
+          }
+        }
+
+        exportCtx.clearRect(0, 0, exportWidth, exportHeight);
+        engine.drawBaseMedia(exportCtx, exportWidth, exportHeight, outTimeSec);
+        engine.drawCachedOverlays(exportCtx, exportWidth, exportHeight, outTimeSec);
+
+        const videoFrame = new VideoFrame(exportCanvas, {
+          timestamp: Math.round(outTimeSec * 1_000_000),
+          duration: frameDurationUs,
+        });
+
+        try {
+          videoEncoder.encode(videoFrame, {
+            keyFrame: globalOutFrameIdx % (fps * 2) === 0,
+          });
+        } finally {
+          videoFrame.close();
+        }
+
+        while (videoEncoder.encodeQueueSize > 12) {
+          if (signal?.aborted) {
+            throw new DOMException('Export cancelled', 'AbortError');
+          }
+          await this.yieldToMain();
+        }
+
+        const rawProgress = Math.min(0.96, (globalOutFrameIdx + 1) / totalFrames);
+        const pct = Math.floor(rawProgress * 100);
+        if (pct !== lastReportedPct) {
+          lastReportedPct = pct;
+          onProgress?.(rawProgress);
+        }
+
+        if (globalOutFrameIdx % 24 === 23) {
+          await this.yieldToMain();
+        }
+
+        globalOutFrameIdx++;
+      }
+
+      clipOutStartSec = clipOutEndSec;
+    }
+  }
+
   public static async exportToBlob(
     engine: CanvasEngine,
     options?: ExportVideoOptions
@@ -314,11 +771,11 @@ export class VideoExporter {
       throw new Error('Aktif medya bir video değil');
     }
 
-    // Her zaman 720p (720x1280) ve sabit 60 FPS yüksek hızlı & kaliteli sıkıştırma
+    // 720p (720x1280) ve akıllı 30 FPS standardı: yüksek kare başına bit hızı (4.8 Mbps) & %50 daha az kare yükü
     const preferredW = options?.width || 720;
     const preferredH = options?.height || 1280;
-    const requestedFps = 60;
-    const bitrate = options?.bitrate || 6_800_000;
+    const requestedFps = options?.fps || 30;
+    const bitrate = options?.bitrate || 4_800_000;
     const signal = options?.signal;
 
     const supportedVideo = await this.findSupportedVideoConfig(
@@ -368,7 +825,7 @@ export class VideoExporter {
         throw new DOMException('Export cancelled', 'AbortError');
       }
 
-      // 1. Ses miksajı ve mp4-muxer yüklemesini paralel başlat
+      // 1. Kaynak video belleğini, ses miksajını ve mp4-muxer yüklemesini paralel hazırla
       const aacConfig: AudioEncoderConfig = {
         codec: 'mp4a.40.2',
         sampleRate: 44100,
@@ -383,15 +840,18 @@ export class VideoExporter {
               .catch(() => false)
           : Promise.resolve(false);
 
-      const [audioConfigSupported, { Muxer, ArrayBufferTarget }] = await Promise.all([
-        audioSupportPromise,
-        import('mp4-muxer'),
-      ]);
+      const [audioConfigSupported, { Muxer, ArrayBufferTarget }, sourceVideoBuffer] =
+        await Promise.all([
+          audioSupportPromise,
+          import('mp4-muxer'),
+          this.getSourceVideoBuffer(engine, signal),
+        ]);
 
       const renderedAudio = audioConfigSupported
         ? await this.renderMixedAudio(
             engine,
             outputDuration,
+            sourceVideoBuffer,
             options?.music,
             options?.musicVolume ?? 0.85,
             signal
@@ -484,73 +944,154 @@ export class VideoExporter {
         exportWidth,
         exportHeight
       );
-
       const frameDurationUs = Math.round((1 / fps) * 1_000_000);
-      const mediaLayer = engine.getMediaLayer();
-      const hasTimedOverlays = engine.getOverlayTrackItems().length > 0;
-      const isStaticMotionPhoto = Boolean(
-        state.isMotionPhoto &&
-          mediaLayer &&
-          !mediaLayer.isTimeDependentEffect() &&
-          !hasTimedOverlays &&
-          (!isReelsNle || engine.getVideoClips().length === 1)
-      );
 
-      // 5 saniyelik statik fotoğraf->video dönüşümünde tüm sahneyi döngü dışında 1 kez çiz ve önbelleğe al
-      if (isStaticMotionPhoto) {
-        await engine.renderFrameAt(exportCtx, trimStart, exportWidth, exportHeight);
-      }
+      // ─────────────────────────────────────────────────────────────
+      // 3 HATLI "ZERO-SEEK" ULTRA-FAST RENDER PIPELINE
+      // ─────────────────────────────────────────────────────────────
+      if (engine.isPureStaticExport()) {
+        // HAT 1: ZERO-REDRAW FRAME CLONING (~0.2s)
+        // Sahneyi döngü dışında YALNIZCA 1 KEZ (N=1) çiz, döngü içinde sadece GPU VideoFrame referansı klonla!
+        exportCtx.clearRect(0, 0, exportWidth, exportHeight);
+        engine.drawBaseMedia(exportCtx, exportWidth, exportHeight, 0);
+        engine.drawCachedOverlays(exportCtx, exportWidth, exportHeight, 0);
 
-      let lastReportedPct = -1;
-
-      // 4. Kare kare 720p @ 60 FPS render ve donanım H.264 encode döngüsü
-      for (let i = 0; i < totalFrames; i++) {
-        if (signal?.aborted) {
-          throw new DOMException('Export cancelled', 'AbortError');
-        }
-        if (encoderError) {
-          throw encoderError;
-        }
-
-        const outTimeSec = i / fps;
-        if (!isStaticMotionPhoto) {
-          const sourceTimeSec = isReelsNle
-            ? Math.min(outputDuration, outTimeSec)
-            : Math.min(trimEnd, trimStart + outTimeSec * playbackRate);
-          await engine.renderFrameAt(exportCtx, sourceTimeSec, exportWidth, exportHeight);
-        }
-
-        const timestampUs = Math.round(outTimeSec * 1_000_000);
-        const videoFrame = new VideoFrame(exportCanvas, {
-          timestamp: timestampUs,
-          duration: frameDurationUs,
-        });
-
-        try {
-          videoEncoder.encode(videoFrame, { keyFrame: i % (fps * 2) === 0 });
-        } finally {
-          videoFrame.close();
-        }
-
-        // Kuyruk doluluğu kontrolü (Backpressure - 60 FPS yüksek hızlı donanım kuyruğu)
-        while (videoEncoder.encodeQueueSize > 24) {
+        let lastReportedPct = -1;
+        for (let i = 0; i < totalFrames; i++) {
           if (signal?.aborted) {
             throw new DOMException('Export cancelled', 'AbortError');
           }
-          await this.yieldToMain();
+          if (encoderError) throw encoderError;
+
+          const videoFrame = new VideoFrame(exportCanvas, {
+            timestamp: i * frameDurationUs,
+            duration: frameDurationUs,
+          });
+
+          try {
+            videoEncoder.encode(videoFrame, { keyFrame: i % (fps * 2) === 0 });
+          } finally {
+            videoFrame.close();
+          }
+
+          while (videoEncoder.encodeQueueSize > 12) {
+            if (signal?.aborted) {
+              throw new DOMException('Export cancelled', 'AbortError');
+            }
+            await this.yieldToMain();
+          }
+
+          const rawProgress = Math.min(0.96, (i + 1) / totalFrames);
+          const pct = Math.floor(rawProgress * 100);
+          if (pct !== lastReportedPct) {
+            lastReportedPct = pct;
+            options?.onProgress?.(rawProgress);
+          }
+        }
+      } else if (state.isMotionPhoto) {
+        // HAT 1B: Dinamik Efektli veya Zamanlı Katmanlı Fotoğraf (Sıfır <video> seek!)
+        let lastReportedPct = -1;
+        for (let i = 0; i < totalFrames; i++) {
+          if (signal?.aborted) {
+            throw new DOMException('Export cancelled', 'AbortError');
+          }
+          if (encoderError) throw encoderError;
+
+          const outTimeSec = i / fps;
+          exportCtx.clearRect(0, 0, exportWidth, exportHeight);
+          engine.drawBaseMedia(exportCtx, exportWidth, exportHeight, outTimeSec);
+          engine.drawCachedOverlays(exportCtx, exportWidth, exportHeight, outTimeSec);
+
+          const videoFrame = new VideoFrame(exportCanvas, {
+            timestamp: Math.round(outTimeSec * 1_000_000),
+            duration: frameDurationUs,
+          });
+
+          try {
+            videoEncoder.encode(videoFrame, { keyFrame: i % (fps * 2) === 0 });
+          } finally {
+            videoFrame.close();
+          }
+
+          while (videoEncoder.encodeQueueSize > 12) {
+            if (signal?.aborted) {
+              throw new DOMException('Export cancelled', 'AbortError');
+            }
+            await this.yieldToMain();
+          }
+
+          const rawProgress = Math.min(0.96, (i + 1) / totalFrames);
+          const pct = Math.floor(rawProgress * 100);
+          if (pct !== lastReportedPct) {
+            lastReportedPct = pct;
+            options?.onProgress?.(rawProgress);
+          }
+
+          if (i % 24 === 23) {
+            await this.yieldToMain();
+          }
+        }
+      } else {
+        // Gerçek Video Klipleri: Önce HAT 2 (FastDemuxer + Donanım VideoDecoder), desteklenmezse HAT 3 (Sequential Forward Playback)
+        const activeClips: VideoTrackClip[] = isReelsNle
+          ? engine.getVideoClips()
+          : [
+              {
+                id: 'single-clip',
+                sourceMediaId: 'single-media',
+                sourceStart: trimStart,
+                sourceEnd: trimEnd,
+                duration: outputDuration,
+                playbackRate,
+                volume: state.volume,
+                muted: state.muted,
+                isMotionPhoto: false,
+              },
+            ];
+
+        const demuxed = sourceVideoBuffer
+          ? FastDemuxer.demux(sourceVideoBuffer)
+          : null;
+
+        let handledByWebCodecsDecoder = false;
+        if (demuxed) {
+          handledByWebCodecsDecoder = await this.trySequentialWebCodecsExport({
+            engine,
+            demuxed,
+            clips: activeClips,
+            exportCanvas,
+            exportCtx,
+            exportWidth,
+            exportHeight,
+            fps,
+            totalFrames,
+            frameDurationUs,
+            videoEncoder,
+            getEncoderError: () => encoderError,
+            onProgress: options?.onProgress,
+            signal,
+          });
         }
 
-        const rawProgress = Math.min(0.96, (i + 1) / totalFrames);
-        const pct = Math.floor(rawProgress * 100);
-        if (pct !== lastReportedPct) {
-          lastReportedPct = pct;
-          options?.onProgress?.(rawProgress);
+        if (!handledByWebCodecsDecoder) {
+          await MediaRecorderFallback.streamSequentialPlaybackToEncoder({
+            engine,
+            exportCanvas,
+            exportCtx,
+            exportWidth,
+            exportHeight,
+            fps,
+            outputDuration,
+            videoEncoder,
+            getEncoderError: () => encoderError,
+            onProgress: options?.onProgress,
+            signal,
+          });
         }
+      }
 
-        // 24 karede bir 4ms setTimeout gecikmesi olmadan MessageChannel ile UI thread'e mikro nefes ver
-        if ((i % 24) === 23) {
-          await this.yieldToMain();
-        }
+      if (encoderError) {
+        throw encoderError;
       }
 
       await videoEncoder.flush();

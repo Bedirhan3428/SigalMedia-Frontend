@@ -9,6 +9,7 @@ export * from './layers/MusicStickerLayer';
 export * from './interaction/InteractionManager';
 export * from './exporter/ImageExporter';
 // [START] CREATED BY Bedirhan
+export * from './exporter/FastDemuxer';
 export * from './exporter/VideoExporter';
 export * from './exporter/MediaRecorderFallback';
 export * from './utils/videoThumbs';

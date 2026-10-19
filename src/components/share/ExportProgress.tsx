@@ -1,5 +1,6 @@
 // [START] CREATED BY Bedirhan
 // [MODIFIED BY Bedirhan]
+// [MODIFIED BY Umut]
 "use client";
 
 import { Loader2, Film } from "lucide-react";
@@ -19,14 +20,15 @@ export default function ExportProgress({
 }: ExportProgressProps) {
   if (!isOpen) return null;
 
-  const pct = Math.max(0, Math.min(100, Math.round(progress * 100)));
+  const clampedProgress = Math.max(0, Math.min(1, progress));
+  const pct = Math.max(0, Math.min(100, Math.round(clampedProgress * 100)));
   const activeClipIdx = Math.min(
     clipCount,
     Math.max(1, Math.ceil((pct / 100) * clipCount))
   );
 
   return (
-    <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-md flex items-center justify-center p-6 animate-in fade-in duration-150 pointer-events-auto select-none">
+    <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-md flex items-center justify-center p-6 animate-in fade-in duration-100 pointer-events-auto select-none">
       <div className="w-full max-w-xs rounded-3xl bg-neutral-900/95 border border-white/10 p-6 flex flex-col items-center gap-4 shadow-2xl">
         <div className="relative w-16 h-16 flex items-center justify-center">
           <Loader2 className="w-16 h-16 text-emerald-400 animate-spin" />
@@ -44,10 +46,11 @@ export default function ExportProgress({
           </div>
         )}
 
+        {/* [MODIFIED BY Umut] */}
         <div className="w-full h-2 rounded-full bg-white/10 overflow-hidden">
           <div
-            className="h-full bg-emerald-400 transition-all duration-150"
-            style={{ width: `${pct}%` }}
+            className="w-full h-full bg-emerald-400 origin-left transition-transform duration-75 ease-out will-change-transform"
+            style={{ transform: `scaleX(${clampedProgress})` }}
           />
         </div>
 
