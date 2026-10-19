@@ -52,6 +52,8 @@ export interface TimelineOverlayTracksProps {
   onCommitHistory?: () => void;
 }
 
+const DRAG_THRESHOLD_PX = 8;
+
 type OverlayDragState = {
   targetKind: "overlay" | "effect" | "audio";
   mode: "left" | "right" | "move";
@@ -61,6 +63,22 @@ type OverlayDragState = {
   startY: number;
   initStart: number;
   initEnd: number;
+  pointerId: number;
+  dragStarted: boolean;
+};
+
+type ItemPressState = {
+  targetKind: "overlay" | "effect" | "audio";
+  id: string;
+  itemType: NLESelectedType;
+  startX: number;
+  startY: number;
+  initStart: number;
+  initEnd: number;
+  isSelected: boolean;
+  hasMoved: boolean;
+  pointerId: number;
+  targetEl: HTMLElement;
 };
 
 export default function TimelineOverlayTracks({
@@ -84,7 +102,10 @@ export default function TimelineOverlayTracks({
   onQuickAddEffect,
   onCommitHistory,
 }: TimelineOverlayTracksProps) {
+  const rootTrackContainerRef = useRef<HTMLDivElement | null>(null);
   const dragRef = useRef<OverlayDragState | null>(null);
+  const pressRef = useRef<ItemPressState | null>(null);
+  const suppressClickRef = useRef<boolean>(false);
   const longPressTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [elevatedItemId, setElevatedItemId] = useState<string | null>(null);
 
@@ -98,18 +119,55 @@ export default function TimelineOverlayTracks({
     }
   };
 
-  const beginDrag = (e: React.PointerEvent, state: OverlayDragState) => {
+  const beginHandleDrag = (
+    e: React.PointerEvent,
+    state: {
+      targetKind: "overlay" | "effect" | "audio";
+      mode: "left" | "right";
+      id: string;
+      itemType: NLESelectedType;
+      initStart: number;
+      initEnd: number;
+    }
+  ) => {
     e.stopPropagation();
     clearLongPress();
     onPauseVideo?.();
     try {
-      (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+      rootTrackContainerRef.current?.setPointerCapture(e.pointerId);
     } catch {}
     onCommitHistory?.();
-    onSelectItem(state.id, state.itemType);
-    dragRef.current = state;
+    dragRef.current = {
+      ...state,
+      startX: e.clientX,
+      startY: e.clientY,
+      pointerId: e.pointerId,
+      dragStarted: false,
+    };
+  };
 
-    if (state.mode === "move") {
+  const handleItemPointerDown = (
+    e: React.PointerEvent,
+    info: {
+      targetKind: "overlay" | "effect" | "audio";
+      id: string;
+      itemType: NLESelectedType;
+      initStart: number;
+      initEnd: number;
+      isSelected: boolean;
+    }
+  ) => {
+    clearLongPress();
+    pressRef.current = {
+      ...info,
+      startX: e.clientX,
+      startY: e.clientY,
+      pointerId: e.pointerId,
+      targetEl: e.currentTarget as HTMLElement,
+      hasMoved: false,
+    };
+
+    if (info.isSelected) {
       longPressTimerRef.current = setTimeout(() => {
         longPressTimerRef.current = null;
         if (typeof navigator !== "undefined" && navigator.vibrate) {
@@ -117,14 +175,59 @@ export default function TimelineOverlayTracks({
             navigator.vibrate(35);
           } catch {}
         }
-        setElevatedItemId(state.id);
-      }, 300);
+        setElevatedItemId(info.id);
+      }, 350);
     }
   };
 
   const handlePointerMove = (e: React.PointerEvent) => {
+    // 1. Öğeye basıldığında kaydırma hareketi var mı kontrol et (Min 8px Eşik)
+    const pr = pressRef.current;
+    if (pr && !dragRef.current) {
+      const moveDist = Math.hypot(e.clientX - pr.startX, e.clientY - pr.startY);
+      if (moveDist >= DRAG_THRESHOLD_PX) {
+        pr.hasMoved = true;
+        clearLongPress();
+
+        // Öğe zaten seçiliyse, eşik aşıldığı an taşıma moduna geç
+        if (pr.isSelected) {
+          onPauseVideo?.();
+          onCommitHistory?.();
+          try {
+            rootTrackContainerRef.current?.setPointerCapture(pr.pointerId);
+          } catch {}
+          dragRef.current = {
+            targetKind: pr.targetKind,
+            mode: "move",
+            id: pr.id,
+            itemType: pr.itemType,
+            startX: pr.startX,
+            startY: pr.startY,
+            initStart: pr.initStart,
+            initEnd: pr.initEnd,
+            pointerId: pr.pointerId,
+            dragStarted: true,
+          };
+        }
+        // Öğe seçili değilken parmak kaydıysa bu bir timeline scroll hareketidir; tıklama engellenir
+      }
+    }
+
+    // 2. Aktif sürükleme (tutamaçla uzatma/kısaltma veya seçili öğeyi taşıma)
     const st = dragRef.current;
     if (!st) return;
+
+    const dxPx = e.clientX - st.startX;
+    const dyPx = e.clientY - st.startY;
+
+    // Tutamaçlarda da ilk dokunuşta sıçramayı önleyen min eşik kontrolü:
+    if (!st.dragStarted) {
+      if (Math.abs(dxPx) < DRAG_THRESHOLD_PX && Math.abs(dyPx) < DRAG_THRESHOLD_PX) {
+        return; // Eşik aşılana kadar süre veya pozisyon kaymaz!
+      }
+      st.dragStarted = true;
+    }
+
     e.stopPropagation();
 
     // Ekran kenarlarında otomatik yatay kaydırma (Edge Auto-Scroll)
@@ -138,11 +241,6 @@ export default function TimelineOverlayTracks({
         st.startX += 10;
       }
     }
-
-    const dxPx = e.clientX - st.startX;
-    const dyPx = e.clientY - st.startY;
-    const dtSec = dxPx / Math.max(20, pps);
-    const maxSec = Math.max(totalDuration + 15, 60);
 
     // Dikey sürükleme ile katman sırası (Z-Index / satır sırası) değiştirme
     if (
@@ -159,6 +257,12 @@ export default function TimelineOverlayTracks({
         dragRef.current = { ...st, startY: e.clientY };
       }
     }
+
+    // Eşik sonrası ani atlama (pop) olmaksızın 0'dan başlayan pürüzsüz delta:
+    const effectiveDx =
+      dxPx > 0 ? dxPx - DRAG_THRESHOLD_PX : dxPx + DRAG_THRESHOLD_PX;
+    const dtSec = effectiveDx / Math.max(20, pps);
+    const maxSec = Math.max(totalDuration + 15, 60);
 
     let nextStart = st.initStart;
     let nextEnd = st.initEnd;
@@ -215,11 +319,34 @@ export default function TimelineOverlayTracks({
   const handlePointerEnd = (e: React.PointerEvent) => {
     clearLongPress();
     setElevatedItemId(null);
-    if (!dragRef.current) return;
-    try {
-      (e.currentTarget as HTMLElement).releasePointerCapture(e.pointerId);
-    } catch {}
-    dragRef.current = null;
+
+    const pr = pressRef.current;
+    if (pr) {
+      // Eğer parmak eşik kadar kaymadıysa: sabit, hafif bir dokunuş/tıklama ile öğeyi seç
+      if (!pr.hasMoved) {
+        e.stopPropagation();
+        onPauseVideo?.();
+        onSelectItem(pr.id, pr.itemType);
+        suppressClickRef.current = true;
+        setTimeout(() => {
+          suppressClickRef.current = false;
+        }, 180);
+      } else {
+        // Parmak kaydıysa bu bir timeline scroll hareketidir; tıklamayı yut
+        suppressClickRef.current = true;
+        setTimeout(() => {
+          suppressClickRef.current = false;
+        }, 180);
+      }
+      pressRef.current = null;
+    }
+
+    if (dragRef.current) {
+      try {
+        rootTrackContainerRef.current?.releasePointerCapture(dragRef.current.pointerId);
+      } catch {}
+      dragRef.current = null;
+    }
   };
 
   const musicStart =
@@ -249,6 +376,7 @@ export default function TimelineOverlayTracks({
 
   return (
     <div
+      ref={rootTrackContainerRef}
       className="flex flex-col gap-1.5 select-none"
       style={{ width: `${trackWidthPx}px` }}
       onPointerMove={handlePointerMove}
@@ -280,25 +408,17 @@ export default function TimelineOverlayTracks({
                 <div
                   onClick={(e) => {
                     e.stopPropagation();
+                    if (suppressClickRef.current) return;
                     onSelectItem(item.layerId, item.type);
                   }}
                   onPointerDown={(e) => {
-                    // İki Aşamalı Etkileşim: İlk dokunuş yalnızca seçer, seçiliyken ikinci dokunuş taşır
-                    if (!isSelected) {
-                      e.stopPropagation();
-                      onPauseVideo?.();
-                      onSelectItem(item.layerId, item.type);
-                      return;
-                    }
-                    beginDrag(e, {
+                    handleItemPointerDown(e, {
                       targetKind: "overlay",
-                      mode: "move",
                       id: item.layerId,
                       itemType: item.type,
-                      startX: e.clientX,
-                      startY: e.clientY,
                       initStart: item.timelineStart,
                       initEnd: item.timelineEnd,
+                      isSelected,
                     });
                   }}
                   className={`absolute top-0 bottom-0 rounded-lg flex items-center px-2.5 gap-1.5 touch-none transition-transform duration-150 ${
@@ -345,13 +465,11 @@ export default function TimelineOverlayTracks({
                       <div
                         onClick={(e) => e.stopPropagation()}
                         onPointerDown={(e) =>
-                          beginDrag(e, {
+                          beginHandleDrag(e, {
                             targetKind: "overlay",
                             mode: "left",
                             id: item.layerId,
                             itemType: item.type,
-                            startX: e.clientX,
-                            startY: e.clientY,
                             initStart: item.timelineStart,
                             initEnd: item.timelineEnd,
                           })
@@ -363,13 +481,11 @@ export default function TimelineOverlayTracks({
                       <div
                         onClick={(e) => e.stopPropagation()}
                         onPointerDown={(e) =>
-                          beginDrag(e, {
+                          beginHandleDrag(e, {
                             targetKind: "overlay",
                             mode: "right",
                             id: item.layerId,
                             itemType: item.type,
-                            startX: e.clientX,
-                            startY: e.clientY,
                             initStart: item.timelineStart,
                             initEnd: item.timelineEnd,
                           })
@@ -466,25 +582,17 @@ export default function TimelineOverlayTracks({
                       key={fx.id}
                       onClick={(e) => {
                         e.stopPropagation();
+                        if (suppressClickRef.current) return;
                         onSelectItem(fx.id, "effect");
                       }}
                       onPointerDown={(e) => {
-                        // İki Aşamalı Etkileşim: İlk dokunuş yalnızca seçer, seçiliyken ikinci dokunuş taşır
-                        if (!isSelected) {
-                          e.stopPropagation();
-                          onPauseVideo?.();
-                          onSelectItem(fx.id, "effect");
-                          return;
-                        }
-                        beginDrag(e, {
+                        handleItemPointerDown(e, {
                           targetKind: "effect",
-                          mode: "move",
                           id: fx.id,
                           itemType: "effect",
-                          startX: e.clientX,
-                          startY: e.clientY,
                           initStart: fx.startTime,
                           initEnd: fx.endTime,
+                          isSelected,
                         });
                       }}
                       className={`absolute top-0 bottom-0 rounded-lg flex items-center px-2.5 gap-1.5 touch-none transition-transform duration-150 ${
@@ -516,13 +624,11 @@ export default function TimelineOverlayTracks({
                           <div
                             onClick={(e) => e.stopPropagation()}
                             onPointerDown={(e) =>
-                              beginDrag(e, {
+                              beginHandleDrag(e, {
                                 targetKind: "effect",
                                 mode: "left",
                                 id: fx.id,
                                 itemType: "effect",
-                                startX: e.clientX,
-                                startY: e.clientY,
                                 initStart: fx.startTime,
                                 initEnd: fx.endTime,
                               })
@@ -534,13 +640,11 @@ export default function TimelineOverlayTracks({
                           <div
                             onClick={(e) => e.stopPropagation()}
                             onPointerDown={(e) =>
-                              beginDrag(e, {
+                              beginHandleDrag(e, {
                                 targetKind: "effect",
                                 mode: "right",
                                 id: fx.id,
                                 itemType: "effect",
-                                startX: e.clientX,
-                                startY: e.clientY,
                                 initStart: fx.startTime,
                                 initEnd: fx.endTime,
                               })
@@ -580,25 +684,17 @@ export default function TimelineOverlayTracks({
                 key={seg.id}
                 onClick={(e) => {
                   e.stopPropagation();
+                  if (suppressClickRef.current) return;
                   onSelectItem(seg.id, "audio");
                 }}
                 onPointerDown={(e) => {
-                  // İki Aşamalı Etkileşim: İlk dokunuş yalnızca seçer, seçiliyken ikinci dokunuş taşır
-                  if (!isSelected) {
-                    e.stopPropagation();
-                    onPauseVideo?.();
-                    onSelectItem(seg.id, "audio");
-                    return;
-                  }
-                  beginDrag(e, {
+                  handleItemPointerDown(e, {
                     targetKind: "audio",
-                    mode: "move",
                     id: seg.id,
                     itemType: "audio",
-                    startX: e.clientX,
-                    startY: e.clientY,
                     initStart: seg.timelineStart,
                     initEnd: seg.timelineEnd,
+                    isSelected,
                   });
                 }}
                 className={`absolute top-0 bottom-0 rounded-lg bg-sky-600/80 flex items-center px-2.5 gap-2 touch-none overflow-visible transition-transform duration-150 ${
@@ -643,13 +739,11 @@ export default function TimelineOverlayTracks({
                     <div
                       onClick={(e) => e.stopPropagation()}
                       onPointerDown={(e) =>
-                        beginDrag(e, {
+                        beginHandleDrag(e, {
                           targetKind: "audio",
                           mode: "left",
                           id: seg.id,
                           itemType: "audio",
-                          startX: e.clientX,
-                          startY: e.clientY,
                           initStart: seg.timelineStart,
                           initEnd: seg.timelineEnd,
                         })
@@ -661,13 +755,11 @@ export default function TimelineOverlayTracks({
                     <div
                       onClick={(e) => e.stopPropagation()}
                       onPointerDown={(e) =>
-                        beginDrag(e, {
+                        beginHandleDrag(e, {
                           targetKind: "audio",
                           mode: "right",
                           id: seg.id,
                           itemType: "audio",
-                          startX: e.clientX,
-                          startY: e.clientY,
                           initStart: seg.timelineStart,
                           initEnd: seg.timelineEnd,
                         })

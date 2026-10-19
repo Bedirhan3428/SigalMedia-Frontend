@@ -44,6 +44,7 @@ type TrimPreviewState = {
   rightGapPx: number;
 };
 
+const DRAG_THRESHOLD_PX = 8;
 const TILE_SLOT_PX = 74; // 64px (w-16) + 10px (gap-2.5)
 
 export default function TimelineTrackClips({
@@ -65,6 +66,13 @@ export default function TimelineTrackClips({
   const rootContainerRef = useRef<HTMLDivElement | null>(null);
   const dragRef = useRef<ClipDragState | null>(null);
   const trimPreviewRef = useRef<TrimPreviewState | null>(null);
+  const clipPressRef = useRef<{
+    clipId: string;
+    startX: number;
+    startY: number;
+    hasMoved: boolean;
+  } | null>(null);
+  const suppressClipClickRef = useRef<boolean>(false);
   const longPressTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pressOriginRef = useRef<{
     x: number;
@@ -191,17 +199,19 @@ export default function TimelineTrackClips({
     clip: VideoTrackClip,
     idx: number
   ) => {
-    e.stopPropagation();
-    onPauseVideo?.();
-    onSelectClip(clip.id);
-
     clearLongPressTimer();
     const pointerId = e.pointerId;
     const startX = e.clientX;
     const startY = e.clientY;
     pressOriginRef.current = { x: startX, y: startY, pointerId };
+    clipPressRef.current = {
+      clipId: clip.id,
+      startX,
+      startY,
+      hasMoved: false,
+    };
 
-    // 300ms Basılı Tutma -> Kalıcı 1:1 Küçük Kareler Sıralama Modu (Dedicated Reorder Mode)
+    // 350ms Basılı Tutma -> Kalıcı 1:1 Küçük Kareler Sıralama Modu (Dedicated Reorder Mode)
     longPressTimerRef.current = setTimeout(() => {
       longPressTimerRef.current = null;
       onPauseVideo?.();
@@ -228,7 +238,7 @@ export default function TimelineTrackClips({
       setReorderingClipId(clip.id);
       setInsertionIndex(idx);
       setReorderOffsetPx(0);
-    }, 300);
+    }, 350);
   };
 
   const handlePointerMove = (e: React.PointerEvent) => {
@@ -237,7 +247,10 @@ export default function TimelineTrackClips({
         e.clientX - pressOriginRef.current.x,
         e.clientY - pressOriginRef.current.y
       );
-      if (moveDist > 10) {
+      if (moveDist >= DRAG_THRESHOLD_PX) {
+        if (clipPressRef.current) {
+          clipPressRef.current.hasMoved = true;
+        }
         clearLongPressTimer();
       }
     }
@@ -264,8 +277,17 @@ export default function TimelineTrackClips({
     }
 
     const dxPx = e.clientX - st.startX;
+
+    if (st.mode === "trim-left" || st.mode === "trim-right") {
+      if (Math.abs(dxPx) < DRAG_THRESHOLD_PX) {
+        return; // Eşik aşılana kadar süre ve önizleme kaymaz
+      }
+    }
+
     const rate = Math.max(0.25, st.playbackRate || 1.0);
-    const dtTimelineSec = dxPx / Math.max(20, pps);
+    const effectiveDx =
+      dxPx > 0 ? dxPx - DRAG_THRESHOLD_PX : dxPx + DRAG_THRESHOLD_PX;
+    const dtTimelineSec = effectiveDx / Math.max(20, pps);
     const dtSourceSec = dtTimelineSec * rate;
     const clipObj = clips.find((c) => c.id === st.clipId);
     const clipMediaDur = clipObj?.media?.duration || maxSourceDuration || 60;
@@ -353,6 +375,26 @@ export default function TimelineTrackClips({
 
   const handlePointerEnd = (e: React.PointerEvent) => {
     clearLongPressTimer();
+
+    const cpr = clipPressRef.current;
+    if (cpr) {
+      if (!cpr.hasMoved) {
+        e.stopPropagation();
+        onPauseVideo?.();
+        onSelectClip(cpr.clipId);
+        suppressClipClickRef.current = true;
+        setTimeout(() => {
+          suppressClipClickRef.current = false;
+        }, 180);
+      } else {
+        suppressClipClickRef.current = true;
+        setTimeout(() => {
+          suppressClipClickRef.current = false;
+        }, 180);
+      }
+      clipPressRef.current = null;
+    }
+
     const st = dragRef.current;
     if (!st) return;
     e.stopPropagation();
@@ -549,6 +591,7 @@ export default function TimelineTrackClips({
                   <div
                     onClick={(e) => {
                       e.stopPropagation();
+                      if (suppressClipClickRef.current) return;
                       onSelectClip(clip.id);
                     }}
                     onPointerDown={(e) => handleClipBodyPointerDown(e, clip, idx)}
