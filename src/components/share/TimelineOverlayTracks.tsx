@@ -164,12 +164,29 @@ export default function TimelineOverlayTracks({
     let nextEnd = st.initEnd;
     const span = Math.max(0.3, st.initEnd - st.initStart);
 
+    let minBound = 0;
+    let maxBound = maxSec;
+
+    // Efekt kliplerinin birbirinin üzerine kaymasını ve çakışmasını kesin olarak engelle
+    if (st.targetKind === "effect") {
+      const otherEffects = effectClips.filter((c) => c.id !== st.id);
+      for (let i = 0; i < otherEffects.length; i++) {
+        const other = otherEffects[i];
+        if (other.endTime <= st.initStart + 0.05 && other.endTime > minBound) {
+          minBound = other.endTime;
+        }
+        if (other.startTime >= st.initEnd - 0.05 && other.startTime < maxBound) {
+          maxBound = other.startTime;
+        }
+      }
+    }
+
     if (st.mode === "left") {
-      nextStart = Math.max(0, Math.min(st.initStart + dtSec, st.initEnd - 0.3));
+      nextStart = Math.max(minBound, Math.min(st.initStart + dtSec, st.initEnd - 0.3));
     } else if (st.mode === "right") {
-      nextEnd = Math.max(st.initStart + 0.3, Math.min(st.initEnd + dtSec, maxSec));
+      nextEnd = Math.max(st.initStart + 0.3, Math.min(st.initEnd + dtSec, maxBound));
     } else if (st.mode === "move") {
-      nextStart = Math.max(0, Math.min(st.initStart + dtSec, maxSec - span));
+      nextStart = Math.max(minBound, Math.min(st.initStart + dtSec, maxBound - span));
       nextEnd = nextStart + span;
     }
 

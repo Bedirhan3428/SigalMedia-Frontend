@@ -601,19 +601,47 @@ export default function ReelsEditor({
       return;
     }
     commitHistory();
-    const cur = getPlayheadTime();
-    const defaultSpan = Math.min(2.5, Math.max(0.8, totalDuration * 0.35));
-    let clipStart = cur;
-    let clipEnd = Math.min(totalDuration, clipStart + defaultSpan);
-    if (clipEnd - clipStart < 0.4) {
-      clipStart = Math.max(0, totalDuration - defaultSpan);
-      clipEnd = totalDuration;
+    const cur = Number(getPlayheadTime().toFixed(2));
+
+    // 1. Zaten seçili bir efekt klibi varsa: klibin efekt türünü doğrudan güncelle
+    if (selectedItemType === "effect" && selectedItemId) {
+      const updated = effectClips.map((c) =>
+        c.id === selectedItemId ? { ...c, effect: effectId } : c
+      );
+      onChangeEffectClips(updated);
+      return;
     }
+
+    // 2. İbre mevcut bir efekt klibinin içindeyse: o klibi güncelle ve seç
+    const existingAtCur = effectClips.find(
+      (c) => cur >= c.startTime && cur < c.endTime
+    );
+    if (existingAtCur) {
+      const updated = effectClips.map((c) =>
+        c.id === existingAtCur.id ? { ...c, effect: effectId } : c
+      );
+      onChangeEffectClips(updated);
+      setSelectedItemId(existingAtCur.id);
+      setSelectedItemType("effect");
+      return;
+    }
+
+    // 3. Boş alanda: bir sonraki efekti aşmayacak şekilde güvenli aralık hesapla (asla çakışma olmaz)
+    const upcomingEffects = effectClips
+      .filter((c) => c.startTime > cur)
+      .sort((a, b) => a.startTime - b.startTime);
+    const nextStart = upcomingEffects[0]?.startTime ?? totalDuration;
+    const maxAllowedSpan = Math.max(0.4, nextStart - cur);
+    const span = Math.min(2.5, Math.min(totalDuration - cur, maxAllowedSpan));
+
+    const clipStart = cur;
+    const clipEnd = Number(Math.min(totalDuration, clipStart + span).toFixed(2));
+
     const newClip: ReelsEffectClip = {
       id: `fx_${Date.now().toString(36)}`,
       effect: effectId,
-      startTime: Number(clipStart.toFixed(2)),
-      endTime: Number(clipEnd.toFixed(2)),
+      startTime: clipStart,
+      endTime: clipEnd,
       intensity: 100,
     };
     onSelectReelsEffect("none");
@@ -630,13 +658,24 @@ export default function ReelsEditor({
     }
     if (effectId === "none") {
       commitHistory();
-      onChangeEffectClips([]);
-      onSelectReelsEffect("none");
-      setSelectedItemId(null);
-      setSelectedItemType(null);
+      if (selectedItemType === "effect" && selectedItemId) {
+        onChangeEffectClips(effectClips.filter((c) => c.id !== selectedItemId));
+        setSelectedItemId(null);
+        setSelectedItemType(null);
+      } else {
+        const cur = getPlayheadTime();
+        const existing = effectClips.find(
+          (c) => cur >= c.startTime && cur < c.endTime
+        );
+        if (existing) {
+          onChangeEffectClips(effectClips.filter((c) => c.id !== existing.id));
+        } else {
+          onChangeEffectClips([]);
+          onSelectReelsEffect("none");
+        }
+      }
       return;
     }
-    // Her tıklamada ibre konumuna yeni efekt eklenir (aynı anda veya farklı zamanlarda çoklu efekt desteği)
     addEffectClipAtPlayhead(effectId);
   };
 
@@ -1040,47 +1079,84 @@ export default function ReelsEditor({
               )}
 
             {activeStrip === "effects" && (
-              <div className="flex flex-col gap-2 px-4">
-                {/* 1. Kategori Sekmeleri: Sinema & Retro | Dinamik & Işık + Temizle */}
+              <div className="flex flex-col gap-1.5 px-4">
+                {/* 1. Kompakt Üst Bar: Kategori Filtreleri + Seçiliyse Yoğunluk Slider + Kapat (✕) */}
                 <div className="flex items-center justify-between gap-2">
-                  <div className="flex items-center gap-1.5 bg-[#16171b] p-1 rounded-xl border border-white/5">
+                  <div className="flex items-center gap-1 bg-[#16171b] p-0.5 rounded-xl border border-white/5 shrink-0">
                     <button
                       type="button"
                       onClick={() => setEffectCategory("cinema")}
-                      className={`px-3 py-1 rounded-lg text-[11px] font-bold transition-all ${
+                      className={`px-2.5 py-1 rounded-lg text-[11px] font-bold transition-all ${
                         effectCategory === "cinema"
                           ? "bg-amber-400 text-black shadow-sm"
                           : "text-zinc-400 hover:text-white"
                       }`}
                     >
-                      🎬 Sinema & Retro
+                      Sinema
                     </button>
                     <button
                       type="button"
                       onClick={() => setEffectCategory("dynamic")}
-                      className={`px-3 py-1 rounded-lg text-[11px] font-bold transition-all ${
+                      className={`px-2.5 py-1 rounded-lg text-[11px] font-bold transition-all ${
                         effectCategory === "dynamic"
                           ? "bg-amber-400 text-black shadow-sm"
                           : "text-zinc-400 hover:text-white"
                       }`}
                     >
-                      ⚡ Dinamik & Işık
+                      Dinamik
                     </button>
                   </div>
 
-                  {effectClips.length > 0 && (
+                  {selectedEffectClip && onChangeEffectClips ? (
+                    <div className="flex-1 flex items-center gap-2 bg-[#16171b] rounded-xl px-2.5 py-1 border border-white/5 max-w-[200px]">
+                      <span className="text-[10px] font-medium text-zinc-400 shrink-0">
+                        Yoğunluk
+                      </span>
+                      <input
+                        type="range"
+                        min={15}
+                        max={100}
+                        value={selectedEffectClip.intensity}
+                        onChange={(e) => {
+                          const val = Number(e.target.value);
+                          onChangeEffectClips(
+                            effectClips.map((c) =>
+                              c.id === selectedEffectClip.id
+                                ? { ...c, intensity: val }
+                                : c
+                            )
+                          );
+                        }}
+                        className="flex-1 h-1 bg-white/15 rounded-lg appearance-none cursor-pointer accent-amber-400"
+                      />
+                      <span className="text-[10px] font-semibold text-white w-7 text-right tabular-nums">
+                        {selectedEffectClip.intensity}%
+                      </span>
+                    </div>
+                  ) : null}
+
+                  <div className="flex items-center gap-1.5 shrink-0">
+                    {effectClips.length > 0 && (
+                      <button
+                        type="button"
+                        onClick={() => handleSelectEffectPreset("none")}
+                        className="px-2 py-1 rounded-xl bg-red-500/15 hover:bg-red-500/25 border border-red-500/25 text-[10px] font-semibold text-red-300 active:scale-95 transition-all"
+                      >
+                        Temizle
+                      </button>
+                    )}
                     <button
                       type="button"
-                      onClick={() => handleSelectEffectPreset("none")}
-                      className="px-2.5 py-1 rounded-xl bg-red-500/15 hover:bg-red-500/25 border border-red-500/25 text-[11px] font-semibold text-red-300 active:scale-95 transition-all"
+                      onClick={() => setActiveStrip("none")}
+                      className="w-7 h-7 rounded-xl bg-white/10 hover:bg-white/20 text-zinc-300 flex items-center justify-center active:scale-90 transition-all"
                     >
-                      Temizle
+                      <X className="w-3.5 h-3.5" />
                     </button>
-                  )}
+                  </div>
                 </div>
 
-                {/* 2. Seçili Kategorideki Görsel Efekt Seçenek Kartları (4'lü Grid) */}
-                <div className="grid grid-cols-4 gap-2">
+                {/* 2. Yatay Akıcı Efekt Kartları Şeridi (Tek Satır - Ekranı Asla Kaplamaz) */}
+                <div className="flex items-center gap-2 overflow-x-auto no-scrollbar py-0.5">
                   {REELS_EFFECT_PRESETS.filter((eff) =>
                     effectCategory === "cinema"
                       ? ["cinema_warm", "vhs_grain", "rgb_shift", "glitch"].includes(
@@ -1096,132 +1172,47 @@ export default function ReelsEditor({
                         key={eff.id}
                         type="button"
                         onClick={() => handleSelectEffectPreset(eff.id)}
-                        className={`flex flex-col items-center justify-center gap-1.5 py-2 px-1.5 rounded-2xl border transition-all active:scale-95 ${
+                        className={`flex items-center gap-2 py-1.5 px-3 rounded-xl border shrink-0 transition-all active:scale-95 ${
                           active
-                            ? "bg-white/15 border-amber-400 ring-1 ring-amber-400/60 shadow-md"
+                            ? "bg-amber-400/20 border-amber-400 ring-1 ring-amber-400/50 shadow"
                             : "bg-[#18191e] border-white/10 hover:bg-[#22242b]"
                         }`}
                       >
                         <div
-                          className="w-7 h-7 rounded-xl flex items-center justify-center shadow-inner"
+                          className="w-5 h-5 rounded-lg flex items-center justify-center shrink-0"
                           style={{
                             background: `radial-gradient(circle at 30% 30%, ${eff.color}, #111827)`,
                           }}
                         >
-                          <Sparkles className="w-3.5 h-3.5 text-white drop-shadow" />
+                          <Sparkles className="w-2.5 h-2.5 text-white" />
                         </div>
-                        <span className="text-[10px] font-bold text-zinc-100 truncate w-full text-center">
+                        <span className="text-[11px] font-semibold text-zinc-100 whitespace-nowrap">
                           {eff.name}
                         </span>
                       </button>
                     );
                   })}
                 </div>
-
-                {/* 3. Eklenen Efektler Şeridi (Aynı anda veya farklı zamanlarda eklenen tüm efektler) */}
-                {effectClips.length > 0 && (
-                  <div className="flex items-center gap-1.5 overflow-x-auto no-scrollbar pb-0.5">
-                    {effectClips.map((fx) => {
-                      const preset = REELS_EFFECT_PRESETS.find(
-                        (p) => p.id === fx.effect
-                      );
-                      const isSel =
-                        selectedItemType === "effect" &&
-                        selectedItemId === fx.id;
-                      return (
-                        <div
-                          key={fx.id}
-                          className={`flex items-center gap-1.5 pl-2.5 pr-1.5 py-1 rounded-xl text-[11px] font-semibold shrink-0 border transition-all ${
-                            isSel
-                              ? "bg-amber-400 text-black border-amber-400"
-                              : "bg-[#16171b] text-zinc-200 border-white/15"
-                          }`}
-                        >
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setSelectedItemId(fx.id);
-                              setSelectedItemType("effect");
-                              onSeek(fx.startTime);
-                            }}
-                            className="flex items-center gap-1.5"
-                          >
-                            <span
-                              className="w-2 h-2 rounded-full shrink-0"
-                              style={{
-                                backgroundColor: preset?.color || "#a855f7",
-                              }}
-                            />
-                            <span>{preset?.name || fx.effect}</span>
-                            <span
-                              className={`text-[10px] tabular-nums ${
-                                isSel ? "text-black/70" : "text-zinc-400"
-                              }`}
-                            >
-                              {fx.startTime.toFixed(1)}s–{fx.endTime.toFixed(1)}s
-                            </span>
-                          </button>
-                          <button
-                            type="button"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              commitHistory();
-                              onChangeEffectClips?.(
-                                effectClips.filter((c) => c.id !== fx.id)
-                              );
-                              if (selectedItemId === fx.id) {
-                                setSelectedItemId(null);
-                                setSelectedItemType(null);
-                              }
-                            }}
-                            className={`w-4 h-4 rounded-full flex items-center justify-center ${
-                              isSel
-                                ? "hover:bg-black/15 text-black"
-                                : "hover:bg-white/15 text-zinc-400"
-                            }`}
-                          >
-                            <X className="w-3 h-3" />
-                          </button>
-                        </div>
-                      );
-                    })}
-                  </div>
-                )}
-
-                {selectedEffectClip && onChangeEffectClips && (
-                  <div className="flex items-center gap-3 bg-[#16171b] rounded-2xl px-3.5 py-1.5 border border-white/5">
-                    <span className="text-xs font-medium text-zinc-400 shrink-0">
-                      Yoğunluk
-                    </span>
-                    <input
-                      type="range"
-                      min={15}
-                      max={100}
-                      value={selectedEffectClip.intensity}
-                      onChange={(e) => {
-                        const val = Number(e.target.value);
-                        onChangeEffectClips(
-                          effectClips.map((c) =>
-                            c.id === selectedEffectClip.id
-                              ? { ...c, intensity: val }
-                              : c
-                          )
-                        );
-                      }}
-                      className="flex-1 h-1.5 bg-white/15 rounded-lg appearance-none cursor-pointer accent-amber-400"
-                    />
-                    <span className="text-xs font-semibold text-white w-9 text-right tabular-nums">
-                      {selectedEffectClip.intensity}%
-                    </span>
-                  </div>
-                )}
               </div>
             )}
 
             {activeStrip === "audio_speed" && (
-              <div className="flex flex-col gap-2 px-4">
+              <div className="flex flex-col gap-1.5 px-4">
+                <div className="flex items-center justify-between pb-0.5">
+                  <span className="text-[11px] font-bold text-zinc-300">
+                    {selectedItemType === "audio" ? "Müzik Ayarları" : "Klip Hız & Ses"}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => setActiveStrip("none")}
+                    className="w-6 h-6 rounded-lg bg-white/10 hover:bg-white/20 text-zinc-300 flex items-center justify-center active:scale-90 transition-all"
+                  >
+                    <X className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+
                 {selectedItemType === "audio" && selectedMusic ? (
-                  <div className="flex items-center gap-3 bg-[#16171b] rounded-2xl px-3.5 py-2">
+                  <div className="flex items-center gap-3 bg-[#16171b] rounded-2xl px-3.5 py-1.5">
                     <Music className="w-4 h-4 text-sky-400 shrink-0" />
                     <span className="text-xs font-medium text-zinc-300 w-16 truncate shrink-0">
                       {selectedMusic.title}
@@ -1262,7 +1253,7 @@ export default function ReelsEditor({
                                 onChangeSpeed(rate);
                               }
                             }}
-                            className={`py-1.5 rounded-xl text-xs font-bold border transition-all active:scale-95 ${
+                            className={`py-1 rounded-xl text-xs font-bold border transition-all active:scale-95 ${
                               active
                                 ? "bg-amber-400 text-black border-amber-400"
                                 : "bg-[#1c1c1e] text-white border-white/5 hover:bg-[#26262a]"
@@ -1276,7 +1267,7 @@ export default function ReelsEditor({
 
                     {/* Klip Ses Seviyesi (0 - 100) */}
                     {!videoState.isMotionPhoto && (
-                      <div className="flex items-center gap-3 bg-[#16171b] rounded-2xl px-3.5 py-2">
+                      <div className="flex items-center gap-3 bg-[#16171b] rounded-2xl px-3 py-1">
                         <button
                           type="button"
                           onClick={() => {
@@ -1297,13 +1288,13 @@ export default function ReelsEditor({
                           className="text-white shrink-0"
                         >
                           {activeClipVolume === 0 ? (
-                            <VolumeX className="w-4 h-4 text-red-400" />
+                            <VolumeX className="w-3.5 h-3.5 text-red-400" />
                           ) : (
-                            <Volume2 className="w-4 h-4 text-zinc-300" />
+                            <Volume2 className="w-3.5 h-3.5 text-zinc-300" />
                           )}
                         </button>
-                        <span className="text-xs font-medium text-zinc-400 w-14 shrink-0">
-                          Klip Sesi
+                        <span className="text-[11px] font-medium text-zinc-400 w-12 shrink-0">
+                          Ses
                         </span>
                         <input
                           type="range"
@@ -1323,9 +1314,9 @@ export default function ReelsEditor({
                               onChangeVolume(val, val === 0);
                             }
                           }}
-                          className="flex-1 h-1.5 bg-white/15 rounded-lg appearance-none cursor-pointer accent-white"
+                          className="flex-1 h-1 bg-white/15 rounded-lg appearance-none cursor-pointer accent-white"
                         />
-                        <span className="text-xs font-semibold text-white w-9 text-right tabular-nums">
+                        <span className="text-[11px] font-semibold text-white w-8 text-right tabular-nums">
                           {activeClipVolume}%
                         </span>
                       </div>
@@ -1336,24 +1327,33 @@ export default function ReelsEditor({
             )}
 
             {activeStrip === "filters" && (
-              <div className="flex items-center gap-2 overflow-x-auto no-scrollbar px-4">
-                {FILTER_PRESETS.map((preset, idx) => {
-                  const active = activeFilterIndex === idx;
-                  return (
-                    <button
-                      key={preset.id}
-                      type="button"
-                      onClick={() => onSelectFilterIndex(idx)}
-                      className={`px-4 py-2 rounded-2xl text-xs font-semibold shrink-0 border transition-all active:scale-95 ${
-                        active
-                          ? "bg-white text-black border-white"
-                          : "bg-[#1c1c1e] text-zinc-300 border-white/5 hover:bg-[#26262a]"
-                      }`}
-                    >
-                      {preset.name}
-                    </button>
-                  );
-                })}
+              <div className="flex items-center gap-2 px-4">
+                <div className="flex-1 flex items-center gap-2 overflow-x-auto no-scrollbar py-0.5">
+                  {FILTER_PRESETS.map((preset, idx) => {
+                    const active = activeFilterIndex === idx;
+                    return (
+                      <button
+                        key={preset.id}
+                        type="button"
+                        onClick={() => onSelectFilterIndex(idx)}
+                        className={`px-3 py-1.5 rounded-xl text-xs font-semibold shrink-0 border transition-all active:scale-95 ${
+                          active
+                            ? "bg-white text-black border-white"
+                            : "bg-[#1c1c1e] text-zinc-300 border-white/5 hover:bg-[#26262a]"
+                        }`}
+                      >
+                        {preset.name}
+                      </button>
+                    );
+                  })}
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setActiveStrip("none")}
+                  className="w-7 h-7 rounded-xl bg-white/10 hover:bg-white/20 text-zinc-300 flex items-center justify-center shrink-0 active:scale-90 transition-all"
+                >
+                  <X className="w-3.5 h-3.5" />
+                </button>
               </div>
             )}
 

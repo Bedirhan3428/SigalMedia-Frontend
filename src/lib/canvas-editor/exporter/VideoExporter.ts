@@ -1,8 +1,8 @@
 // [START] CREATED BY Bedirhan
 // [MODIFIED BY Bedirhan]
 import { CanvasEngine } from '../Engine';
-import { StoryAudioMeta, VideoTrackClip } from '../types';
-import { FastDemuxer, DemuxedVideoTrack } from './FastDemuxer';
+import { EditorMedia, StoryAudioMeta, VideoTrackClip } from '../types';
+import { FastDemuxer, DemuxedSample, DemuxedVideoTrack } from './FastDemuxer';
 import { MediaRecorderFallback } from './MediaRecorderFallback';
 
 export interface ExportVideoOptions {
@@ -17,26 +17,195 @@ export interface ExportVideoOptions {
   signal?: AbortSignal;
 }
 
-// H.264 Baseline Profile öncelikli: B-Frame referans araması yapmadığı için donanım encoder'da %40 daha hızlıdır
+// High → Main → Baseline: aynı bitrate'te High profil belirgin şekilde daha net görüntü verir.
 const H264_CODEC_CANDIDATES = [
-  'avc1.42001f', // Baseline Profile Level 3.1 (720p30 Ultra-Fast Hardware Encode)
-  'avc1.42E01F', // Constrained Baseline Level 3.1 (720p30)
-  'avc1.420028', // Baseline Profile Level 4.0
+  'avc1.640028', // High Profile Level 4.0
+  'avc1.4d0028', // Main Profile Level 4.0
   'avc1.42E028', // Constrained Baseline Level 4.0
-  'avc1.42002a', // Baseline Profile Level 4.2
-  'avc1.42E02a', // Constrained Baseline Level 4.2
-  'avc1.4d002a', // Main Profile Level 4.2
+  'avc1.420028', // Baseline Profile Level 4.0
   'avc1.64002a', // High Profile Level 4.2
-  'avc1.420032', // Baseline Profile Level 5.0
-  'avc1.4d0032', // Main Profile Level 5.0
+  'avc1.4d002a', // Main Profile Level 4.2
+  'avc1.42E01F', // Constrained Baseline Level 3.1
+  'avc1.42001f', // Baseline Profile Level 3.1
   'avc1.640032', // High Profile Level 5.0
-  'avc1.640033', // High Profile Level 5.1
 ];
+
+const OUTPUT_FPS = 30;
+const DEFAULT_BITRATE = 6_000_000;
+const AUDIO_SAMPLE_RATE = 44100;
+
+function abortError(): DOMException {
+  return new DOMException('Export cancelled', 'AbortError');
+}
+
+/**
+ * Tek bir klip aralığı için WebCodecs donanım çözücüsünden kareleri sırayla "çeken" imleç.
+ * Kareler sunum (PTS) sırasıyla gelir; frameAt(t) her zaman t anını kapsayan gerçek kareyi döndürür.
+ * Böylece kör döngü / kopya kare / seek iptali olmadan 1:1 kare eşleşmesi sağlanır.
+ */
+class DecodedFrameCursor {
+  private decoder: VideoDecoder | null = null;
+  private queue: VideoFrame[] = [];
+  private current: VideoFrame | null = null;
+  private nextSampleIdx = 0;
+  private fedCount = 0;
+  private outCount = 0;
+  private flushed = false;
+  private error: Error | null = null;
+  private waiter: (() => void) | null = null;
+
+  constructor(
+    private readonly track: DemuxedVideoTrack,
+    private readonly samples: DemuxedSample[]
+  ) {}
+
+  public async open(): Promise<boolean> {
+    if (typeof VideoDecoder === 'undefined' || typeof EncodedVideoChunk === 'undefined') {
+      return false;
+    }
+    if (this.samples.length === 0) return false;
+
+    const config: VideoDecoderConfig = {
+      codec: this.track.codec,
+      codedWidth: this.track.codedWidth,
+      codedHeight: this.track.codedHeight,
+      description: this.track.description,
+      hardwareAcceleration: 'prefer-hardware',
+    };
+    try {
+      const support = await VideoDecoder.isConfigSupported(config);
+      if (!support.supported) return false;
+    } catch {
+      return false;
+    }
+
+    try {
+      this.decoder = new VideoDecoder({
+        output: (frame) => {
+          this.queue.push(frame);
+          this.outCount++;
+          this.wake();
+        },
+        error: (err) => {
+          this.error = err instanceof Error ? err : new Error(String(err));
+          this.wake();
+        },
+      });
+      this.decoder.configure(config);
+      return true;
+    } catch {
+      this.close();
+      return false;
+    }
+  }
+
+  private wake(): void {
+    const w = this.waiter;
+    this.waiter = null;
+    if (w) w();
+  }
+
+  private waitForOutput(ms: number): Promise<void> {
+    return new Promise<void>((resolve) => {
+      const done = () => {
+        clearTimeout(timer);
+        if (this.waiter === done) this.waiter = null;
+        resolve();
+      };
+      const timer = setTimeout(done, ms);
+      this.waiter = done;
+    });
+  }
+
+  private feed(): void {
+    const dec = this.decoder;
+    if (!dec) return;
+    while (
+      this.nextSampleIdx < this.samples.length &&
+      dec.decodeQueueSize < 6 &&
+      this.fedCount - this.outCount < 10
+    ) {
+      const s = this.samples[this.nextSampleIdx++];
+      if (s.data.byteLength === 0) continue;
+      dec.decode(
+        new EncodedVideoChunk({
+          type: s.isKeyframe ? 'key' : 'delta',
+          timestamp: s.timestampUs,
+          duration: s.durationUs,
+          data: s.data,
+        })
+      );
+      this.fedCount++;
+    }
+  }
+
+  /** sourceSec: <video>.currentTime ile aynı zaman ekseni */
+  public async frameAt(sourceSec: number, signal?: AbortSignal): Promise<VideoFrame | null> {
+    const dec = this.decoder;
+    if (!dec) return null;
+    const targetUs = Math.round(sourceSec * 1_000_000) + this.track.ptsOffsetUs + 1500;
+    let idleMs = 0;
+
+    for (;;) {
+      if (signal?.aborted) throw abortError();
+      if (this.error) throw this.error;
+
+      while (this.queue.length > 0 && this.queue[0].timestamp <= targetUs) {
+        if (this.current) this.current.close();
+        this.current = this.queue.shift() as VideoFrame;
+        idleMs = 0;
+      }
+
+      // Kuyrukta t'den sonraki bir kare varsa 'current' t anını kesin olarak kapsar
+      if (this.queue.length > 0) return this.current ?? this.queue[0];
+      if (this.flushed) return this.current;
+
+      if (this.nextSampleIdx < this.samples.length) {
+        const before = this.outCount;
+        this.feed();
+        if (this.outCount === before) {
+          await this.waitForOutput(40);
+          if (this.outCount === before) {
+            idleMs += 40;
+            if (idleMs > 4000) throw new Error('Decoder stalled');
+          }
+        }
+      } else {
+        await dec.flush();
+        this.flushed = true;
+      }
+    }
+  }
+
+  public close(): void {
+    this.wake();
+    if (this.current) {
+      try {
+        this.current.close();
+      } catch {}
+      this.current = null;
+    }
+    for (const f of this.queue) {
+      try {
+        f.close();
+      } catch {}
+    }
+    this.queue = [];
+    if (this.decoder) {
+      try {
+        if (this.decoder.state !== 'closed') this.decoder.close();
+      } catch {}
+      this.decoder = null;
+    }
+  }
+}
 
 export class VideoExporter {
   // [START] CREATED BY Bedirhan
   private static sharedExportCanvas: HTMLCanvasElement | null = null;
   private static sharedExportCtx: CanvasRenderingContext2D | null = null;
+  private static rotateCanvas: HTMLCanvasElement | null = null;
+  private static rotateCtx: CanvasRenderingContext2D | null = null;
 
   private static getExportSurface(width: number, height: number): {
     canvas: HTMLCanvasElement;
@@ -44,10 +213,8 @@ export class VideoExporter {
   } {
     if (!this.sharedExportCanvas) {
       this.sharedExportCanvas = document.createElement('canvas');
-      this.sharedExportCtx = this.sharedExportCanvas.getContext('2d', {
-        alpha: false,
-        desynchronized: true,
-      });
+      // desynchronized kullanılmaz: VideoFrame(canvas) yakalaması bayat tampon döndürebiliyor
+      this.sharedExportCtx = this.sharedExportCanvas.getContext('2d', { alpha: false });
     }
     if (!this.sharedExportCtx) {
       throw new Error('Export 2D context oluşturulamadı');
@@ -67,6 +234,32 @@ export class VideoExporter {
     };
   }
 
+  /** Telefon videolarındaki tkhd dönüşünü uygular (VideoFrame ham/döndürülmemiş gelir) */
+  private static orientFrame(frame: VideoFrame, rotation: number): CanvasImageSource {
+    if (!rotation) return frame;
+    const fw = frame.displayWidth;
+    const fh = frame.displayHeight;
+    const swap = rotation === 90 || rotation === 270;
+    const w = swap ? fh : fw;
+    const h = swap ? fw : fh;
+    if (!this.rotateCanvas) {
+      this.rotateCanvas = document.createElement('canvas');
+      this.rotateCtx = this.rotateCanvas.getContext('2d', { alpha: false });
+    }
+    const ctx = this.rotateCtx;
+    if (!ctx) return frame;
+    if (this.rotateCanvas.width !== w || this.rotateCanvas.height !== h) {
+      this.rotateCanvas.width = w;
+      this.rotateCanvas.height = h;
+    }
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.translate(w / 2, h / 2);
+    ctx.rotate((rotation * Math.PI) / 180);
+    ctx.drawImage(frame, -fw / 2, -fh / 2, fw, fh);
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    return this.rotateCanvas;
+  }
+
   private static yieldToMain(): Promise<void> {
     if (typeof MessageChannel !== 'undefined') {
       return new Promise<void>((resolve) => {
@@ -78,12 +271,31 @@ export class VideoExporter {
     return new Promise<void>((r) => setTimeout(r, 0));
   }
 
-  private static async getSourceVideoBuffer(
-    engine: CanvasEngine,
+  private static async drainEncoder(
+    encoder: VideoEncoder,
+    maxQueue: number,
+    signal?: AbortSignal
+  ): Promise<void> {
+    while (encoder.encodeQueueSize > maxQueue) {
+      if (signal?.aborted) throw abortError();
+      await new Promise<void>((resolve) => {
+        const target = encoder as unknown as EventTarget;
+        const done = () => {
+          clearTimeout(timer);
+          target.removeEventListener('dequeue', done);
+          resolve();
+        };
+        const timer = setTimeout(done, 6);
+        target.addEventListener('dequeue', done);
+      });
+    }
+  }
+
+  private static async readMediaBuffer(
+    media: EditorMedia | undefined | null,
     signal?: AbortSignal
   ): Promise<ArrayBuffer | null> {
-    const media = engine.getMedia();
-    if (!media || engine.getVideoState().isMotionPhoto) return null;
+    if (!media || media.type !== 'video') return null;
     try {
       if (media.source instanceof Blob) {
         return await media.source.arrayBuffer();
@@ -96,8 +308,8 @@ export class VideoExporter {
         const resp = await fetch(media.element.src, { signal });
         if (resp.ok) return await resp.arrayBuffer();
       }
-    } catch {
-      // Kaynak okunamadıysa null dön
+    } catch (err) {
+      if (err instanceof DOMException && err.name === 'AbortError') throw err;
     }
     return null;
   }
@@ -114,53 +326,45 @@ export class VideoExporter {
   private static async findSupportedVideoConfig(
     preferredWidth: number,
     preferredHeight: number,
-    fps: number,
     bitrate: number
-  ): Promise<{ config: VideoEncoderConfig; width: number; height: number; fps: number } | null> {
+  ): Promise<{ config: VideoEncoderConfig; width: number; height: number } | null> {
     if (!this.isWebCodecsSupported()) return null;
 
     const targetW = (preferredWidth || 720) & ~1;
     const targetH = (preferredHeight || 1280) & ~1;
-    // GÖREV B-FIX3: Çıktı kare hızı sabit 30 FPS (framerate: 30) olarak kilitlendi
-    const targetFps = 30;
 
-    const attempts: Array<{
-      width: number;
-      height: number;
-      fps: number;
-      bitrate: number;
-      latencyMode?: LatencyMode;
-    }> = [
-      { width: targetW, height: targetH, fps: targetFps, bitrate, latencyMode: 'realtime' },
-      { width: targetW, height: targetH, fps: targetFps, bitrate },
-      { width: 720, height: 1280, fps: 30, bitrate: Math.min(bitrate, 4_800_000), latencyMode: 'realtime' },
-      { width: 720, height: 1280, fps: 30, bitrate: Math.min(bitrate, 4_800_000) },
+    // latencyMode 'quality': 'realtime' modu hız kontrolü için kare DÜŞÜRÜR (3-5 FPS çıktının kök nedeni)
+    const attempts: Array<{ width: number; height: number; bitrate: number }> = [
+      { width: targetW, height: targetH, bitrate },
+      { width: 720, height: 1280, bitrate: Math.min(bitrate, DEFAULT_BITRATE) },
     ];
 
     for (const attempt of attempts) {
-      for (const codec of H264_CODEC_CANDIDATES) {
-        const candidate: VideoEncoderConfig = {
-          codec,
-          width: attempt.width,
-          height: attempt.height,
-          bitrate: attempt.bitrate,
-          framerate: attempt.fps,
-          hardwareAcceleration: 'prefer-hardware',
-          ...(attempt.latencyMode ? { latencyMode: attempt.latencyMode } : {}),
-          avc: { format: 'avc' },
-        };
-        try {
-          const support = await VideoEncoder.isConfigSupported(candidate);
-          if (support.supported) {
-            return {
-              config: support.config || candidate,
-              width: attempt.width,
-              height: attempt.height,
-              fps: attempt.fps,
-            };
+      for (const hw of ['prefer-hardware', 'no-preference'] as HardwareAcceleration[]) {
+        for (const codec of H264_CODEC_CANDIDATES) {
+          const candidate: VideoEncoderConfig = {
+            codec,
+            width: attempt.width,
+            height: attempt.height,
+            bitrate: attempt.bitrate,
+            bitrateMode: 'variable',
+            framerate: OUTPUT_FPS,
+            latencyMode: 'quality',
+            hardwareAcceleration: hw,
+            avc: { format: 'avc' },
+          };
+          try {
+            const support = await VideoEncoder.isConfigSupported(candidate);
+            if (support.supported) {
+              return {
+                config: support.config || candidate,
+                width: attempt.width,
+                height: attempt.height,
+              };
+            }
+          } catch {
+            // Sonraki adayı dene
           }
-        } catch {
-          // Sonraki codec adayını dene
         }
       }
     }
@@ -168,87 +372,97 @@ export class VideoExporter {
     return null;
   }
 
-  private static async renderMixedAudio(
-    engine: CanvasEngine,
-    outputDuration: number,
-    sourceVideoBuffer: ArrayBuffer | null,
-    music?: StoryAudioMeta | null,
-    musicVolume = 0.85,
-    signal?: AbortSignal
-  ): Promise<AudioBuffer | null> {
-    if (typeof OfflineAudioContext === 'undefined') return null;
-
-    const state = engine.getVideoState();
+  /** Dışa aktarılacak klip listesi (Reels NLE veya tek parça Hikaye/Gönderi videosu) */
+  private static resolveExportClips(engine: CanvasEngine): VideoTrackClip[] {
     const isReelsNle =
       engine.getShareMode() === 'reels' && engine.getVideoClips().length > 0;
-    const clips = engine.getVideoClips();
-    const hasVideoAudio = isReelsNle
-      ? clips.some((c) => !c.isMotionPhoto && !c.muted && c.volume > 0)
-      : !state.isMotionPhoto && !state.muted && state.volume > 0;
-    const hasMusicAudio = Boolean(music && music.streamUrl && musicVolume > 0);
-
-    if (!hasVideoAudio && !hasMusicAudio) {
-      return null;
+    if (isReelsNle) {
+      return engine.getVideoClips().filter((c) => c.duration > 0.01);
     }
-
-    const sampleRate = 44100;
-    const totalSamples = Math.max(1, Math.ceil(outputDuration * sampleRate));
-    const offlineCtx = new OfflineAudioContext(2, totalSamples, sampleRate);
-    let hasAnySource = false;
-
+    const state = engine.getVideoState();
+    const media = engine.getMedia() || undefined;
     const trimStart = state.trimStart;
     const trimEnd = state.trimEnd > trimStart ? state.trimEnd : state.duration;
-    const playbackRate = state.playbackRate || 1.0;
+    const rate = Math.max(0.25, state.playbackRate || 1.0);
+    const sourceDur = Math.max(0.1, Math.min(60 * rate, trimEnd - trimStart));
+    return [
+      {
+        id: 'single_export_clip',
+        sourceMediaId: media?.objectUrl || 'main_media',
+        sourceStart: trimStart,
+        sourceEnd: trimStart + sourceDur,
+        duration: Math.min(60, sourceDur / rate),
+        playbackRate: rate,
+        volume: state.volume,
+        muted: state.muted,
+        isMotionPhoto: Boolean(state.isMotionPhoto),
+        media,
+      },
+    ];
+  }
 
-    if (hasVideoAudio) {
-      try {
-        const arrayBuf = sourceVideoBuffer ?? (await this.getSourceVideoBuffer(engine, signal));
+  private static async renderMixedAudio(params: {
+    clips: VideoTrackClip[];
+    isReelsNle: boolean;
+    outputDuration: number;
+    getBuffer: (media: EditorMedia | undefined) => Promise<ArrayBuffer | null>;
+    music?: StoryAudioMeta | null;
+    musicVolume: number;
+    signal?: AbortSignal;
+  }): Promise<AudioBuffer | null> {
+    const { clips, isReelsNle, outputDuration, getBuffer, music, musicVolume, signal } = params;
+    if (typeof OfflineAudioContext === 'undefined') return null;
 
-        if (arrayBuf && arrayBuf.byteLength > 0) {
-          const decodedVideoAudio = await offlineCtx.decodeAudioData(arrayBuf.slice(0));
+    const audibleClips = clips.filter(
+      (c) => !c.isMotionPhoto && !c.muted && c.volume > 0 && c.media?.type === 'video'
+    );
+    const hasMusicAudio = Boolean(music && music.streamUrl && musicVolume > 0);
+    if (audibleClips.length === 0 && !hasMusicAudio) return null;
 
-          if (isReelsNle) {
-            let accOutTime = 0;
-            for (const clip of clips) {
-              const clipOutDur = Math.max(0.1, clip.duration);
-              if (!clip.isMotionPhoto && !clip.muted && clip.volume > 0) {
-                const sourceNode = offlineCtx.createBufferSource();
-                sourceNode.buffer = decodedVideoAudio;
-                sourceNode.playbackRate.value = clip.playbackRate || 1.0;
+    const totalSamples = Math.max(1, Math.ceil(outputDuration * AUDIO_SAMPLE_RATE));
+    const offlineCtx = new OfflineAudioContext(2, totalSamples, AUDIO_SAMPLE_RATE);
+    let hasAnySource = false;
 
-                const gainNode = offlineCtx.createGain();
-                gainNode.gain.value = Math.max(0, Math.min(1, clip.volume));
-
-                sourceNode.connect(gainNode);
-                gainNode.connect(offlineCtx.destination);
-
-                const sourceDur = Math.max(0.1, clip.sourceEnd - clip.sourceStart);
-                sourceNode.start(accOutTime, clip.sourceStart, sourceDur);
-                hasAnySource = true;
+    // 1. Klip sesleri: her klip KENDİ medya kaynağından çözülür (çoklu medya desteği)
+    if (audibleClips.length > 0) {
+      const decodedCache = new Map<EditorMedia, AudioBuffer | null>();
+      let accOutTime = 0;
+      for (const clip of clips) {
+        if (signal?.aborted) throw abortError();
+        const clipOutDur = Math.max(0.05, clip.duration);
+        if (audibleClips.includes(clip) && clip.media) {
+          let decoded = decodedCache.get(clip.media);
+          if (decoded === undefined) {
+            decoded = null;
+            try {
+              const buf = await getBuffer(clip.media);
+              if (buf && buf.byteLength > 0) {
+                decoded = await offlineCtx.decodeAudioData(buf.slice(0));
               }
-              accOutTime += clipOutDur;
+            } catch (err) {
+              if (err instanceof DOMException && err.name === 'AbortError') throw err;
+              decoded = null; // Ses kanalı olmayan video
             }
-          } else {
-            const sourceNode = offlineCtx.createBufferSource();
-            sourceNode.buffer = decodedVideoAudio;
-            sourceNode.playbackRate.value = playbackRate;
-
-            const gainNode = offlineCtx.createGain();
-            gainNode.gain.value = Math.max(0, Math.min(1, state.volume));
-
-            sourceNode.connect(gainNode);
-            gainNode.connect(offlineCtx.destination);
-
-            const trimDur = Math.max(0.1, trimEnd - trimStart);
-            sourceNode.start(0, trimStart, trimDur);
+            decodedCache.set(clip.media, decoded);
+          }
+          if (decoded) {
+            const node = offlineCtx.createBufferSource();
+            node.buffer = decoded;
+            node.playbackRate.value = Math.max(0.25, clip.playbackRate || 1.0);
+            const gain = offlineCtx.createGain();
+            gain.gain.value = Math.max(0, Math.min(1, clip.volume));
+            node.connect(gain);
+            gain.connect(offlineCtx.destination);
+            const sourceDur = Math.max(0.05, clip.sourceEnd - clip.sourceStart);
+            node.start(accOutTime, clip.sourceStart, sourceDur);
             hasAnySource = true;
           }
         }
-      } catch {
-        // Videoda ses kanalı yoksa sessizce devam et
+        accOutTime += clipOutDur;
       }
     }
 
+    // 2. Müzik
     if (hasMusicAudio && music?.streamUrl) {
       try {
         const resp = await fetch(music.streamUrl, { signal });
@@ -256,62 +470,42 @@ export class VideoExporter {
           const musicBuf = await resp.arrayBuffer();
           if (musicBuf.byteLength > 0) {
             const decodedMusic = await offlineCtx.decodeAudioData(musicBuf.slice(0));
+            const vol = Math.max(0, Math.min(1, musicVolume));
 
-            if (isReelsNle && music.segments && music.segments.length > 0) {
-              for (const seg of music.segments) {
-                const segStart = Math.max(0, seg.timelineStart);
-                const segEnd = Math.min(outputDuration, seg.timelineEnd);
-                if (segEnd > segStart + 0.05) {
-                  const musicNode = offlineCtx.createBufferSource();
-                  musicNode.buffer = decodedMusic;
-                  const musicGain = offlineCtx.createGain();
-                  musicGain.gain.value = Math.max(0, Math.min(1, musicVolume));
-                  musicNode.connect(musicGain);
-                  musicGain.connect(offlineCtx.destination);
+            const segments =
+              isReelsNle && music.segments && music.segments.length > 0
+                ? music.segments.map((s) => ({
+                    start: s.timelineStart,
+                    end: s.timelineEnd,
+                    offset: (music.startTime || 0) + (s.songOffset || 0),
+                  }))
+                : (() => {
+                    const segStart =
+                      typeof music.timelineStart === 'number' ? music.timelineStart : 0;
+                    const segEnd =
+                      typeof music.timelineEnd === 'number' && music.timelineEnd > segStart
+                        ? music.timelineEnd
+                        : outputDuration;
+                    return [{ start: segStart, end: segEnd, offset: music.startTime || 0 }];
+                  })();
 
-                  const offset = Math.max(
-                    0,
-                    (music.startTime || 0) + (seg.songOffset || 0)
-                  );
-                  musicNode.start(segStart, offset, segEnd - segStart);
-                  hasAnySource = true;
-                }
-              }
-            } else {
-              const musicNode = offlineCtx.createBufferSource();
-              musicNode.buffer = decodedMusic;
-
-              const musicGain = offlineCtx.createGain();
-              musicGain.gain.value = Math.max(0, Math.min(1, musicVolume));
-
-              musicNode.connect(musicGain);
-              musicGain.connect(offlineCtx.destination);
-
-              const clipStart =
-                typeof music.timelineStart === 'number' ? music.timelineStart : trimStart;
-              const clipEnd =
-                typeof music.timelineEnd === 'number' && music.timelineEnd > clipStart
-                  ? music.timelineEnd
-                  : trimEnd;
-              const activeStart = Math.max(trimStart, clipStart);
-              const activeEnd = Math.min(trimEnd, clipEnd);
-
-              if (activeEnd > activeStart) {
-                const effectiveRate = isReelsNle ? 1.0 : playbackRate;
-                const delayInOutSec = Math.max(0, (activeStart - trimStart) / effectiveRate);
-                const playDurInOutSec = Math.max(
-                  0.05,
-                  Math.min(outputDuration - delayInOutSec, (activeEnd - activeStart) / effectiveRate)
-                );
-                const songOffsetSec =
-                  Math.max(0, music.startTime || 0) + Math.max(0, trimStart - clipStart);
-                musicNode.start(delayInOutSec, songOffsetSec, playDurInOutSec);
-                hasAnySource = true;
-              }
+            for (const seg of segments) {
+              const segStart = Math.max(0, seg.start);
+              const segEnd = Math.min(outputDuration, seg.end);
+              if (segEnd <= segStart + 0.05) continue;
+              const node = offlineCtx.createBufferSource();
+              node.buffer = decodedMusic;
+              const gain = offlineCtx.createGain();
+              gain.gain.value = vol;
+              node.connect(gain);
+              gain.connect(offlineCtx.destination);
+              node.start(segStart, Math.max(0, seg.offset), segEnd - segStart);
+              hasAnySource = true;
             }
           }
         }
-      } catch {
+      } catch (err) {
+        if (err instanceof DOMException && err.name === 'AbortError') throw err;
         // Müzik akışı hatasında video exportuna devam et
       }
     }
@@ -325,422 +519,6 @@ export class VideoExporter {
     }
   }
 
-  /**
-   * HAT 2: Sequential WebCodecs Pipeline (FastDemuxer + Donanım VideoDecoder -> GPU VideoFrame -> VideoEncoder)
-   * Sıfır DOM <video> seek maliyetiyle GOP sırasına göre ardışık donanım decode/encode yapar.
-   */
-  private static async trySequentialWebCodecsExport(params: {
-    engine: CanvasEngine;
-    demuxed: DemuxedVideoTrack;
-    clips: VideoTrackClip[];
-    exportCanvas: HTMLCanvasElement;
-    exportCtx: CanvasRenderingContext2D;
-    exportWidth: number;
-    exportHeight: number;
-    fps: number;
-    totalFrames: number;
-    frameDurationUs: number;
-    videoEncoder: VideoEncoder;
-    getEncoderError: () => Error | null;
-    onProgress?: (progress: number) => void;
-    signal?: AbortSignal;
-  }): Promise<boolean> {
-    if (
-      typeof VideoDecoder === 'undefined' ||
-      typeof EncodedVideoChunk === 'undefined'
-    ) {
-      return false;
-    }
-
-    const {
-      engine,
-      demuxed,
-      clips,
-      exportCanvas,
-      exportCtx,
-      exportWidth,
-      exportHeight,
-      fps,
-      totalFrames,
-      frameDurationUs,
-      videoEncoder,
-      getEncoderError,
-      onProgress,
-      signal,
-    } = params;
-
-    const decoderConfig: VideoDecoderConfig = {
-      codec: demuxed.codec,
-      codedWidth: demuxed.width,
-      codedHeight: demuxed.height,
-      description: demuxed.description,
-      hardwareAcceleration: 'prefer-hardware',
-    };
-
-    try {
-      const support = await VideoDecoder.isConfigSupported(decoderConfig);
-      if (!support.supported) {
-        return false;
-      }
-    } catch {
-      return false;
-    }
-
-    let globalOutFrameIdx = 0;
-    let lastReportedPct = -1;
-    let clipOutStartSec = 0;
-
-    const reportFrameProgress = (frameIdx: number) => {
-      const rawProgress = Math.min(0.96, (frameIdx + 1) / totalFrames);
-      const pct = Math.floor(rawProgress * 100);
-      if (pct !== lastReportedPct) {
-        lastReportedPct = pct;
-        onProgress?.(rawProgress);
-      }
-    };
-
-    for (let cIdx = 0; cIdx < clips.length; cIdx++) {
-      if (signal?.aborted) {
-        throw new DOMException('Export cancelled', 'AbortError');
-      }
-
-      const clip = clips[cIdx];
-      if (engine.getShareMode() === 'reels' && engine.getVideoClips().length > 0) {
-        engine.applyClipTransformToMediaLayer(clip);
-      }
-      const clipRate = Math.max(0.25, clip.playbackRate || 1.0);
-      const clipOutEndSec = clipOutStartSec + clip.duration;
-      const clipEndFrameIdx =
-        cIdx === clips.length - 1
-          ? totalFrames
-          : Math.min(totalFrames, Math.round(clipOutEndSec * fps));
-
-      if (clipEndFrameIdx <= globalOutFrameIdx) {
-        clipOutStartSec = clipOutEndSec;
-        continue;
-      }
-
-      const samples = FastDemuxer.getSamplesForRange(
-        demuxed,
-        clip.sourceStart,
-        clip.sourceEnd
-      );
-      if (samples.length === 0) {
-        return false;
-      }
-
-      let decoderError: Error | null = null;
-      let hasDrawnAnyFrameInClip = false;
-
-      const renderAndEncodeWithFrame = (
-        outIdx: number,
-        decodedFrame?: VideoFrame
-      ) => {
-        const outTimeSec = outIdx / fps;
-        // GÖREV B-FIX2: Video kliplerde skipRedraw kapalıdır; her kare mutlaka exportCanvas üzerine çizilir
-        exportCtx.clearRect(0, 0, exportWidth, exportHeight);
-        engine.drawBaseMedia(
-          exportCtx,
-          exportWidth,
-          exportHeight,
-          outTimeSec,
-          decodedFrame
-        );
-        engine.drawCachedOverlays(exportCtx, exportWidth, exportHeight, outTimeSec);
-
-        const outVf = new VideoFrame(exportCanvas, {
-          timestamp: Math.round(outTimeSec * 1_000_000),
-          duration: frameDurationUs,
-        });
-        try {
-          videoEncoder.encode(outVf, { keyFrame: outIdx % (fps * 2) === 0 });
-        } finally {
-          outVf.close();
-        }
-        reportFrameProgress(outIdx);
-      };
-
-      const videoDecoder = new VideoDecoder({
-        output: (decodedFrame) => {
-          try {
-            const frameSec = decodedFrame.timestamp / 1_000_000;
-            const frameEndSec =
-              (decodedFrame.timestamp + (decodedFrame.duration || 33_333)) /
-              1_000_000;
-
-            // Keyframe pre-roll aşamasındaki kareler: eğer ilk çıktı karesine çok yakınsa baz olarak çiz
-            if (frameEndSec < clip.sourceStart - 0.02) {
-              return;
-            }
-
-            while (globalOutFrameIdx < clipEndFrameIdx) {
-              const outTimeSec = globalOutFrameIdx / fps;
-              const targetSourceSec = Math.min(
-                clip.sourceEnd,
-                clip.sourceStart + Math.max(0, outTimeSec - clipOutStartSec) * clipRate
-              );
-
-              // Hedef kaynak zamanı bu karenin kapsama alanındaysa veya geçmişte kaldıysa üret
-              if (targetSourceSec <= frameEndSec + 0.008 || frameSec >= clip.sourceEnd - 0.02) {
-                renderAndEncodeWithFrame(globalOutFrameIdx, decodedFrame);
-                hasDrawnAnyFrameInClip = true;
-                globalOutFrameIdx++;
-              } else {
-                break;
-              }
-            }
-
-            // Eğer henüz hiçbir çıktı karesi üretilmediyse ama kare clip.sourceStart civarındaysa tuvali hazırla
-            if (!hasDrawnAnyFrameInClip && frameSec >= clip.sourceStart - 0.05) {
-              const outTimeSec = globalOutFrameIdx / fps;
-              exportCtx.clearRect(0, 0, exportWidth, exportHeight);
-              engine.drawBaseMedia(
-                exportCtx,
-                exportWidth,
-                exportHeight,
-                outTimeSec,
-                decodedFrame
-              );
-              engine.drawCachedOverlays(exportCtx, exportWidth, exportHeight, outTimeSec);
-              hasDrawnAnyFrameInClip = true;
-            }
-          } catch (err) {
-            decoderError = err instanceof Error ? err : new Error(String(err));
-          } finally {
-            // Kritik: GPU VideoFrame havuzunun tıkanmaması için anında kapat
-            decodedFrame.close();
-          }
-        },
-        error: (err) => {
-          decoderError = err instanceof Error ? err : new Error(String(err));
-        },
-      });
-
-      try {
-        videoDecoder.configure(decoderConfig);
-
-        for (let sIdx = 0; sIdx < samples.length; sIdx++) {
-          if (signal?.aborted) {
-            throw new DOMException('Export cancelled', 'AbortError');
-          }
-          if (decoderError || getEncoderError()) {
-            break;
-          }
-
-          const s = samples[sIdx];
-          const chunk = new EncodedVideoChunk({
-            type: s.isKeyframe ? 'key' : 'delta',
-            timestamp: s.timestampUs,
-            duration: s.durationUs,
-            data: s.data,
-          });
-          videoDecoder.decode(chunk);
-
-          // Donanım decoder ve encoder kuyruklarını dengede tut (Backpressure)
-          while (
-            videoDecoder.decodeQueueSize > 14 ||
-            videoEncoder.encodeQueueSize > 12
-          ) {
-            if (signal?.aborted) {
-              throw new DOMException('Export cancelled', 'AbortError');
-            }
-            if (decoderError || getEncoderError()) break;
-            await this.yieldToMain();
-          }
-        }
-
-        if (!decoderError && !getEncoderError()) {
-          await videoDecoder.flush();
-        }
-      } catch (err) {
-        try {
-          if (videoDecoder.state !== 'closed') videoDecoder.close();
-        } catch {}
-        if (err instanceof DOMException && err.name === 'AbortError') {
-          throw err;
-        }
-        return false;
-      } finally {
-        try {
-          if (videoDecoder.state !== 'closed') videoDecoder.close();
-        } catch {}
-      }
-
-      if (decoderError) {
-        // İlk klipte hiç kare basılmadan hata aldıysa Hat 3'e düş
-        if (globalOutFrameIdx === 0 && !hasDrawnAnyFrameInClip) {
-          return false;
-        }
-      }
-
-      // Klip sonundaki kalan son 1-2 kuyruk karesini (varsa) son çizilen tuvalden tamamla
-      if (!hasDrawnAnyFrameInClip && globalOutFrameIdx === 0) {
-        return false;
-      }
-
-      while (globalOutFrameIdx < clipEndFrameIdx) {
-        if (signal?.aborted) {
-          throw new DOMException('Export cancelled', 'AbortError');
-        }
-        renderAndEncodeWithFrame(globalOutFrameIdx, undefined);
-        globalOutFrameIdx++;
-        while (videoEncoder.encodeQueueSize > 12) {
-          await this.yieldToMain();
-        }
-      }
-
-      clipOutStartSec = clipOutEndSec;
-    }
-
-    return globalOutFrameIdx >= totalFrames;
-  }
-
-  /**
-   * HAT 3: Sequential Forward Playback (Sıfır Geriye Seek / Tek Seferlik Başlangıç Seek + Ardışık İleri Akış)
-   * FastDemuxer ile ayrılamayan (örn. WebM, fMP4) videolar için kare-kare rastgele seek yapmak yerine
-   * klip başına yalnızca 1 kez başlangıca konumlanır ve ileri yönde doğal GOP sırasıyla kare yakalar.
-   */
-  private static async exportWithSequentialForwardPlayback(params: {
-    engine: CanvasEngine;
-    clips: VideoTrackClip[];
-    exportCanvas: HTMLCanvasElement;
-    exportCtx: CanvasRenderingContext2D;
-    exportWidth: number;
-    exportHeight: number;
-    fps: number;
-    totalFrames: number;
-    frameDurationUs: number;
-    videoEncoder: VideoEncoder;
-    getEncoderError: () => Error | null;
-    onProgress?: (progress: number) => void;
-    signal?: AbortSignal;
-  }): Promise<void> {
-    const {
-      engine,
-      clips,
-      exportCanvas,
-      exportCtx,
-      exportWidth,
-      exportHeight,
-      fps,
-      totalFrames,
-      frameDurationUs,
-      videoEncoder,
-      getEncoderError,
-      onProgress,
-      signal,
-    } = params;
-
-    const media = engine.getMedia();
-    const videoEl =
-      media?.element instanceof HTMLVideoElement ? media.element : null;
-
-    let globalOutFrameIdx = 0;
-    let lastReportedPct = -1;
-    let clipOutStartSec = 0;
-
-    const seekOnce = async (v: HTMLVideoElement, targetSec: number) => {
-      const clamped = Math.max(
-        0,
-        Math.min(v.duration || targetSec, targetSec)
-      );
-      if (Math.abs(v.currentTime - clamped) <= 0.015) return;
-      await new Promise<void>((resolve) => {
-        let done = false;
-        const finish = () => {
-          if (done) return;
-          done = true;
-          v.removeEventListener('seeked', finish);
-          resolve();
-        };
-        v.addEventListener('seeked', finish, { once: true });
-        v.currentTime = clamped;
-        setTimeout(finish, 180);
-      });
-    };
-
-    for (let cIdx = 0; cIdx < clips.length; cIdx++) {
-      if (signal?.aborted) {
-        throw new DOMException('Export cancelled', 'AbortError');
-      }
-
-      const clip = clips[cIdx];
-      const clipRate = Math.max(0.25, clip.playbackRate || 1.0);
-      const clipOutEndSec = clipOutStartSec + clip.duration;
-      const clipEndFrameIdx =
-        cIdx === clips.length - 1
-          ? totalFrames
-          : Math.min(totalFrames, Math.round(clipOutEndSec * fps));
-
-      if (videoEl && !clip.isMotionPhoto) {
-        videoEl.pause();
-        videoEl.muted = true;
-        // Klip başında YALNIZCA 1 KEZ seek yap
-        await seekOnce(videoEl, clip.sourceStart);
-      }
-
-      while (globalOutFrameIdx < clipEndFrameIdx) {
-        if (signal?.aborted) {
-          throw new DOMException('Export cancelled', 'AbortError');
-        }
-        const encErr = getEncoderError();
-        if (encErr) throw encErr;
-
-        const outTimeSec = globalOutFrameIdx / fps;
-        const targetSourceSec = Math.min(
-          clip.sourceEnd,
-          clip.sourceStart + Math.max(0, outTimeSec - clipOutStartSec) * clipRate
-        );
-
-        if (videoEl && !clip.isMotionPhoto) {
-          // Yalnızca ileri yönde (monotonik) küçük adım ilerle
-          if (targetSourceSec - videoEl.currentTime > 0.02) {
-            await seekOnce(videoEl, targetSourceSec);
-          }
-        }
-
-        exportCtx.clearRect(0, 0, exportWidth, exportHeight);
-        engine.drawBaseMedia(exportCtx, exportWidth, exportHeight, outTimeSec);
-        engine.drawCachedOverlays(exportCtx, exportWidth, exportHeight, outTimeSec);
-
-        const videoFrame = new VideoFrame(exportCanvas, {
-          timestamp: Math.round(outTimeSec * 1_000_000),
-          duration: frameDurationUs,
-        });
-
-        try {
-          videoEncoder.encode(videoFrame, {
-            keyFrame: globalOutFrameIdx % (fps * 2) === 0,
-          });
-        } finally {
-          videoFrame.close();
-        }
-
-        while (videoEncoder.encodeQueueSize > 12) {
-          if (signal?.aborted) {
-            throw new DOMException('Export cancelled', 'AbortError');
-          }
-          await this.yieldToMain();
-        }
-
-        const rawProgress = Math.min(0.96, (globalOutFrameIdx + 1) / totalFrames);
-        const pct = Math.floor(rawProgress * 100);
-        if (pct !== lastReportedPct) {
-          lastReportedPct = pct;
-          onProgress?.(rawProgress);
-        }
-
-        if (globalOutFrameIdx % 24 === 23) {
-          await this.yieldToMain();
-        }
-
-        globalOutFrameIdx++;
-      }
-
-      clipOutStartSec = clipOutEndSec;
-    }
-  }
-
   public static async exportToBlob(
     engine: CanvasEngine,
     options?: ExportVideoOptions
@@ -750,25 +528,18 @@ export class VideoExporter {
       throw new Error('Aktif medya bir video değil');
     }
 
-    // GÖREV B-FIX3: 720p (720x1280) ve sabit 30 FPS standardı (kaynak 30 FPS videolarla 1:1 tam kare eşleşmesi)
     const preferredW = options?.width || 720;
     const preferredH = options?.height || 1280;
-    const requestedFps = 30;
-    const bitrate = options?.bitrate || 4_800_000;
+    const bitrate = options?.bitrate || DEFAULT_BITRATE;
     const signal = options?.signal;
 
-    const supportedVideo = await this.findSupportedVideoConfig(
-      preferredW,
-      preferredH,
-      requestedFps,
-      bitrate
-    );
+    const supportedVideo = await this.findSupportedVideoConfig(preferredW, preferredH, bitrate);
 
     if (!supportedVideo) {
       return MediaRecorderFallback.exportToBlob(engine, {
         width: preferredW,
         height: preferredH,
-        fps: requestedFps,
+        fps: OUTPUT_FPS,
         bitrate,
         music: options?.music,
         musicVolume: options?.musicVolume,
@@ -777,37 +548,54 @@ export class VideoExporter {
       });
     }
 
-    const {
-      config: videoConfig,
-      width: exportWidth,
-      height: exportHeight,
-      fps,
-    } = supportedVideo;
+    const { config: videoConfig, width: exportWidth, height: exportHeight } = supportedVideo;
+    const fps = OUTPUT_FPS;
     const isReelsNle =
       engine.getShareMode() === 'reels' && engine.getVideoClips().length > 0;
-    const trimStart = state.trimStart;
-    const trimEnd = state.trimEnd > trimStart ? state.trimEnd : state.duration;
-    const playbackRate = state.playbackRate || 1.0;
-    const sourceTrimDuration = Math.max(0.1, Math.min(60, trimEnd - trimStart));
-    const outputDuration = isReelsNle
-      ? Math.max(0.2, Math.min(60, engine.getTotalTimelineDuration()))
-      : Math.max(0.1, sourceTrimDuration / playbackRate);
+    const clips = this.resolveExportClips(engine);
+    const outputDuration = Math.max(
+      0.2,
+      Math.min(
+        60,
+        clips.reduce((acc, c) => acc + Math.max(0.05, c.duration), 0)
+      )
+    );
     const totalFrames = Math.max(1, Math.round(outputDuration * fps));
+    const frameDurationUs = Math.round(1_000_000 / fps);
+    const restoreTime = engine.getCurrentTime();
 
     engine.setExportingVideo(true);
 
     let videoEncoder: VideoEncoder | null = null;
     let audioEncoder: AudioEncoder | null = null;
 
-    try {
-      if (signal?.aborted) {
-        throw new DOMException('Export cancelled', 'AbortError');
+    // Kaynak dosya belleği ve demux sonucu medya başına tek sefer okunur (ses + görüntü ortak)
+    const bufferCache = new Map<EditorMedia, Promise<ArrayBuffer | null>>();
+    const getBuffer = (media: EditorMedia | undefined) => {
+      if (!media) return Promise.resolve(null);
+      let p = bufferCache.get(media);
+      if (!p) {
+        p = this.readMediaBuffer(media, signal);
+        bufferCache.set(media, p);
       }
+      return p;
+    };
+    const demuxCache = new Map<EditorMedia, DemuxedVideoTrack | null>();
+    const getDemuxed = async (media: EditorMedia | undefined) => {
+      if (!media || media.type !== 'video') return null;
+      if (demuxCache.has(media)) return demuxCache.get(media) ?? null;
+      const buf = await getBuffer(media);
+      const track = buf ? FastDemuxer.demux(buf) : null;
+      demuxCache.set(media, track);
+      return track;
+    };
 
-      // 1. Kaynak video belleğini, ses miksajını ve mp4-muxer yüklemesini paralel hazırla
+    try {
+      if (signal?.aborted) throw abortError();
+
       const aacConfig: AudioEncoderConfig = {
         codec: 'mp4a.40.2',
-        sampleRate: 44100,
+        sampleRate: AUDIO_SAMPLE_RATE,
         numberOfChannels: 2,
         bitrate: 192_000,
       };
@@ -819,29 +607,25 @@ export class VideoExporter {
               .catch(() => false)
           : Promise.resolve(false);
 
-      const [audioConfigSupported, { Muxer, ArrayBufferTarget }, sourceVideoBuffer] =
-        await Promise.all([
-          audioSupportPromise,
-          import('mp4-muxer'),
-          this.getSourceVideoBuffer(engine, signal),
-        ]);
+      const [audioConfigSupported, { Muxer, ArrayBufferTarget }] = await Promise.all([
+        audioSupportPromise,
+        import('mp4-muxer'),
+      ]);
 
       const renderedAudio = audioConfigSupported
-        ? await this.renderMixedAudio(
-            engine,
+        ? await this.renderMixedAudio({
+            clips,
+            isReelsNle,
             outputDuration,
-            sourceVideoBuffer,
-            options?.music,
-            options?.musicVolume ?? 0.85,
-            signal
-          )
+            getBuffer,
+            music: options?.music,
+            musicVolume: options?.musicVolume ?? 0.85,
+            signal,
+          })
         : null;
 
-      if (signal?.aborted) {
-        throw new DOMException('Export cancelled', 'AbortError');
-      }
+      if (signal?.aborted) throw abortError();
 
-      // 2. mp4-muxer kurulumu
       const target = new ArrayBufferTarget();
       const muxer = new Muxer({
         target,
@@ -849,12 +633,13 @@ export class VideoExporter {
           codec: 'avc',
           width: exportWidth,
           height: exportHeight,
+          frameRate: fps,
         },
         audio: renderedAudio
           ? {
               codec: 'aac',
               numberOfChannels: 2,
-              sampleRate: 44100,
+              sampleRate: AUDIO_SAMPLE_RATE,
             }
           : undefined,
         fastStart: 'in-memory',
@@ -883,7 +668,6 @@ export class VideoExporter {
         });
         audioEncoder.configure(aacConfig);
 
-        // Sesi 4096 örnekli bloklar halinde kodla (Bellek tahsisini döngü dışına çıkar)
         const ch0 = renderedAudio.getChannelData(0);
         const ch1 =
           renderedAudio.numberOfChannels > 1
@@ -893,9 +677,7 @@ export class VideoExporter {
         const reusablePlanar = new Float32Array(chunkFrames * 2);
 
         for (let offset = 0; offset < renderedAudio.length; offset += chunkFrames) {
-          if (signal?.aborted) {
-            throw new DOMException('Export cancelled', 'AbortError');
-          }
+          if (signal?.aborted) throw abortError();
           const frameCount = Math.min(chunkFrames, renderedAudio.length - offset);
           const planarView =
             frameCount === chunkFrames
@@ -904,13 +686,12 @@ export class VideoExporter {
           planarView.set(ch0.subarray(offset, offset + frameCount), 0);
           planarView.set(ch1.subarray(offset, offset + frameCount), frameCount);
 
-          const timestampUs = Math.round((offset / 44100) * 1_000_000);
           const audioData = new AudioData({
             format: 'f32-planar',
-            sampleRate: 44100,
+            sampleRate: AUDIO_SAMPLE_RATE,
             numberOfFrames: frameCount,
             numberOfChannels: 2,
-            timestamp: timestampUs,
+            timestamp: Math.round((offset / AUDIO_SAMPLE_RATE) * 1_000_000),
             data: planarView,
           });
           audioEncoder.encode(audioData);
@@ -918,157 +699,145 @@ export class VideoExporter {
         }
       }
 
-      // 3. Paylaşımlı 720p çizim tuvali (Döngü dışında tek seferlik boyutlandırma ve tahsis)
       const { canvas: exportCanvas, ctx: exportCtx } = this.getExportSurface(
         exportWidth,
         exportHeight
       );
-      const frameDurationUs = Math.round((1 / fps) * 1_000_000);
+      const ml = engine.getMediaLayer();
 
       // ─────────────────────────────────────────────────────────────
-      // "FRAME-LOCKED" GERÇEK 30 FPS SENKRONİZE RENDER PIPELINE
+      // TEK BİRLEŞİK KARE-DOĞRU PIPELINE
+      // Video klip  → WebCodecs çekme imleci (gerçek kare) | desteklenmezse kare-kilitli seek
+      // Foto klip   → sahne değişmediği sürece yeniden çizim yok, yalnızca encode
       // ─────────────────────────────────────────────────────────────
-      if (engine.isPureStaticExport()) {
-        // HAT 1: ZERO-REDRAW FRAME CLONING (~0.2s - Yalnızca Statik Fotoğraf 'image' Kliplerinde!)
-        // Sahneyi döngü dışında YALNIZCA 1 KEZ (N=1) çiz, döngü içinde sadece GPU VideoFrame referansı klonla!
-        exportCtx.clearRect(0, 0, exportWidth, exportHeight);
-        engine.drawBaseMedia(exportCtx, exportWidth, exportHeight, 0);
-        engine.drawCachedOverlays(exportCtx, exportWidth, exportHeight, 0);
+      let frameIdx = 0;
+      let clipOutStartSec = 0;
+      let lastReportedPct = -1;
+      let staticFrameClipId: string | null = null;
 
-        let lastReportedPct = -1;
-        for (let i = 0; i < totalFrames; i++) {
-          if (signal?.aborted) {
-            throw new DOMException('Export cancelled', 'AbortError');
+      for (let cIdx = 0; cIdx < clips.length && frameIdx < totalFrames; cIdx++) {
+        if (signal?.aborted) throw abortError();
+        const clip = clips[cIdx];
+        const clipOutEndSec = clipOutStartSec + Math.max(0.05, clip.duration);
+        const clipEndFrame =
+          cIdx === clips.length - 1
+            ? totalFrames
+            : Math.min(totalFrames, Math.round(clipOutEndSec * fps));
+
+        if (isReelsNle) {
+          engine.applyClipTransformToMediaLayer(clip);
+        }
+
+        const rate = Math.max(0.25, clip.playbackRate || 1.0);
+        const isVideoClip = !clip.isMotionPhoto && clip.media?.type === 'video';
+        const clipMedia = clip.media;
+        const videoEl =
+          isVideoClip && clipMedia && clipMedia.element instanceof HTMLVideoElement
+            ? clipMedia.element
+            : null;
+
+        let cursor: DecodedFrameCursor | null = null;
+        let rotation = 0;
+        if (isVideoClip) {
+          if (videoEl) {
+            try {
+              videoEl.pause();
+              videoEl.muted = true;
+            } catch {}
           }
-          if (encoderError) throw encoderError;
-
-          const videoFrame = new VideoFrame(exportCanvas, {
-            timestamp: i * frameDurationUs,
-            duration: frameDurationUs,
-          });
-
-          try {
-            videoEncoder.encode(videoFrame, { keyFrame: i % (fps * 2) === 0 });
-          } finally {
-            videoFrame.close();
-          }
-
-          while (videoEncoder.encodeQueueSize > 12) {
-            if (signal?.aborted) {
-              throw new DOMException('Export cancelled', 'AbortError');
+          const track = await getDemuxed(clip.media);
+          if (track) {
+            const offsetSec = track.ptsOffsetUs / 1_000_000;
+            const samples = FastDemuxer.getSamplesForRange(
+              track,
+              clip.sourceStart + offsetSec,
+              clip.sourceEnd + offsetSec
+            );
+            const c = new DecodedFrameCursor(track, samples);
+            if (await c.open()) {
+              cursor = c;
+              rotation = track.rotation;
+            } else {
+              c.close();
             }
-            await this.yieldToMain();
           }
-
-          const rawProgress = Math.min(0.96, (i + 1) / totalFrames);
-          const pct = Math.floor(rawProgress * 100);
-          if (pct !== lastReportedPct) {
-            lastReportedPct = pct;
-            options?.onProgress?.(rawProgress);
-          }
+          staticFrameClipId = null;
         }
-      } else if (state.isMotionPhoto) {
-        // HAT 1B: Dinamik Efektli veya Zamanlı Katmanlı Fotoğraf (Sıfır <video> seek!)
-        let lastReportedPct = -1;
-        for (let i = 0; i < totalFrames; i++) {
-          if (signal?.aborted) {
-            throw new DOMException('Export cancelled', 'AbortError');
-          }
-          if (encoderError) throw encoderError;
 
-          const outTimeSec = i / fps;
-          exportCtx.clearRect(0, 0, exportWidth, exportHeight);
-          engine.drawBaseMedia(exportCtx, exportWidth, exportHeight, outTimeSec);
-          engine.drawCachedOverlays(exportCtx, exportWidth, exportHeight, outTimeSec);
+        try {
+          for (; frameIdx < clipEndFrame; frameIdx++) {
+            if (signal?.aborted) throw abortError();
+            if (encoderError) throw encoderError;
 
-          const videoFrame = new VideoFrame(exportCanvas, {
-            timestamp: Math.round(outTimeSec * 1_000_000),
-            duration: frameDurationUs,
-          });
+            const outTimeSec = frameIdx / fps;
+            const localOut = Math.max(0, outTimeSec - clipOutStartSec);
+            const sourceSec = Math.min(
+              Math.max(clip.sourceStart, clip.sourceEnd - 0.001),
+              clip.sourceStart + localOut * rate
+            );
 
-          try {
-            videoEncoder.encode(videoFrame, { keyFrame: i % (fps * 2) === 0 });
-          } finally {
-            videoFrame.close();
-          }
+            let externalFrame: CanvasImageSource | undefined;
+            let needsDraw = true;
 
-          while (videoEncoder.encodeQueueSize > 12) {
-            if (signal?.aborted) {
-              throw new DOMException('Export cancelled', 'AbortError');
+            if (isVideoClip) {
+              if (cursor) {
+                try {
+                  const vf = await cursor.frameAt(sourceSec, signal);
+                  if (vf) externalFrame = this.orientFrame(vf, rotation);
+                } catch (err) {
+                  if (err instanceof DOMException && err.name === 'AbortError') throw err;
+                  cursor.close();
+                  cursor = null;
+                }
+              }
+              if (!cursor && ml) {
+                // Kare-kilitli yedek yol: gerçek 'seeked' beklenir, sonra çizilir
+                await ml.seek(sourceSec);
+              }
+            } else {
+              const sceneChanged = engine.syncTemporalVisibility(outTimeSec);
+              const animated = ml ? ml.isActiveEffectTimeDependentAt(outTimeSec) : false;
+              needsDraw = sceneChanged || animated || staticFrameClipId !== clip.id;
             }
-            await this.yieldToMain();
-          }
 
-          const rawProgress = Math.min(0.96, (i + 1) / totalFrames);
-          const pct = Math.floor(rawProgress * 100);
-          if (pct !== lastReportedPct) {
-            lastReportedPct = pct;
-            options?.onProgress?.(rawProgress);
-          }
-
-          if (i % 24 === 23) {
-            await this.yieldToMain();
-          }
-        }
-      } else {
-        // GÖREV B-FIX1, B-FIX2 & B-FIX3: Gerçek Video Klipleri (Frame-Locked 30 FPS 1:1 Senkronizasyon)
-        // Video kliplerde skipRedraw kesinlikle kapalıdır; her kare gerçek seeked olayı beklenerek (600ms emniyet sınırı, sıfır seek abort)
-        // exportCanvas üzerine çizilir ve 30 FPS kaynak videoyla 1:1 tam kare eşleşmesi sağlanır.
-        const mediaEl = engine.getMedia()?.element;
-        if (mediaEl instanceof HTMLVideoElement) {
-          try {
-            mediaEl.pause();
-            mediaEl.muted = true;
-          } catch {}
-        }
-
-        let lastReportedPct = -1;
-        for (let i = 0; i < totalFrames; i++) {
-          if (signal?.aborted) {
-            throw new DOMException('Export cancelled', 'AbortError');
-          }
-          if (encoderError) {
-            throw encoderError;
-          }
-
-          const outTimeSec = i / fps;
-          const sourceTimeSec = isReelsNle
-            ? Math.min(outputDuration, outTimeSec)
-            : Math.min(trimEnd, trimStart + outTimeSec * playbackRate);
-
-          await engine.renderFrameAt(exportCtx, sourceTimeSec, exportWidth, exportHeight);
-
-          const timestampUs = Math.round(outTimeSec * 1_000_000);
-          const videoFrame = new VideoFrame(exportCanvas, {
-            timestamp: timestampUs,
-            duration: frameDurationUs,
-          });
-
-          try {
-            videoEncoder.encode(videoFrame, { keyFrame: i % (fps * 2) === 0 });
-          } finally {
-            videoFrame.close();
-          }
-
-          while (videoEncoder.encodeQueueSize > 12) {
-            if (signal?.aborted) {
-              throw new DOMException('Export cancelled', 'AbortError');
+            if (needsDraw) {
+              exportCtx.clearRect(0, 0, exportWidth, exportHeight);
+              engine.drawBaseMedia(exportCtx, exportWidth, exportHeight, outTimeSec, externalFrame);
+              engine.drawCachedOverlays(exportCtx, exportWidth, exportHeight, outTimeSec);
+              staticFrameClipId = isVideoClip ? null : clip.id;
             }
-            await this.yieldToMain();
-          }
 
-          const rawProgress = Math.min(0.96, (i + 1) / totalFrames);
-          const pct = Math.floor(rawProgress * 100);
-          if (pct !== lastReportedPct) {
-            lastReportedPct = pct;
-            options?.onProgress?.(rawProgress);
+            const videoFrame = new VideoFrame(exportCanvas, {
+              timestamp: Math.round(frameIdx * frameDurationUs),
+              duration: frameDurationUs,
+            });
+            try {
+              videoEncoder.encode(videoFrame, { keyFrame: frameIdx % (fps * 2) === 0 });
+            } finally {
+              videoFrame.close();
+            }
+
+            await this.drainEncoder(videoEncoder, 6, signal);
+
+            const rawProgress = Math.min(0.97, (frameIdx + 1) / totalFrames);
+            const pct = Math.floor(rawProgress * 100);
+            if (pct !== lastReportedPct) {
+              lastReportedPct = pct;
+              options?.onProgress?.(rawProgress);
+            }
+
+            if (frameIdx % 15 === 14) {
+              await this.yieldToMain();
+            }
           }
+        } finally {
+          cursor?.close();
         }
+
+        clipOutStartSec = clipOutEndSec;
       }
 
-      if (encoderError) {
-        throw encoderError;
-      }
+      if (encoderError) throw encoderError;
 
       await videoEncoder.flush();
       videoEncoder.close();
@@ -1096,6 +865,9 @@ export class VideoExporter {
         } catch {}
       }
       engine.setExportingVideo(false);
+      try {
+        engine.renderAtTime(restoreTime);
+      } catch {}
     }
   }
 }

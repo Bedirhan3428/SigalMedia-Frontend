@@ -229,8 +229,8 @@ export class ImageAdjustmentsEngine {
         const clip = effectClips[i];
         if (
           clip.effect !== 'none' &&
-          timeSec >= clip.startTime - 0.01 &&
-          timeSec <= clip.endTime + 0.01
+          timeSec >= clip.startTime &&
+          timeSec < clip.endTime
         ) {
           active.push({
             effect: clip.effect,

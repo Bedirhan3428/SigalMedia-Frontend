@@ -93,6 +93,8 @@ export class CanvasEngine {
   private lastActiveEffectsKey = '';
   private lastExportSourceTime = -1;
   private lastExportClipId = '';
+  private seekInFlight = false;
+  private pendingSeekTime: number | null = null;
   // [END] CREATED BY Bedirhan
 
   constructor(options: EngineOptions) {
@@ -751,7 +753,7 @@ export class CanvasEngine {
     let sig = '';
     for (let i = 0; i < ml.effectClips.length; i++) {
       const c = ml.effectClips[i];
-      if (c.effect !== 'none' && t >= c.startTime - 0.01 && t <= c.endTime + 0.01) {
+      if (c.effect !== 'none' && t >= c.startTime && t < c.endTime) {
         sig += `${c.id}:${c.effect}:${c.intensity ?? 80}|`;
       }
     }
@@ -1784,11 +1786,32 @@ export class CanvasEngine {
 
   public async seekVideo(t: number): Promise<void> {
     if (!this.mediaLayer) return;
+    // Son hedef kazanır: hızlı scrub sırasında ara hedefler atılır, seek kuyruğu birikmez
+    this.pendingSeekTime = t;
+    if (this.shareMode === 'reels' && this.videoClips.length > 0) {
+      this.nleTimelineTime = Math.max(0, Math.min(t, this.getTotalTimelineDuration()));
+    }
+    if (this.seekInFlight) return;
+    this.seekInFlight = true;
+    try {
+      while (this.pendingSeekTime !== null) {
+        const target = this.pendingSeekTime;
+        this.pendingSeekTime = null;
+        await this.performSeek(target);
+      }
+    } finally {
+      this.seekInFlight = false;
+    }
+  }
+
+  private async performSeek(t: number): Promise<void> {
+    if (!this.mediaLayer) return;
 
     if (this.shareMode === 'reels' && this.videoClips.length > 0) {
       const totalDur = this.getTotalTimelineDuration();
-      this.nleTimelineTime = Math.max(0, Math.min(t, totalDur));
-      const active = this.getActiveClipAtTime(this.nleTimelineTime);
+      const targetT = Math.max(0, Math.min(t, totalDur));
+      this.nleTimelineTime = targetT;
+      const active = this.getActiveClipAtTime(targetT);
       if (active) {
         this.applyClipTransformToMediaLayer(active.clip);
         if (this.mediaLayer.isMotionPhoto) {
@@ -1797,13 +1820,17 @@ export class CanvasEngine {
           await this.mediaLayer.seek(active.localSourceTime);
         }
       }
-      this.syncTemporalVisibility(this.nleTimelineTime);
+      // Seek sürerken oynatma başladıysa veya yeni hedef geldiyse eski kareyi basma
+      if (this.isNlePlaying || this.pendingSeekTime !== null || !this.mediaLayer) return;
+      this.nleTimelineTime = targetT;
+      this.syncTemporalVisibility(targetT);
       this.render();
-      this.emit('video-progress', this.nleTimelineTime);
+      this.emit('video-progress', targetT);
       return;
     }
 
     await this.mediaLayer.seek(t);
+    if (this.pendingSeekTime !== null || !this.mediaLayer) return;
     this.render();
     this.emit('video-progress', this.mediaLayer.getCurrentTime());
   }

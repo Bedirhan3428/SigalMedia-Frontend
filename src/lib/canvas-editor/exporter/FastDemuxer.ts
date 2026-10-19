@@ -27,6 +27,10 @@ export interface DemuxedVideoTrack {
   durationSec: number;
   fps: number;
   samples: DemuxedSample[];
+  /** tkhd matrisinden okunan görüntüleme açısı (0 | 90 | 180 | 270) */
+  rotation: number;
+  /** Edit list (elst) kaynaklı PTS kayması: presentationUs = ptsUs - ptsOffsetUs */
+  ptsOffsetUs: number;
 }
 
 interface BoxRef {
@@ -124,6 +128,14 @@ export class FastDemuxer {
       );
       const traks = moovChildren.filter((b) => b.type === 'trak');
 
+      let movieTimescale = 1000;
+      const mvhd = moovChildren.find((b) => b.type === 'mvhd');
+      if (mvhd && mvhd.contentSize >= 24) {
+        const mvhdVer = view.getUint8(mvhd.contentOffset);
+        const ts = view.getUint32(mvhd.contentOffset + (mvhdVer === 1 ? 20 : 12), false);
+        if (ts > 0) movieTimescale = ts;
+      }
+
       for (const trak of traks) {
         const trakEnd = trak.offset + trak.size;
         const tkhd = this.findBox(view, trak.contentOffset, trakEnd, 'tkhd');
@@ -158,12 +170,52 @@ export class FastDemuxer {
         // tkhd -> width & height
         let trackW = 0;
         let trackH = 0;
+        let rotation = 0;
         if (tkhd && tkhd.contentSize >= 84) {
           const tkhdVer = view.getUint8(tkhd.contentOffset);
           const dimOffset = tkhdVer === 1 ? tkhd.contentOffset + 88 : tkhd.contentOffset + 76;
           if (dimOffset + 8 <= tkhd.offset + tkhd.size) {
             trackW = view.getUint32(dimOffset, false) >>> 16;
             trackH = view.getUint32(dimOffset + 4, false) >>> 16;
+            // Dönüşüm matrisi genişlik alanından hemen önceki 36 bayttır (a, b, u, c, d, v, x, y, w)
+            const m = dimOffset - 36;
+            const a = view.getInt32(m, false) / 65536;
+            const b = view.getInt32(m + 4, false) / 65536;
+            const deg = Math.round((Math.atan2(b, a) * 180) / Math.PI);
+            rotation = (((Math.round(deg / 90) * 90) % 360) + 360) % 360;
+          }
+        }
+
+        // edts/elst: ilk boş edit (gecikme) ve medya başlangıç kayması
+        let ptsOffsetUnits = 0;
+        let emptyEditMovieUnits = 0;
+        const edts = this.findBox(view, trak.contentOffset, trakEnd, 'edts');
+        if (edts) {
+          const elst = this.findBox(view, edts.contentOffset, edts.offset + edts.size, 'elst');
+          if (elst && elst.contentSize >= 8) {
+            const elstVer = view.getUint8(elst.contentOffset);
+            const entryCount = view.getUint32(elst.contentOffset + 4, false);
+            let p = elst.contentOffset + 8;
+            const entrySize = elstVer === 1 ? 20 : 12;
+            for (let i = 0; i < entryCount && p + entrySize <= elst.offset + elst.size; i++) {
+              let segDur: number;
+              let mediaTime: number;
+              if (elstVer === 1) {
+                segDur = view.getUint32(p, false) * 4294967296 + view.getUint32(p + 4, false);
+                const hi = view.getInt32(p + 8, false);
+                mediaTime = hi * 4294967296 + view.getUint32(p + 12, false);
+              } else {
+                segDur = view.getUint32(p, false);
+                mediaTime = view.getInt32(p + 4, false);
+              }
+              p += entrySize;
+              if (mediaTime === -1) {
+                emptyEditMovieUnits += segDur;
+                continue;
+              }
+              ptsOffsetUnits = mediaTime;
+              break;
+            }
           }
         }
 
@@ -415,6 +467,11 @@ export class FastDemuxer {
           durationSec,
           fps: estimatedFps,
           samples,
+          rotation,
+          ptsOffsetUs: Math.round(
+            (ptsOffsetUnits * 1_000_000) / timescale -
+              (emptyEditMovieUnits * 1_000_000) / movieTimescale
+          ),
         };
       }
 
