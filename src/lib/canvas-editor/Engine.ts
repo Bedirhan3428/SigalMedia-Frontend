@@ -2041,45 +2041,75 @@ export class CanvasEngine {
         this.lastVirtualTickTime = now;
         const totalDur = this.getTotalTimelineDuration();
 
-        this.nleTimelineTime += dt;
-        if (this.nleTimelineTime >= totalDur) {
-          this.nleTimelineTime = 0;
-          this.activePlayingClipId = null;
-        }
+        let active = this.getActiveClipAtTime(this.nleTimelineTime);
 
-        const active = this.getActiveClipAtTime(this.nleTimelineTime);
-        if (active) {
+        // Aktif klip bir video ise, oynatma saati donanımsal video.currentTime üzerinden pürüzsüz 60 FPS akar
+        if (active && !active.clip.isMotionPhoto) {
           if (this.activePlayingClipId !== active.clip.id) {
-            // Yeni klibe (Fotoğraf -> Video veya Video -> Fotoğraf veya Video1 -> Video2) kesintisiz geçiş
             this.activateClipForPlayback(active);
           } else {
             this.applyClipTransformToMediaLayer(active.clip);
-            if (ml.isMotionPhoto) {
-              ml.virtualTime = active.localSourceTime;
+            const video = ml.getVideoElement();
+            if (video) {
+              const targetRate = active.clip.playbackRate || 1.0;
+              if (Math.abs(video.playbackRate - targetRate) > 0.01) {
+                video.playbackRate = targetRate;
+              }
+              if (Math.abs(video.volume - active.clip.volume) > 0.01) {
+                video.volume = active.clip.volume;
+              }
+              if (video.muted !== active.clip.muted) {
+                video.muted = active.clip.muted;
+              }
+              if (video.paused && !video.seeking) {
+                video.play().catch(() => {
+                  video.muted = true;
+                  video.play().catch(() => {});
+                });
+              }
+
+              // Klip bitişi kontrolü: video klip sonuna ulaştığında sıradaki klibe kesintisiz geç
+              if (video.currentTime >= active.clip.sourceEnd - 0.03 || video.ended) {
+                this.nleTimelineTime = active.clipTimelineEnd;
+                if (this.nleTimelineTime >= totalDur) {
+                  this.nleTimelineTime = 0;
+                  this.activePlayingClipId = null;
+                }
+                const nextActive = this.getActiveClipAtTime(this.nleTimelineTime);
+                if (nextActive) {
+                  this.activateClipForPlayback(nextActive);
+                  active = nextActive;
+                }
+              } else if (!video.seeking) {
+                // Video oynarken timeline zamanı doğrudan videonun gerçek zaman damgasına kilitlenir;
+                // Asla ara seek yapılmaz, böylece 60 FPS takılmasız ve donmasız akar!
+                const elapsedInClip = Math.max(
+                  0,
+                  (video.currentTime - active.clip.sourceStart) / targetRate
+                );
+                this.nleTimelineTime = Number((active.clipTimelineStart + elapsedInClip).toFixed(3));
+                if (this.nleTimelineTime >= totalDur) {
+                  this.nleTimelineTime = 0;
+                  this.activePlayingClipId = null;
+                }
+              }
+            }
+          }
+        } else {
+          // Hareketli fotoğraf veya statik klip ise dt ile ilerle
+          this.nleTimelineTime += dt;
+          if (this.nleTimelineTime >= totalDur) {
+            this.nleTimelineTime = 0;
+            this.activePlayingClipId = null;
+          }
+          active = this.getActiveClipAtTime(this.nleTimelineTime);
+          if (active) {
+            if (this.activePlayingClipId !== active.clip.id) {
+              this.activateClipForPlayback(active);
             } else {
-              const video = ml.getVideoElement();
-              if (video) {
-                const targetRate = active.clip.playbackRate || 1.0;
-                if (Math.abs(video.playbackRate - targetRate) > 0.01) {
-                  video.playbackRate = targetRate;
-                }
-                if (Math.abs(video.volume - active.clip.volume) > 0.01) {
-                  video.volume = active.clip.volume;
-                }
-                if (video.muted !== active.clip.muted) {
-                  video.muted = active.clip.muted;
-                }
-                if (video.paused && !video.seeking) {
-                  video.play().catch(() => {
-                    video.muted = true;
-                    video.play().catch(() => {});
-                  });
-                }
-                if (Math.abs(video.currentTime - active.localSourceTime) > 0.28 && !video.seeking) {
-                  try {
-                    video.currentTime = active.localSourceTime;
-                  } catch {}
-                }
+              this.applyClipTransformToMediaLayer(active.clip);
+              if (ml.isMotionPhoto) {
+                ml.virtualTime = active.localSourceTime;
               }
             }
           }

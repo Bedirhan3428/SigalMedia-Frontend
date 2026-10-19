@@ -163,6 +163,11 @@ export default function VideoTimelineNLE({
       return;
     }
 
+    // Oynatma esnasında gelen ve kullanıcı dokunmuyorken tetiklenen kuyruk scroll'larını yok say; videoyu durdurma!
+    if (!isPointerDownRef.current && !userScrollingRef.current) {
+      return;
+    }
+
     if (isPlaying) {
       onPauseVideo?.();
     }
@@ -187,6 +192,95 @@ export default function VideoTimelineNLE({
       scrollRafIdRef.current = null;
       onSeek(Number(scrubbedSec.toFixed(3)));
     });
+  };
+
+  // Bileşenler (text bar, sticker, fx, ses) veya video klipler üzerinden yatay kaydırma yapıldığında timeline'ı pürüzsüz kaydırır
+  const handlePanScroll = useCallback(
+    (deltaPx: number) => {
+      const el = scrollContainerRef.current;
+      if (!el) return;
+      isPointerDownRef.current = true;
+      userScrollingRef.current = true;
+      if (isPlaying) {
+        onPauseVideo?.();
+      }
+
+      el.scrollLeft = Math.max(0, el.scrollLeft - deltaPx);
+      const scrubbedSec = Math.max(0, Math.min(safeTotal, el.scrollLeft / pps));
+      if (timeLabelRef.current) {
+        timeLabelRef.current.textContent = formatNLEClock(scrubbedSec);
+      }
+      if (scrollRafIdRef.current !== null) {
+        cancelAnimationFrame(scrollRafIdRef.current);
+      }
+      scrollRafIdRef.current = requestAnimationFrame(() => {
+        scrollRafIdRef.current = null;
+        onSeek(Number(scrubbedSec.toFixed(3)));
+      });
+
+      if (scrollIdleTimerRef.current) clearTimeout(scrollIdleTimerRef.current);
+      scrollIdleTimerRef.current = setTimeout(() => {
+        if (!isPointerDownRef.current) {
+          userScrollingRef.current = false;
+        }
+      }, 250);
+    },
+    [isPlaying, onPauseVideo, onSeek, pps, safeTotal]
+  );
+
+  const pointerPanRef = useRef<{
+    startX: number;
+    scrollStart: number;
+    isPanning: boolean;
+  } | null>(null);
+
+  const handleContainerPointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
+    isPointerDownRef.current = true;
+    userScrollingRef.current = true;
+    if (isPlaying) onPauseVideo?.();
+    const el = scrollContainerRef.current;
+    if (el) {
+      pointerPanRef.current = {
+        startX: e.clientX,
+        scrollStart: el.scrollLeft,
+        isPanning: false,
+      };
+    }
+  };
+
+  const handleContainerPointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
+    const pp = pointerPanRef.current;
+    const el = scrollContainerRef.current;
+    if (!pp || !el || handleDraggingRef.current) return;
+
+    const dx = e.clientX - pp.startX;
+    if (!pp.isPanning && Math.abs(dx) >= 6) {
+      pp.isPanning = true;
+    }
+    if (pp.isPanning) {
+      userScrollingRef.current = true;
+      el.scrollLeft = Math.max(0, pp.scrollStart - dx);
+      const scrubbedSec = Math.max(0, Math.min(safeTotal, el.scrollLeft / pps));
+      if (timeLabelRef.current) {
+        timeLabelRef.current.textContent = formatNLEClock(scrubbedSec);
+      }
+      if (scrollRafIdRef.current !== null) {
+        cancelAnimationFrame(scrollRafIdRef.current);
+      }
+      scrollRafIdRef.current = requestAnimationFrame(() => {
+        scrollRafIdRef.current = null;
+        onSeek(Number(scrubbedSec.toFixed(3)));
+      });
+    }
+  };
+
+  const handleContainerPointerUp = () => {
+    pointerPanRef.current = null;
+    isPointerDownRef.current = false;
+    if (scrollIdleTimerRef.current) clearTimeout(scrollIdleTimerRef.current);
+    scrollIdleTimerRef.current = setTimeout(() => {
+      userScrollingRef.current = false;
+    }, 250);
   };
 
   // Cetvele tıklandığında ibreyi (merkezi) o saniyeye kaydırır
@@ -338,22 +432,10 @@ export default function VideoTimelineNLE({
         <div
           ref={scrollContainerRef}
           onScroll={isClipReordering ? undefined : handleScroll}
-          onPointerDown={() => {
-            isPointerDownRef.current = true;
-            userScrollingRef.current = true;
-            if (isPlaying) onPauseVideo?.();
-          }}
-          onPointerUp={() => {
-            isPointerDownRef.current = false;
-            if (scrollIdleTimerRef.current) clearTimeout(scrollIdleTimerRef.current);
-            scrollIdleTimerRef.current = setTimeout(() => {
-              userScrollingRef.current = false;
-            }, 250);
-          }}
-          onPointerCancel={() => {
-            isPointerDownRef.current = false;
-            userScrollingRef.current = false;
-          }}
+          onPointerDown={handleContainerPointerDown}
+          onPointerMove={handleContainerPointerMove}
+          onPointerUp={handleContainerPointerUp}
+          onPointerCancel={handleContainerPointerUp}
           onTouchStart={() => {
             isPointerDownRef.current = true;
             userScrollingRef.current = true;
@@ -366,7 +448,27 @@ export default function VideoTimelineNLE({
               userScrollingRef.current = false;
             }, 250);
           }}
-          className={`w-full no-scrollbar ${
+          onWheel={(e) => {
+            if (isPlaying) onPauseVideo?.();
+            const el = scrollContainerRef.current;
+            if (el) {
+              userScrollingRef.current = true;
+              isPointerDownRef.current = true;
+              const delta = Math.abs(e.deltaX) > Math.abs(e.deltaY) ? e.deltaX : e.deltaY;
+              el.scrollLeft += delta;
+              const scrubbedSec = Math.max(0, Math.min(safeTotal, el.scrollLeft / pps));
+              if (timeLabelRef.current) {
+                timeLabelRef.current.textContent = formatNLEClock(scrubbedSec);
+              }
+              onSeek(Number(scrubbedSec.toFixed(3)));
+              if (scrollIdleTimerRef.current) clearTimeout(scrollIdleTimerRef.current);
+              scrollIdleTimerRef.current = setTimeout(() => {
+                isPointerDownRef.current = false;
+                userScrollingRef.current = false;
+              }, 250);
+            }
+          }}
+          className={`w-full no-scrollbar cursor-grab active:cursor-grabbing ${
             isClipReordering ? "overflow-x-hidden px-4" : "overflow-x-auto"
           }`}
           style={{ WebkitOverflowScrolling: "touch" }}
@@ -418,6 +520,7 @@ export default function VideoTimelineNLE({
                 }}
                 onAppendClipClick={onAppendClipClick}
                 onEdgeScroll={handleEdgeScroll}
+                onPanScroll={handlePanScroll}
                 onPauseVideo={onPauseVideo}
                 onSeek={handleSeekWithoutScroll}
                 onCommitHistory={onCommitHistory}
@@ -441,6 +544,7 @@ export default function VideoTimelineNLE({
                   onPauseVideo={onPauseVideo}
                   onSeek={handleSeekWithoutScroll}
                   onEdgeScroll={handleEdgeScroll}
+                  onPanScroll={handlePanScroll}
                   onOpenMusicPicker={onOpenMusicPicker}
                   onOpenTextEditor={onOpenTextEditor}
                   onQuickAddEffect={onQuickAddEffect}

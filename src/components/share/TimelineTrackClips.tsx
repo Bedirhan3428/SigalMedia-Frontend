@@ -18,6 +18,7 @@ export interface TimelineTrackClipsProps {
   onReorderModeChange?: (isReordering: boolean) => void;
   onAppendClipClick?: () => void;
   onEdgeScroll?: (deltaPx: number) => void;
+  onPanScroll?: (deltaPx: number) => void;
   onPauseVideo?: () => void;
   onSeek?: (time: number) => void;
   onCommitHistory?: () => void;
@@ -59,6 +60,7 @@ export default function TimelineTrackClips({
   onReorderModeChange,
   onAppendClipClick,
   onEdgeScroll,
+  onPanScroll,
   onPauseVideo,
   onSeek,
   onCommitHistory,
@@ -70,6 +72,7 @@ export default function TimelineTrackClips({
     clipId: string;
     startX: number;
     startY: number;
+    lastX: number;
     hasMoved: boolean;
   } | null>(null);
   const suppressClipClickRef = useRef<boolean>(false);
@@ -208,6 +211,7 @@ export default function TimelineTrackClips({
       clipId: clip.id,
       startX,
       startY,
+      lastX: startX,
       hasMoved: false,
     };
 
@@ -250,6 +254,12 @@ export default function TimelineTrackClips({
       if (moveDist >= DRAG_THRESHOLD_PX) {
         if (clipPressRef.current) {
           clipPressRef.current.hasMoved = true;
+          const lastX = clipPressRef.current.lastX ?? pressOriginRef.current.x;
+          const dx = e.clientX - lastX;
+          clipPressRef.current.lastX = e.clientX;
+          if (onPanScroll) {
+            onPanScroll(dx);
+          }
         }
         clearLongPressTimer();
       }

@@ -50,6 +50,7 @@ export interface TimelineOverlayTracksProps {
   onOpenTextEditor?: () => void;
   onQuickAddEffect?: () => void;
   onCommitHistory?: () => void;
+  onPanScroll?: (deltaPx: number) => void;
 }
 
 const DRAG_THRESHOLD_PX = 8;
@@ -73,6 +74,7 @@ type ItemPressState = {
   itemType: NLESelectedType;
   startX: number;
   startY: number;
+  lastX: number;
   initStart: number;
   initEnd: number;
   isSelected: boolean;
@@ -101,6 +103,7 @@ export default function TimelineOverlayTracks({
   onOpenTextEditor,
   onQuickAddEffect,
   onCommitHistory,
+  onPanScroll,
 }: TimelineOverlayTracksProps) {
   const rootTrackContainerRef = useRef<HTMLDivElement | null>(null);
   const dragRef = useRef<OverlayDragState | null>(null);
@@ -162,6 +165,7 @@ export default function TimelineOverlayTracks({
       ...info,
       startX: e.clientX,
       startY: e.clientY,
+      lastX: e.clientX,
       pointerId: e.pointerId,
       targetEl: e.currentTarget as HTMLElement,
       hasMoved: false,
@@ -189,8 +193,8 @@ export default function TimelineOverlayTracks({
         pr.hasMoved = true;
         clearLongPress();
 
-        // Öğe zaten seçiliyse, eşik aşıldığı an taşıma moduna geç
-        if (pr.isSelected) {
+        // Öğe zaten seçiliyse VE uzun basılarak havaya kaldırılmışsa (isElevated) taşıma moduna geç
+        if (pr.isSelected && elevatedItemId === pr.id) {
           onPauseVideo?.();
           onCommitHistory?.();
           try {
@@ -208,8 +212,15 @@ export default function TimelineOverlayTracks({
             pointerId: pr.pointerId,
             dragStarted: true,
           };
+        } else {
+          // Öğe seçili değilken veya henüz havaya kaldırılmamışken:
+          // Text bar / bileşen üzerinde yatay kaydırma -> Timeline Pan Scroll!
+          const dx = e.clientX - pr.lastX;
+          pr.lastX = e.clientX;
+          if (onPanScroll) {
+            onPanScroll(dx);
+          }
         }
-        // Öğe seçili değilken parmak kaydıysa bu bir timeline scroll hareketidir; tıklama engellenir
       }
     }
 
@@ -421,7 +432,7 @@ export default function TimelineOverlayTracks({
                       isSelected,
                     });
                   }}
-                  className={`absolute top-0 bottom-0 rounded-lg flex items-center px-2.5 gap-1.5 touch-none transition-transform duration-150 ${
+                  className={`absolute top-0 bottom-0 rounded-lg flex items-center px-2.5 gap-1.5 touch-pan-x select-none transition-transform duration-150 ${
                     isSelected
                       ? "cursor-grab active:cursor-grabbing"
                       : "cursor-pointer"
@@ -595,7 +606,7 @@ export default function TimelineOverlayTracks({
                           isSelected,
                         });
                       }}
-                      className={`absolute top-0 bottom-0 rounded-lg flex items-center px-2.5 gap-1.5 touch-none transition-transform duration-150 ${
+                      className={`absolute top-0 bottom-0 rounded-lg flex items-center px-2.5 gap-1.5 touch-pan-x select-none transition-transform duration-150 ${
                         isSelected
                           ? "cursor-grab active:cursor-grabbing"
                           : "cursor-pointer"
@@ -697,7 +708,7 @@ export default function TimelineOverlayTracks({
                     isSelected,
                   });
                 }}
-                className={`absolute top-0 bottom-0 rounded-lg bg-sky-600/80 flex items-center px-2.5 gap-2 touch-none overflow-visible transition-transform duration-150 ${
+                className={`absolute top-0 bottom-0 rounded-lg bg-sky-600/80 flex items-center px-2.5 gap-2 touch-pan-x select-none overflow-visible transition-transform duration-150 ${
                   isSelected
                     ? "cursor-grab active:cursor-grabbing"
                     : "cursor-pointer"
