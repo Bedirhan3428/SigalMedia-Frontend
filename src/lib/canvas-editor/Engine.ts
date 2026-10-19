@@ -2156,19 +2156,13 @@ export class CanvasEngine {
           }
           this.lastExportClipId = active.clip.id;
         } else {
-          const sameFrame =
-            this.lastExportClipId === active.clip.id &&
-            Math.abs(active.localSourceTime - this.lastExportSourceTime) < 0.015;
-          if (!sameFrame) {
-            await ml.seek(active.localSourceTime);
-            this.lastExportSourceTime = active.localSourceTime;
-            this.lastExportClipId = active.clip.id;
-          } else if (!visChanged && !clipChanged && !isAnimated) {
-            // Aynı kaynak video karesi ve aktif animasyonlu efekt yok -> targetCtx zaten güncel!
-            return;
-          }
+          // Gerçek video kliplerde (< 15ms / skipRedraw) atlaması kesinlikle yapılmaz; her kare frame-locked olarak seek edilip tuvale çizilir
+          await ml.seek(active.localSourceTime);
+          this.lastExportSourceTime = active.localSourceTime;
+          this.lastExportClipId = active.clip.id;
         }
       }
+      targetCtx.clearRect(0, 0, w, h);
       this.renderClean(targetCtx, w, h);
       return;
     }
@@ -2184,16 +2178,12 @@ export class CanvasEngine {
         }
         this.lastExportSourceTime = t;
       } else {
-        const sameFrame =
-          this.lastExportSourceTime >= 0 && Math.abs(t - this.lastExportSourceTime) < 0.015;
-        if (!sameFrame) {
-          await ml.seek(t);
-          this.lastExportSourceTime = t;
-        } else if (!visChanged && !isAnimated) {
-          return;
-        }
+        // Gerçek videoda (< 15ms / skipRedraw) atlaması yapılmaz; her kare mutlaka seek edilip tuvale çizilir
+        await ml.seek(t);
+        this.lastExportSourceTime = t;
       }
     }
+    targetCtx.clearRect(0, 0, w, h);
     this.renderClean(targetCtx, w, h);
   }
   // [END] CREATED BY Bedirhan

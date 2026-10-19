@@ -571,6 +571,12 @@ export class MediaLayer extends BaseLayer {
     }
   }
 
+  private activeSeekPromise: Promise<void> | null = null;
+
+  public async seekTo(t: number): Promise<void> {
+    return this.seek(t);
+  }
+
   public async seek(t: number): Promise<void> {
     const dur = this.getDuration();
     const clamped = Math.max(0, Math.min(t, dur > 0 ? Math.max(0, dur - 0.001) : t));
@@ -583,12 +589,35 @@ export class MediaLayer extends BaseLayer {
     const video = this.getVideoElement();
     if (!video) return;
 
-    // 60 FPS export sırasında aynı kaynak kare içindeysek (15ms tolerans) gereksiz GOP seek yapma
-    if (Math.abs(video.currentTime - clamped) < 0.015 && video.readyState >= 2 && !video.seeking) {
+    // Devam eden bir seek işlemi varsa bitmesini bekle; asla önceki seek'i iptal etme (Seek Thrashing engelleme)
+    while (this.activeSeekPromise) {
+      try {
+        await this.activeSeekPromise;
+      } catch {
+        break;
+      }
+    }
+
+    if (video.seeking) {
+      await new Promise<void>((resolve) => {
+        let done = false;
+        const finishPrev = () => {
+          if (done) return;
+          done = true;
+          clearTimeout(prevTimer);
+          video.removeEventListener('seeked', finishPrev);
+          resolve();
+        };
+        const prevTimer = setTimeout(finishPrev, 600);
+        video.addEventListener('seeked', finishPrev, { once: true });
+      });
+    }
+
+    if (Math.abs(video.currentTime - clamped) < 0.001 && video.readyState >= 2 && !video.seeking) {
       return;
     }
 
-    return new Promise<void>((resolve) => {
+    const seekTask = new Promise<void>((resolve) => {
       let settled = false;
 
       const finish = () => {
@@ -596,6 +625,7 @@ export class MediaLayer extends BaseLayer {
         settled = true;
         clearTimeout(timer);
         video.removeEventListener('seeked', onSeeked);
+        video.removeEventListener('error', onSeeked);
         resolve();
       };
 
@@ -603,10 +633,20 @@ export class MediaLayer extends BaseLayer {
         finish();
       };
 
-      const timer = setTimeout(finish, 42);
+      const timer = setTimeout(finish, 600);
       video.addEventListener('seeked', onSeeked, { once: true });
+      video.addEventListener('error', onSeeked, { once: true });
       video.currentTime = clamped;
     });
+
+    this.activeSeekPromise = seekTask;
+    try {
+      await seekTask;
+    } finally {
+      if (this.activeSeekPromise === seekTask) {
+        this.activeSeekPromise = null;
+      }
+    }
   }
 
   public async renderAt(

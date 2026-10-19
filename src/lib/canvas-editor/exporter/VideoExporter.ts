@@ -121,7 +121,8 @@ export class VideoExporter {
 
     const targetW = (preferredWidth || 720) & ~1;
     const targetH = (preferredHeight || 1280) & ~1;
-    const targetFps = fps || 30;
+    // GÖREV B-FIX3: Çıktı kare hızı sabit 30 FPS (framerate: 30) olarak kilitlendi
+    const targetFps = 30;
 
     const attempts: Array<{
       width: number;
@@ -433,35 +434,19 @@ export class VideoExporter {
 
       const renderAndEncodeWithFrame = (
         outIdx: number,
-        decodedFrame?: VideoFrame,
-        reuseCanvasIfSameOverlay = false
+        decodedFrame?: VideoFrame
       ) => {
         const outTimeSec = outIdx / fps;
-        if (!reuseCanvasIfSameOverlay) {
-          exportCtx.clearRect(0, 0, exportWidth, exportHeight);
-          engine.drawBaseMedia(
-            exportCtx,
-            exportWidth,
-            exportHeight,
-            outTimeSec,
-            decodedFrame
-          );
-          engine.drawCachedOverlays(exportCtx, exportWidth, exportHeight, outTimeSec);
-        } else {
-          // Aynı kaynak kareye denk gelen ardışık çıktı karelerinde sadece zamansal görünürlük değişirse çiz
-          const changed = engine.syncTemporalVisibility(outTimeSec);
-          if (changed && decodedFrame) {
-            exportCtx.clearRect(0, 0, exportWidth, exportHeight);
-            engine.drawBaseMedia(
-              exportCtx,
-              exportWidth,
-              exportHeight,
-              outTimeSec,
-              decodedFrame
-            );
-            engine.drawCachedOverlays(exportCtx, exportWidth, exportHeight, outTimeSec);
-          }
-        }
+        // GÖREV B-FIX2: Video kliplerde skipRedraw kapalıdır; her kare mutlaka exportCanvas üzerine çizilir
+        exportCtx.clearRect(0, 0, exportWidth, exportHeight);
+        engine.drawBaseMedia(
+          exportCtx,
+          exportWidth,
+          exportHeight,
+          outTimeSec,
+          decodedFrame
+        );
+        engine.drawCachedOverlays(exportCtx, exportWidth, exportHeight, outTimeSec);
 
         const outVf = new VideoFrame(exportCanvas, {
           timestamp: Math.round(outTimeSec * 1_000_000),
@@ -488,7 +473,6 @@ export class VideoExporter {
               return;
             }
 
-            let encodedCountForThisDecoded = 0;
             while (globalOutFrameIdx < clipEndFrameIdx) {
               const outTimeSec = globalOutFrameIdx / fps;
               const targetSourceSec = Math.min(
@@ -498,13 +482,8 @@ export class VideoExporter {
 
               // Hedef kaynak zamanı bu karenin kapsama alanındaysa veya geçmişte kaldıysa üret
               if (targetSourceSec <= frameEndSec + 0.008 || frameSec >= clip.sourceEnd - 0.02) {
-                renderAndEncodeWithFrame(
-                  globalOutFrameIdx,
-                  decodedFrame,
-                  encodedCountForThisDecoded > 0
-                );
+                renderAndEncodeWithFrame(globalOutFrameIdx, decodedFrame);
                 hasDrawnAnyFrameInClip = true;
-                encodedCountForThisDecoded++;
                 globalOutFrameIdx++;
               } else {
                 break;
@@ -603,7 +582,7 @@ export class VideoExporter {
         if (signal?.aborted) {
           throw new DOMException('Export cancelled', 'AbortError');
         }
-        renderAndEncodeWithFrame(globalOutFrameIdx, undefined, true);
+        renderAndEncodeWithFrame(globalOutFrameIdx, undefined);
         globalOutFrameIdx++;
         while (videoEncoder.encodeQueueSize > 12) {
           await this.yieldToMain();
@@ -771,10 +750,10 @@ export class VideoExporter {
       throw new Error('Aktif medya bir video değil');
     }
 
-    // 720p (720x1280) ve akıllı 30 FPS standardı: yüksek kare başına bit hızı (4.8 Mbps) & %50 daha az kare yükü
+    // GÖREV B-FIX3: 720p (720x1280) ve sabit 30 FPS standardı (kaynak 30 FPS videolarla 1:1 tam kare eşleşmesi)
     const preferredW = options?.width || 720;
     const preferredH = options?.height || 1280;
-    const requestedFps = options?.fps || 30;
+    const requestedFps = 30;
     const bitrate = options?.bitrate || 4_800_000;
     const signal = options?.signal;
 
@@ -947,10 +926,10 @@ export class VideoExporter {
       const frameDurationUs = Math.round((1 / fps) * 1_000_000);
 
       // ─────────────────────────────────────────────────────────────
-      // 3 HATLI "ZERO-SEEK" ULTRA-FAST RENDER PIPELINE
+      // "FRAME-LOCKED" GERÇEK 30 FPS SENKRONİZE RENDER PIPELINE
       // ─────────────────────────────────────────────────────────────
       if (engine.isPureStaticExport()) {
-        // HAT 1: ZERO-REDRAW FRAME CLONING (~0.2s)
+        // HAT 1: ZERO-REDRAW FRAME CLONING (~0.2s - Yalnızca Statik Fotoğraf 'image' Kliplerinde!)
         // Sahneyi döngü dışında YALNIZCA 1 KEZ (N=1) çiz, döngü içinde sadece GPU VideoFrame referansı klonla!
         exportCtx.clearRect(0, 0, exportWidth, exportHeight);
         engine.drawBaseMedia(exportCtx, exportWidth, exportHeight, 0);
@@ -1032,61 +1011,58 @@ export class VideoExporter {
           }
         }
       } else {
-        // Gerçek Video Klipleri: Önce HAT 2 (FastDemuxer + Donanım VideoDecoder), desteklenmezse HAT 3 (Sequential Forward Playback)
-        const activeClips: VideoTrackClip[] = isReelsNle
-          ? engine.getVideoClips()
-          : [
-              {
-                id: 'single-clip',
-                sourceMediaId: 'single-media',
-                sourceStart: trimStart,
-                sourceEnd: trimEnd,
-                duration: outputDuration,
-                playbackRate,
-                volume: state.volume,
-                muted: state.muted,
-                isMotionPhoto: false,
-              },
-            ];
-
-        const demuxed = sourceVideoBuffer
-          ? FastDemuxer.demux(sourceVideoBuffer)
-          : null;
-
-        let handledByWebCodecsDecoder = false;
-        if (demuxed) {
-          handledByWebCodecsDecoder = await this.trySequentialWebCodecsExport({
-            engine,
-            demuxed,
-            clips: activeClips,
-            exportCanvas,
-            exportCtx,
-            exportWidth,
-            exportHeight,
-            fps,
-            totalFrames,
-            frameDurationUs,
-            videoEncoder,
-            getEncoderError: () => encoderError,
-            onProgress: options?.onProgress,
-            signal,
-          });
+        // GÖREV B-FIX1, B-FIX2 & B-FIX3: Gerçek Video Klipleri (Frame-Locked 30 FPS 1:1 Senkronizasyon)
+        // Video kliplerde skipRedraw kesinlikle kapalıdır; her kare gerçek seeked olayı beklenerek (600ms emniyet sınırı, sıfır seek abort)
+        // exportCanvas üzerine çizilir ve 30 FPS kaynak videoyla 1:1 tam kare eşleşmesi sağlanır.
+        const mediaEl = engine.getMedia()?.element;
+        if (mediaEl instanceof HTMLVideoElement) {
+          try {
+            mediaEl.pause();
+            mediaEl.muted = true;
+          } catch {}
         }
 
-        if (!handledByWebCodecsDecoder) {
-          await MediaRecorderFallback.streamSequentialPlaybackToEncoder({
-            engine,
-            exportCanvas,
-            exportCtx,
-            exportWidth,
-            exportHeight,
-            fps,
-            outputDuration,
-            videoEncoder,
-            getEncoderError: () => encoderError,
-            onProgress: options?.onProgress,
-            signal,
+        let lastReportedPct = -1;
+        for (let i = 0; i < totalFrames; i++) {
+          if (signal?.aborted) {
+            throw new DOMException('Export cancelled', 'AbortError');
+          }
+          if (encoderError) {
+            throw encoderError;
+          }
+
+          const outTimeSec = i / fps;
+          const sourceTimeSec = isReelsNle
+            ? Math.min(outputDuration, outTimeSec)
+            : Math.min(trimEnd, trimStart + outTimeSec * playbackRate);
+
+          await engine.renderFrameAt(exportCtx, sourceTimeSec, exportWidth, exportHeight);
+
+          const timestampUs = Math.round(outTimeSec * 1_000_000);
+          const videoFrame = new VideoFrame(exportCanvas, {
+            timestamp: timestampUs,
+            duration: frameDurationUs,
           });
+
+          try {
+            videoEncoder.encode(videoFrame, { keyFrame: i % (fps * 2) === 0 });
+          } finally {
+            videoFrame.close();
+          }
+
+          while (videoEncoder.encodeQueueSize > 12) {
+            if (signal?.aborted) {
+              throw new DOMException('Export cancelled', 'AbortError');
+            }
+            await this.yieldToMain();
+          }
+
+          const rawProgress = Math.min(0.96, (i + 1) / totalFrames);
+          const pct = Math.floor(rawProgress * 100);
+          if (pct !== lastReportedPct) {
+            lastReportedPct = pct;
+            options?.onProgress?.(rawProgress);
+          }
         }
       }
 
