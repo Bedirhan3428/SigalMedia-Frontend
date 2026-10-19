@@ -285,6 +285,36 @@ export default function ShareStoryPage() {
   }, []);
 
   // [START] CREATED BY Bedirhan
+  // Arka plana geçildiğinde (document.hidden) oynatmayı ve sesleri derhal duraklat, Android bildirim çubuğunda medya çaları gizle
+  useEffect(() => {
+    const handleVisibilityChange = () => {
+      if (document.hidden) {
+        if (previewAudioRef.current && !previewAudioRef.current.paused) {
+          previewAudioRef.current.pause();
+        }
+        if (engineRef.current && engineRef.current.getVideoState().isPlaying) {
+          engineRef.current.pauseVideo();
+        }
+        if ("mediaSession" in navigator) {
+          try {
+            navigator.mediaSession.playbackState = "none";
+            navigator.mediaSession.metadata = null;
+          } catch {}
+        }
+      }
+    };
+
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+    window.addEventListener("pagehide", handleVisibilityChange);
+
+    return () => {
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+      window.removeEventListener("pagehide", handleVisibilityChange);
+    };
+  }, []);
+  // [END] CREATED BY Bedirhan
+
+  // [START] CREATED BY Bedirhan
   // Canlı Önizleme Ses Senkronizasyonu: Timeline üzerindeki şarkı kesimi (timelineStart..timelineEnd) ile birebir senkronize çalar
   useEffect(() => {
     if (typeof window === "undefined") return;

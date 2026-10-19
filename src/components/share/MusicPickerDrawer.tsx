@@ -263,6 +263,30 @@ export default function MusicPickerDrawer({
     };
   }, [isOpen]);
 
+  // Arka plana geçildiğinde (document.hidden) çalan önizleme müziğini derhal durdur ve Android medya çaları gizle
+  useEffect(() => {
+    const handleVisibilityChange = () => {
+      if (document.hidden && audioRef.current && !audioRef.current.paused) {
+        audioRef.current.pause();
+        setIsPlaying(false);
+        if ("mediaSession" in navigator) {
+          try {
+            navigator.mediaSession.playbackState = "none";
+            navigator.mediaSession.metadata = null;
+          } catch {}
+        }
+      }
+    };
+
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+    window.addEventListener("pagehide", handleVisibilityChange);
+
+    return () => {
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+      window.removeEventListener("pagehide", handleVisibilityChange);
+    };
+  }, []);
+
   // 2. Arama Sorgusu (400ms İdeal Eşik + Karakter Kotası + AbortController)
   const handleSearchChange = (val: string) => {
     setSearchQuery(val);

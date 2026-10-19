@@ -166,6 +166,20 @@ export class CanvasEngine {
     });
 
     this.requestRender();
+
+    if (typeof document !== 'undefined') {
+      document.addEventListener('visibilitychange', () => {
+        if (document.hidden) {
+          this.pauseVideo();
+          if (typeof navigator !== 'undefined' && 'mediaSession' in navigator) {
+            try {
+              navigator.mediaSession.playbackState = 'none';
+              navigator.mediaSession.metadata = null;
+            } catch {}
+          }
+        }
+      });
+    }
   }
 
   // [START] CREATED BY Bedirhan
@@ -1877,6 +1891,13 @@ export class CanvasEngine {
   public async playVideo(): Promise<void> {
     if (!this.mediaLayer) return;
 
+    if (typeof navigator !== 'undefined' && 'mediaSession' in navigator) {
+      try {
+        navigator.mediaSession.playbackState = 'none';
+        navigator.mediaSession.metadata = null;
+      } catch {}
+    }
+
     // Oynatma başladığında tüm etkileşim bayraklarını sıfırla (Transform sonrası kilitlenmeyi önler)
     this.mediaLayer.isInteracting = false;
     for (let i = 0; i < this.overlayLayers.length; i++) {
@@ -1966,6 +1987,12 @@ export class CanvasEngine {
     }
 
     this.stopVideoLoop();
+    if (typeof navigator !== 'undefined' && 'mediaSession' in navigator) {
+      try {
+        navigator.mediaSession.playbackState = 'none';
+        navigator.mediaSession.metadata = null;
+      } catch {}
+    }
     this.emit('video-time', this.getVideoState());
   }
 

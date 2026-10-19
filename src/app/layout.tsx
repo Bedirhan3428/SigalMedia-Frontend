@@ -4,6 +4,7 @@ import { Suspense } from "react";
 // [END] CyberCore
 import localFont from "next/font/local";
 import { AuthProvider } from "@/context/AuthContext";
+import BackgroundAudioGuard from "@/components/common/BackgroundAudioGuard";
 import "./globals.css";
 
 const googleSans = localFont({
@@ -71,6 +72,7 @@ export default function RootLayout({
         className="min-h-full flex flex-col bg-zinc-950 text-zinc-100 selection:bg-emerald-500/20 selection:text-emerald-300"
         suppressHydrationWarning
       >
+        <BackgroundAudioGuard />
         {/* [START] CyberCore */}
         <Suspense fallback={null}>
           <AuthProvider>{children}</AuthProvider>
