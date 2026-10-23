@@ -9,12 +9,12 @@ import { useAuth } from "@/context/AuthContext";
 import {
   Check,
   X,
-  Camera,
   ArrowLeft,
   Loader2,
   User,
   LogOut,
 } from "lucide-react";
+import { IoCamera } from "react-icons/io5";
 import DatePickerWheel from "@/components/DatePickerWheel";
 
 export default function OnboardingPage() {
@@ -376,7 +376,7 @@ export default function OnboardingPage() {
                   )}
 
                   <div className="absolute inset-0 bg-black/60 opacity-0 group-hover:opacity-100 flex items-center justify-center transition-opacity">
-                    <Camera className="w-6 h-6 text-white" />
+                    <IoCamera className="w-6 h-6 text-white" />
                   </div>
                 </div>
 

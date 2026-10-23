@@ -18,8 +18,6 @@ import { Post } from "@/types/post";
 import {
   User as UserIcon,
   Grid3X3,
-  SquarePlay,
-  Repeat2,
   Plus,
   Menu,
   X,
@@ -28,6 +26,8 @@ import {
   Check,
 } from "lucide-react";
 import BottomNav from "@/components/BottomNav";
+import { FaPhotoFilm } from "react-icons/fa6";
+import { TbRepeat } from "react-icons/tb";
 
 type ProfileTab = "posts" | "reels" | "reposts";
 
@@ -339,7 +339,7 @@ export default function ProfilePage() {
               activeTab === "reels" ? "text-white" : "text-zinc-500 hover:text-zinc-300"
             }`}
           >
-            <SquarePlay className="w-5 h-5" />
+            <FaPhotoFilm className="w-5 h-5" />
             {activeTab === "reels" && (
               <div className="absolute bottom-0 left-0 right-0 h-0.5 bg-white" />
             )}
@@ -354,7 +354,7 @@ export default function ProfilePage() {
               activeTab === "reposts" ? "text-white" : "text-zinc-500 hover:text-zinc-300"
             }`}
           >
-            <Repeat2 className="w-5 h-5" />
+            <TbRepeat className="w-5 h-5" />
             {activeTab === "reposts" && (
               <div className="absolute bottom-0 left-0 right-0 h-0.5 bg-white" />
             )}
@@ -390,7 +390,7 @@ export default function ProfilePage() {
                     />
                   )}
                   {post.type === "reels" && (
-                    <SquarePlay className="w-4 h-4 text-white absolute top-1.5 right-1.5 drop-shadow" />
+                    <FaPhotoFilm className="w-4 h-4 text-white absolute top-1.5 right-1.5 drop-shadow" />
                   )}
                 </div>
               ))}

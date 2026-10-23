@@ -82,24 +82,37 @@ export function extractPeerUidFromChatId(
   return parts[0] === currentUid ? parts[1] : parts[0];
 }
 
-export async function getPeerBasicProfile(peerUid: string) {
-  if (profileCache.has(peerUid)) {
-    return profileCache.get(peerUid)!;
+export async function getPeerBasicProfile(peerUid?: string | null) {
+  if (!peerUid || typeof peerUid !== "string" || !peerUid.trim()) {
+    return {
+      uid: "",
+      username: "kullanici",
+      displayName: "Kullanıcı",
+      photoURL: "",
+      showOnlineStatus: false,
+      readReceipts: true,
+    };
+  }
+
+  const cleanUid = peerUid.trim();
+
+  if (profileCache.has(cleanUid)) {
+    return profileCache.get(cleanUid)!;
   }
 
   try {
-    const snap = await getDoc(doc(db, "users", peerUid));
+    const snap = await getDoc(doc(db, "users", cleanUid));
     if (snap.exists()) {
       const data = snap.data() as UserProfile;
       const summary = {
-        uid: peerUid,
+        uid: cleanUid,
         username: data.username || "kullanici",
         displayName: data.displayName || data.username || "Kullanıcı",
         photoURL: data.photoURL || "",
         showOnlineStatus: data.messageSettings?.showOnlineStatus ?? true,
         readReceipts: data.messageSettings?.readReceipts ?? true,
       };
-      profileCache.set(peerUid, summary);
+      profileCache.set(cleanUid, summary);
       return summary;
     }
   } catch (err) {
@@ -107,7 +120,7 @@ export async function getPeerBasicProfile(peerUid: string) {
   }
 
   return {
-    uid: peerUid,
+    uid: cleanUid,
     username: "kullanici",
     displayName: "Kullanıcı",
     photoURL: "",
@@ -298,11 +311,15 @@ export function listenUserChats(
 
       const enriched = await Promise.all(
         entries.map(async (entry) => {
-          const peerProfile = await getPeerBasicProfile(entry.peerUid);
+          const peerUid =
+            entry.peerUid ||
+            extractPeerUidFromChatId(entry.chatId, uid) ||
+            "";
+          const peerProfile = await getPeerBasicProfile(peerUid);
           let isOnline = false;
-          if (peerProfile.showOnlineStatus) {
+          if (peerProfile.showOnlineStatus && peerUid) {
             try {
-              const presSnap = await get(ref(rtdb, `presence/${entry.peerUid}`));
+              const presSnap = await get(ref(rtdb, `presence/${peerUid}`));
               if (presSnap.exists()) {
                 isOnline = Boolean(presSnap.val()?.isOnline);
               }
@@ -312,6 +329,7 @@ export function listenUserChats(
           }
           return {
             ...entry,
+            peerUid,
             peerProfile,
             isOnline,
           };

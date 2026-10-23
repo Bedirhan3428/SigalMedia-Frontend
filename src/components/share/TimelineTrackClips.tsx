@@ -540,7 +540,7 @@ export default function TimelineTrackClips({
       ) : (
         /* NORMAL MANYETİK ANA VİDEO KANALI + SONDAKİ [+] KLİP EKLEME BUTONU */
         <div className="flex items-center h-14">
-          <div className="flex items-center h-14 gap-[2px] bg-black/80 rounded-xl transition-all duration-180 ease-[cubic-bezier(0.22,1,0.36,1)]">
+          <div className="flex items-center h-14 gap-[2px] bg-black/80 rounded transition-all duration-180 ease-[cubic-bezier(0.22,1,0.36,1)]">
             {clips.map((clip, idx) => {
               const isTrimmingThis = trimPreview?.clipId === clip.id;
               const rate = Math.max(0.25, clip.playbackRate || 1);
@@ -605,12 +605,12 @@ export default function TimelineTrackClips({
                       onSelectClip(clip.id);
                     }}
                     onPointerDown={(e) => handleClipBodyPointerDown(e, clip, idx)}
-                    className="relative h-14 rounded-xl overflow-visible cursor-pointer shrink-0 z-10"
+                    className="relative h-14 rounded overflow-visible cursor-pointer shrink-0 z-10"
                     style={{ width: `${widthPx}px` }}
                   >
                     {/* İç Film Şeridi Konteyneri */}
                     <div
-                      className={`w-full h-full rounded-xl overflow-hidden relative flex bg-zinc-900 border-2 transition-colors ${
+                      className={`w-full h-full rounded overflow-hidden relative flex bg-zinc-900 border-2 transition-colors ${
                         isSelected
                           ? "border-amber-400 shadow-[0_0_0_1px_rgba(251,191,36,0.45)]"
                           : "border-white/15 hover:border-white/30"
@@ -704,7 +704,8 @@ export default function TimelineTrackClips({
                               isMotionPhoto: clip.isMotionPhoto,
                             })
                           }
-                          className="absolute -left-2 top-0 bottom-0 w-5 rounded-l-xl bg-amber-400 flex items-center justify-center cursor-ew-resize z-30 shadow-lg touch-none"
+                          className="absolute -left-2 top-0 bottom-0 w-5 rounded-l bg-amber-400 flex items-center justify-center cursor-ew-resize z-30 shadow-lg touch-none"
+                          style={{ top: 0, bottom: 0, height: "100%" }}
                         >
                           <div className="w-[2px] h-5 rounded-full bg-black/80" />
                         </div>
@@ -724,7 +725,8 @@ export default function TimelineTrackClips({
                               isMotionPhoto: clip.isMotionPhoto,
                             })
                           }
-                          className="absolute -right-2 top-0 bottom-0 w-5 rounded-r-xl bg-amber-400 flex items-center justify-center cursor-ew-resize z-30 shadow-lg touch-none"
+                          className="absolute -right-2 top-0 bottom-0 w-5 rounded-r bg-amber-400 flex items-center justify-center cursor-ew-resize z-30 shadow-lg touch-none"
+                          style={{ top: 0, bottom: 0, height: "100%" }}
                         >
                           <div className="w-[2px] h-5 rounded-full bg-black/80" />
                         </div>

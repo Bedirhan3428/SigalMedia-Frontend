@@ -3,7 +3,8 @@
 import { useState, useEffect } from "react";
 import Link from "next/link";
 import { useAuth } from "@/context/AuthContext";
-import { Plus, Flame, User as UserIcon } from "lucide-react";
+import { Plus, User as UserIcon } from "lucide-react";
+import { AiOutlineFire } from "react-icons/ai";
 import BottomNav from "@/components/BottomNav";
 
 export default function HomePage() {
@@ -58,7 +59,7 @@ export default function HomePage() {
             aria-label="Bildirimler"
             className="p-2 -mr-2 text-zinc-300 hover:text-white hover:bg-zinc-900 rounded-xl transition-colors btn-press-subtle"
           >
-            <Flame className="w-6 h-6" />
+            <AiOutlineFire className="w-6 h-6" />
           </button>
         </div>
       </header>

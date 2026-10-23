@@ -1,7 +1,10 @@
 // [START] CREATED BY Bedirhan
 "use client";
 
-import { Sparkles, Clapperboard, Camera, ChevronLeft } from "lucide-react";
+import { ChevronLeft } from "lucide-react";
+import { MdHistoryEdu } from "react-icons/md";
+import { FaPhotoFilm } from "react-icons/fa6";
+import { IoCamera } from "react-icons/io5";
 import { ShareMode } from "@/lib/canvas-editor";
 
 export interface ModeSelectorModalProps {
@@ -44,7 +47,7 @@ export default function ModeSelectorModal({
           }`}
         >
           <div className="w-13 h-13 rounded-2xl bg-emerald-500/20 text-emerald-400 flex items-center justify-center shrink-0 group-hover:scale-105 transition-transform">
-            <Sparkles className="w-6 h-6" />
+            <MdHistoryEdu className="w-6 h-6" />
           </div>
           <div className="flex-1 min-w-0">
             <div className="flex items-center justify-between">
@@ -66,7 +69,7 @@ export default function ModeSelectorModal({
           }`}
         >
           <div className="w-13 h-13 rounded-2xl bg-pink-500/20 text-pink-400 flex items-center justify-center shrink-0 group-hover:scale-105 transition-transform">
-            <Clapperboard className="w-6 h-6" />
+            <FaPhotoFilm className="w-6 h-6" />
           </div>
           <div className="flex-1 min-w-0">
             <div className="flex items-center justify-between">
@@ -88,7 +91,7 @@ export default function ModeSelectorModal({
           }`}
         >
           <div className="w-13 h-13 rounded-2xl bg-cyan-500/20 text-cyan-400 flex items-center justify-center shrink-0 group-hover:scale-105 transition-transform">
-            <Camera className="w-6 h-6" />
+            <IoCamera className="w-6 h-6" />
           </div>
           <div className="flex-1 min-w-0">
             <div className="flex items-center justify-between">

@@ -585,6 +585,17 @@ export class CanvasEngine {
   private assignDefaultOverlayTiming(layer: BaseLayer) {
     if (this.shareMode === 'reels') {
       const totalDur = Math.max(5, this.getTotalTimelineDuration() || 5);
+      if (layer instanceof TextLayer) {
+        // Metinler ibre konumundan itibaren 3 sn olarak eklenir
+        const TEXT_SPAN_SEC = 3;
+        const span = Math.min(TEXT_SPAN_SEC, totalDur);
+        const cur = Math.max(0, Math.min(this.getCurrentTime() || 0, totalDur));
+        const start = Math.max(0, Math.min(cur, totalDur - span));
+        layer.timelineStart = Number(start.toFixed(2));
+        layer.timelineEnd = Number((start + span).toFixed(2));
+        layer.temporalVisible = true;
+        return;
+      }
       layer.timelineStart = 0;
       layer.timelineEnd = Number(totalDur.toFixed(2));
       layer.temporalVisible = true;

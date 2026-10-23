@@ -1,7 +1,8 @@
 // [START] CREATED BY Bedirhan
 "use client";
 
-import { CaseSensitive, Sticker, Music, AtSign } from "lucide-react";
+import { CaseSensitive, Music, AtSign } from "lucide-react";
+import { PiStickerLight } from "react-icons/pi";
 import { StoryAudioMeta } from "@/lib/canvas-editor";
 
 export interface StoryEditorProps {
@@ -42,7 +43,7 @@ export default function StoryEditor({
             : "bg-black/50 border-white/15 text-white hover:bg-black/70"
         }`}
       >
-        <Sticker className="w-5 h-5 text-emerald-400" />
+        <PiStickerLight className="w-5 h-5 text-emerald-400" />
       </button>
 
       {/* #3: Müzik Aracı (Music) */}

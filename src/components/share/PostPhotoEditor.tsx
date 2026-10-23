@@ -4,7 +4,6 @@
 import { useState } from "react";
 import {
   SlidersHorizontal,
-  Palette,
   Crop,
   Sparkles,
   RotateCw,
@@ -14,6 +13,7 @@ import {
   CircleChevronRight,
   Loader2,
 } from "lucide-react";
+import { RiColorFilterAiLine } from "react-icons/ri";
 import {
   POST_STUDIO_FILTERS,
   PostAdjustmentState,
@@ -287,7 +287,7 @@ export default function PostPhotoEditor({
                 : "bg-white/5 text-zinc-400 hover:text-white"
             }`}
           >
-            <Palette className="w-3.5 h-3.5" />
+            <RiColorFilterAiLine className="w-3.5 h-3.5" />
             <span>Filtre</span>
           </button>
 

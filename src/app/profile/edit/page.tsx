@@ -7,7 +7,8 @@ import { updateProfile } from "firebase/auth";
 import { doc, updateDoc, serverTimestamp } from "firebase/firestore";
 import { ref, uploadBytes, getDownloadURL } from "firebase/storage";
 import { auth, db, storage } from "@/lib/firebase";
-import { ChevronLeft, Camera, Loader2, User as UserIcon, Check, X } from "lucide-react";
+import { ChevronLeft, Loader2, User as UserIcon, Check, X } from "lucide-react";
+import { IoCamera } from "react-icons/io5";
 import ImageCropper from "@/components/ImageCropper";
 
 export default function EditProfilePage() {
@@ -221,7 +222,7 @@ export default function EditProfilePage() {
               )}
 
               <div className="absolute inset-0 bg-black/40 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity">
-                <Camera className="w-8 h-8 text-white" />
+                <IoCamera className="w-8 h-8 text-white" />
               </div>
             </div>
 

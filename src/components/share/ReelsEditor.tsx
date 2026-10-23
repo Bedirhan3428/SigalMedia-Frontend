@@ -5,7 +5,6 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import {
   Scissors,
-  Sparkles,
   Music,
   Gauge,
   Palette,
@@ -14,8 +13,6 @@ import {
   Plus,
   Trash2,
   Copy,
-  Sticker,
-  Image as ImageIcon,
   Type,
   Crop,
   RotateCw,
@@ -26,6 +23,10 @@ import {
   Check,
   X,
 } from "lucide-react";
+import { BsStars } from "react-icons/bs";
+import { PiStickerLight } from "react-icons/pi";
+import { TbPhotoPlus } from "react-icons/tb";
+import { RiColorFilterAiLine } from "react-icons/ri";
 import {
   BaseLayer,
   CanvasEngine,
@@ -84,6 +85,14 @@ type NLEHistorySnapshot = {
 
 const SPEED_OPTIONS = [0.5, 1.0, 1.5, 2.0];
 
+// İşlemlerin anında tetiklenip birbirine karışmaması için kısa gecikme
+const ACTION_DELAY_MS = 180;
+// Menülerin açılmadan önceki bekleme ve animasyon süreleri
+const SHEET_OPEN_DELAY_MS = 120;
+const SHEET_ANIM_MS = 280;
+// Yeni efekt klibi varsayılan süresi ve önizleme süresi (sn)
+const EFFECT_CLIP_SPAN_SEC = 2;
+
 export default function ReelsEditor({
   engine,
   selectedCanvasLayer,
@@ -119,6 +128,55 @@ export default function ReelsEditor({
   const [redoStack, setRedoStack] = useState<NLEHistorySnapshot[]>([]);
   const appendClipInputRef = useRef<HTMLInputElement | null>(null);
   const isInternalLayerSyncRef = useRef(false);
+
+  // Gecikmeli aksiyon kilidi: bekleyen işlem bitmeden yeni işlem kabul edilmez
+  const actionLockRef = useRef(false);
+  const previewTimerRef = useRef<number | null>(null);
+  const [effectDraft, setEffectDraft] = useState<{
+    id: string;
+    isNew: boolean;
+    originalEffect: ReelsEffectId;
+  } | null>(null);
+  const [pendingActionKey, setPendingActionKey] = useState<string | null>(null);
+  const runDelayedAction = useCallback((key: string, fn: () => void) => {
+    if (actionLockRef.current) return;
+    actionLockRef.current = true;
+    setPendingActionKey(key);
+    window.setTimeout(() => {
+      try {
+        fn();
+      } finally {
+        actionLockRef.current = false;
+        setPendingActionKey(null);
+      }
+    }, ACTION_DELAY_MS);
+  }, []);
+
+  // Menü animasyonu: açılırken kısa gecikme + kayarak giriş, kapanırken çıkış animasyonu sonrası unmount
+  const [renderedStrip, setRenderedStrip] = useState<ActiveToolStrip>("none");
+  const [stripVisible, setStripVisible] = useState(false);
+  const renderedStripRef = useRef<ActiveToolStrip>("none");
+  useEffect(() => {
+    const timers: number[] = [];
+    setStripVisible(false);
+    const closeDelay = renderedStripRef.current !== "none" ? SHEET_ANIM_MS : 0;
+    timers.push(
+      window.setTimeout(() => {
+        renderedStripRef.current = activeStrip;
+        setRenderedStrip(activeStrip);
+        if (activeStrip !== "none") {
+          timers.push(
+            window.setTimeout(() => setStripVisible(true), SHEET_OPEN_DELAY_MS)
+          );
+        }
+      }, closeDelay)
+    );
+    return () => timers.forEach((t) => window.clearTimeout(t));
+  }, [activeStrip]);
+
+  const stripAnimClass = stripVisible
+    ? "opacity-100 translate-y-0"
+    : "opacity-0 translate-y-3 pointer-events-none";
 
   const syncFromEngine = useCallback(() => {
     if (!engine) return;
@@ -272,9 +330,6 @@ export default function ReelsEditor({
         engine.applyClipTransformToMediaLayer(targetClip);
         engine.requestRender();
       }
-    }
-    if (type === "effect") {
-      setActiveStrip("effects");
     }
   };
 
@@ -595,47 +650,39 @@ export default function ReelsEditor({
     }
   };
 
-  const addEffectClipAtPlayhead = (effectId: Exclude<ReelsEffectId, "none">) => {
+  const addEffectClipAtPlayhead = (
+    effectId: Exclude<ReelsEffectId, "none">
+  ): ReelsEffectClip | null => {
     if (!onChangeEffectClips) {
       onSelectReelsEffect(effectId);
-      return;
+      return null;
     }
     commitHistory();
     const cur = Number(getPlayheadTime().toFixed(2));
 
-    // 1. Zaten seçili bir efekt klibi varsa: klibin efekt türünü doğrudan güncelle
-    if (selectedItemType === "effect" && selectedItemId) {
-      const updated = effectClips.map((c) =>
-        c.id === selectedItemId ? { ...c, effect: effectId } : c
-      );
-      onChangeEffectClips(updated);
-      return;
+    // Mevcut efekt klipleri asla değiştirilmez: ibre bir efektin üzerindeyse
+    // yeni efekt o efektin (ve ardışık efektlerin) bittiği ilk boş noktaya eklenir.
+    const sorted = [...effectClips].sort((a, b) => a.startTime - b.startTime);
+    let clipStart = cur;
+    for (const c of sorted) {
+      if (clipStart >= c.startTime && clipStart < c.endTime) {
+        clipStart = c.endTime;
+      }
     }
-
-    // 2. İbre mevcut bir efekt klibinin içindeyse: o klibi güncelle ve seç
-    const existingAtCur = effectClips.find(
-      (c) => cur >= c.startTime && cur < c.endTime
-    );
-    if (existingAtCur) {
-      const updated = effectClips.map((c) =>
-        c.id === existingAtCur.id ? { ...c, effect: effectId } : c
-      );
-      onChangeEffectClips(updated);
-      setSelectedItemId(existingAtCur.id);
-      setSelectedItemType("effect");
-      return;
+    let clipEnd: number;
+    if (totalDuration - clipStart >= 0.4) {
+      const upcomingEffects = sorted.filter((c) => c.startTime >= clipStart + 0.01);
+      const nextStart = upcomingEffects[0]?.startTime ?? totalDuration;
+      const maxAllowedSpan = Math.max(0.4, nextStart - clipStart);
+      const span = Math.min(EFFECT_CLIP_SPAN_SEC, Math.min(totalDuration - clipStart, maxAllowedSpan));
+      clipEnd = Number(Math.min(totalDuration, clipStart + span).toFixed(2));
+    } else {
+      // Sonda boş yer kalmadıysa ibre noktasında üst üste katman olarak ekle (mevcut klip korunur)
+      clipStart = cur;
+      clipEnd = Number(Math.min(totalDuration, cur + EFFECT_CLIP_SPAN_SEC).toFixed(2));
+      if (clipEnd - clipStart < 0.2) return null;
     }
-
-    // 3. Boş alanda: bir sonraki efekti aşmayacak şekilde güvenli aralık hesapla (asla çakışma olmaz)
-    const upcomingEffects = effectClips
-      .filter((c) => c.startTime > cur)
-      .sort((a, b) => a.startTime - b.startTime);
-    const nextStart = upcomingEffects[0]?.startTime ?? totalDuration;
-    const maxAllowedSpan = Math.max(0.4, nextStart - cur);
-    const span = Math.min(2.5, Math.min(totalDuration - cur, maxAllowedSpan));
-
-    const clipStart = cur;
-    const clipEnd = Number(Math.min(totalDuration, clipStart + span).toFixed(2));
+    clipStart = Number(clipStart.toFixed(2));
 
     const newClip: ReelsEffectClip = {
       id: `fx_${Date.now().toString(36)}`,
@@ -648,6 +695,75 @@ export default function ReelsEditor({
     onChangeEffectClips([...effectClips, newClip]);
     setSelectedItemId(newClip.id);
     setSelectedItemType("effect");
+    return newClip;
+  };
+
+  // Efekt seçildiğinde ilgili barın (en fazla 2 sn) aralığını oynatıp efekti önizler
+  const stopEffectPreview = useCallback(() => {
+    if (previewTimerRef.current !== null) {
+      window.clearTimeout(previewTimerRef.current);
+      previewTimerRef.current = null;
+    }
+  }, []);
+
+  const previewEffectClip = useCallback(
+    (clip: ReelsEffectClip) => {
+      if (!engine) return;
+      stopEffectPreview();
+      const start = clip.startTime;
+      const span = Math.max(0.3, Math.min(EFFECT_CLIP_SPAN_SEC, clip.endTime - clip.startTime));
+      // Efekt kliplerinin engine'e aktarılması için bir tick bekle
+      previewTimerRef.current = window.setTimeout(async () => {
+        previewTimerRef.current = null;
+        try {
+          engine.pauseVideo();
+          await engine.seekVideo(start);
+          await engine.playVideo();
+        } catch {}
+        previewTimerRef.current = window.setTimeout(() => {
+          previewTimerRef.current = null;
+          engine.pauseVideo();
+          engine.seekVideo(start).catch(() => {});
+        }, span * 1000);
+      }, 30);
+    },
+    [engine, stopEffectPreview]
+  );
+
+  useEffect(() => stopEffectPreview, [stopEffectPreview]);
+
+  // Panel effects dışına çıktığında taslak sonlandırılır (mevcut hali korunur)
+  useEffect(() => {
+    if (activeStrip !== "effects") setEffectDraft(null);
+  }, [activeStrip]);
+
+  // Tamam: taslak efekt kalıcı olur, panel kapanır
+  const confirmEffectDraft = () => {
+    setEffectDraft(null);
+    setActiveStrip("none");
+  };
+
+  // İptal (✕ / dış alan): yeni eklenen taslak silinir, mevcut klip ise eski efektine döner
+  const cancelEffectDraft = () => {
+    stopEffectPreview();
+    engine?.pauseVideo();
+    if (effectDraft && onChangeEffectClips) {
+      if (effectDraft.isNew) {
+        onChangeEffectClips(effectClips.filter((c) => c.id !== effectDraft.id));
+        if (selectedItemId === effectDraft.id) {
+          setSelectedItemId(null);
+          setSelectedItemType(null);
+        }
+      } else {
+        onChangeEffectClips(
+          effectClips.map((c) =>
+            c.id === effectDraft.id ? { ...c, effect: effectDraft.originalEffect } : c
+          )
+        );
+      }
+    }
+    setEffectDraft(null);
+    setActiveStrip("none");
   };
 
   const handleSelectEffectPreset = (effectId: ReelsEffectId) => {
@@ -658,6 +774,7 @@ export default function ReelsEditor({
     }
     if (effectId === "none") {
       commitHistory();
+      setEffectDraft(null);
       if (selectedItemType === "effect" && selectedItemId) {
         onChangeEffectClips(effectClips.filter((c) => c.id !== selectedItemId));
         setSelectedItemId(null);
@@ -676,7 +793,27 @@ export default function ReelsEditor({
       }
       return;
     }
-    addEffectClipAtPlayhead(effectId);
+
+    // Tamam'a basılana kadar aynı taslak klibin efekti değiştirilir, yeni klip eklenmez
+    const draftClip = effectDraft
+      ? effectClips.find((c) => c.id === effectDraft.id)
+      : undefined;
+    if (effectDraft && draftClip) {
+      const updated: ReelsEffectClip = { ...draftClip, effect: effectId };
+      onChangeEffectClips(
+        effectClips.map((c) => (c.id === draftClip.id ? updated : c))
+      );
+      setSelectedItemId(updated.id);
+      setSelectedItemType("effect");
+      previewEffectClip(updated);
+      return;
+    }
+
+    const added = addEffectClipAtPlayhead(effectId);
+    if (added) {
+      setEffectDraft({ id: added.id, isNew: true, originalEffect: added.effect });
+      previewEffectClip(added);
+    }
   };
 
   const applyCropAspectPreset = (
@@ -1003,11 +1140,14 @@ export default function ReelsEditor({
             className="flex flex-col gap-2.5"
           >
             {/* 2. Açılır Alt Ayar Şeridi (Fotoğraf Kırp / Efektler / Ses & Hız / Filtreler) */}
-            {activeStrip === "crop" &&
+            {renderedStrip === "crop" &&
               selectedItemType === "photo" &&
               selectedPhotoLayer &&
               engine && (
-                <div className="flex flex-col gap-2 px-4">
+                <div
+                  className={`flex flex-col gap-2 px-4 transition-all ease-out ${stripAnimClass}`}
+                  style={{ transitionDuration: `${SHEET_ANIM_MS}ms` }}
+                >
                   <div className="flex items-center gap-2 overflow-x-auto no-scrollbar">
                     <button
                       type="button"
@@ -1078,45 +1218,95 @@ export default function ReelsEditor({
                 </div>
               )}
 
-            {activeStrip === "effects" && (
-              <div className="flex flex-col gap-1.5 px-4">
-                {/* 1. Kompakt Üst Bar: Kategori Filtreleri + Seçiliyse Yoğunluk Slider + Kapat (✕) */}
-                <div className="flex items-center justify-between gap-2">
-                  <div className="flex items-center gap-1 bg-[#16171b] p-0.5 rounded-xl border border-white/5 shrink-0">
-                    <button
-                      type="button"
-                      onClick={() => setEffectCategory("cinema")}
-                      className={`px-2.5 py-1 rounded-lg text-[11px] font-bold transition-all ${
-                        effectCategory === "cinema"
-                          ? "bg-amber-400 text-black shadow-sm"
-                          : "text-zinc-400 hover:text-white"
-                      }`}
-                    >
-                      Sinema
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setEffectCategory("dynamic")}
-                      className={`px-2.5 py-1 rounded-lg text-[11px] font-bold transition-all ${
-                        effectCategory === "dynamic"
-                          ? "bg-amber-400 text-black shadow-sm"
-                          : "text-zinc-400 hover:text-white"
-                      }`}
-                    >
-                      Dinamik
-                    </button>
+            {renderedStrip === "effects" && (
+              <>
+                {/* Yarım ekran efekt paneli: üst yarıya dokununca kapanır */}
+                <button
+                  type="button"
+                  aria-label="Kapat"
+                  onClick={cancelEffectDraft}
+                  className={`fixed inset-0 z-[45] bg-black/25 transition-opacity ease-out ${
+                    stripVisible ? "opacity-100" : "opacity-0 pointer-events-none"
+                  }`}
+                  style={{ transitionDuration: `${SHEET_ANIM_MS}ms` }}
+                />
+                <div
+                  className={`fixed inset-x-0 bottom-0 z-50 h-[50vh] flex flex-col bg-[#0c0c0f] border-t border-white/10 rounded-t-3xl shadow-[0_-12px_40px_rgba(0,0,0,0.6)] transition-transform ease-out ${
+                    stripVisible ? "translate-y-0" : "translate-y-full"
+                  }`}
+                  style={{ transitionDuration: `${SHEET_ANIM_MS}ms` }}
+                >
+                  <div className="flex justify-center pt-2.5 pb-1">
+                    <div className="w-10 h-1 rounded-full bg-white/20" />
+                  </div>
+
+                  <div className="flex items-center justify-between px-5 pt-1 pb-3">
+                    <span className="text-sm font-bold text-white">Efektler</span>
+                    <div className="flex items-center gap-2">
+                      {effectClips.length > 0 && (
+                        <button
+                          type="button"
+                          onClick={() =>
+                            runDelayedAction("fx_clear", () =>
+                              handleSelectEffectPreset("none")
+                            )
+                          }
+                          className="px-3 py-1.5 rounded-xl bg-red-500/15 hover:bg-red-500/25 border border-red-500/25 text-xs font-semibold text-red-300 active:scale-95 transition-all"
+                        >
+                          Temizle
+                        </button>
+                      )}
+                      <button
+                        type="button"
+                        onClick={cancelEffectDraft}
+                        className="w-8 h-8 rounded-xl bg-white/10 hover:bg-white/20 text-zinc-300 flex items-center justify-center active:scale-90 transition-all"
+                      >
+                        <X className="w-4 h-4" />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={confirmEffectDraft}
+                        disabled={pendingActionKey !== null}
+                        className="h-8 px-3.5 rounded-xl bg-amber-400 hover:bg-amber-300 text-black text-xs font-bold flex items-center gap-1.5 active:scale-95 transition-all disabled:opacity-60"
+                      >
+                        <Check className="w-4 h-4 stroke-[2.5]" />
+                        <span>Tamam</span>
+                      </button>
+                    </div>
+                  </div>
+
+                  <div className="px-5 pb-3">
+                    <div className="grid grid-cols-2 gap-1 bg-[#16171b] p-1 rounded-2xl border border-white/5">
+                      {([
+                        ["cinema", "Sinema"],
+                        ["dynamic", "Dinamik"],
+                      ] as const).map(([key, label]) => (
+                        <button
+                          key={key}
+                          type="button"
+                          onClick={() => setEffectCategory(key)}
+                          className={`py-2 rounded-xl text-xs font-bold transition-all duration-200 ${
+                            effectCategory === key
+                              ? "bg-amber-400 text-black shadow-sm"
+                              : "text-zinc-400 hover:text-white"
+                          }`}
+                        >
+                          {label}
+                        </button>
+                      ))}
+                    </div>
                   </div>
 
                   {selectedEffectClip && onChangeEffectClips ? (
-                    <div className="flex-1 flex items-center gap-2 bg-[#16171b] rounded-xl px-2.5 py-1 border border-white/5 max-w-[200px]">
-                      <span className="text-[10px] font-medium text-zinc-400 shrink-0">
+                    <div className="mx-5 mb-3 flex items-center gap-3 bg-[#16171b] rounded-2xl px-3.5 py-2 border border-white/5">
+                      <span className="text-xs font-medium text-zinc-400 shrink-0">
                         Yoğunluk
                       </span>
                       <input
                         type="range"
                         min={15}
                         max={100}
-                        value={selectedEffectClip.intensity}
+                        value={selectedEffectClip.intensity ?? 80}
                         onChange={(e) => {
                           const val = Number(e.target.value);
                           onChangeEffectClips(
@@ -1127,77 +1317,72 @@ export default function ReelsEditor({
                             )
                           );
                         }}
-                        className="flex-1 h-1 bg-white/15 rounded-lg appearance-none cursor-pointer accent-amber-400"
+                        className="flex-1 h-1.5 bg-white/15 rounded-lg appearance-none cursor-pointer accent-amber-400"
                       />
-                      <span className="text-[10px] font-semibold text-white w-7 text-right tabular-nums">
-                        {selectedEffectClip.intensity}%
+                      <span className="text-xs font-semibold text-white w-9 text-right tabular-nums">
+                        {selectedEffectClip.intensity ?? 80}%
                       </span>
                     </div>
                   ) : null}
 
-                  <div className="flex items-center gap-1.5 shrink-0">
-                    {effectClips.length > 0 && (
-                      <button
-                        type="button"
-                        onClick={() => handleSelectEffectPreset("none")}
-                        className="px-2 py-1 rounded-xl bg-red-500/15 hover:bg-red-500/25 border border-red-500/25 text-[10px] font-semibold text-red-300 active:scale-95 transition-all"
-                      >
-                        Temizle
-                      </button>
-                    )}
-                    <button
-                      type="button"
-                      onClick={() => setActiveStrip("none")}
-                      className="w-7 h-7 rounded-xl bg-white/10 hover:bg-white/20 text-zinc-300 flex items-center justify-center active:scale-90 transition-all"
-                    >
-                      <X className="w-3.5 h-3.5" />
-                    </button>
+                  <div className="flex-1 overflow-y-auto no-scrollbar px-5 pb-6">
+                    <div className="grid grid-cols-4 gap-2">
+                      {REELS_EFFECT_PRESETS.filter((eff) =>
+                        effectCategory === "cinema"
+                          ? ["cinema_warm", "vhs_grain", "rgb_shift", "glitch"].includes(
+                              eff.id
+                            )
+                          : ["zoom_pulse", "flash", "shake", "cyber_neon"].includes(
+                              eff.id
+                            )
+                      ).map((eff) => {
+                        const active = selectedEffectClip?.effect === eff.id;
+                        const pending = pendingActionKey === `fx_${eff.id}`;
+                        return (
+                          <button
+                            key={eff.id}
+                            type="button"
+                            disabled={pendingActionKey !== null}
+                            onClick={() =>
+                              runDelayedAction(`fx_${eff.id}`, () =>
+                                handleSelectEffectPreset(eff.id)
+                              )
+                            }
+                            className={`flex flex-col items-center gap-1.5 p-1.5 rounded-xl border transition-all duration-200 active:scale-95 disabled:cursor-wait ${
+                              pending
+                                ? "scale-95 bg-amber-400/10 border-amber-400/60"
+                                : active
+                                  ? "bg-amber-400/15 border-amber-400 ring-1 ring-amber-400/40"
+                                  : "bg-[#16171b] border-white/5 hover:bg-[#1e2026]"
+                            }`}
+                          >
+                            <div
+                              className="w-full aspect-square rounded-lg flex items-center justify-center"
+                              style={{
+                                background: `radial-gradient(circle at 30% 30%, ${eff.color}, #111827)`,
+                              }}
+                            >
+                              <BsStars
+                                className={`w-4 h-4 text-white ${pending ? "animate-pulse" : ""}`}
+                              />
+                            </div>
+                            <span className="text-[10px] font-semibold text-zinc-100 text-center leading-tight">
+                              {eff.name}
+                            </span>
+                          </button>
+                        );
+                      })}
+                    </div>
                   </div>
                 </div>
-
-                {/* 2. Yatay Akıcı Efekt Kartları Şeridi (Tek Satır - Ekranı Asla Kaplamaz) */}
-                <div className="flex items-center gap-2 overflow-x-auto no-scrollbar py-0.5">
-                  {REELS_EFFECT_PRESETS.filter((eff) =>
-                    effectCategory === "cinema"
-                      ? ["cinema_warm", "vhs_grain", "rgb_shift", "glitch"].includes(
-                          eff.id
-                        )
-                      : ["zoom_pulse", "flash", "shake", "cyber_neon"].includes(
-                          eff.id
-                        )
-                  ).map((eff) => {
-                    const active = selectedEffectClip?.effect === eff.id;
-                    return (
-                      <button
-                        key={eff.id}
-                        type="button"
-                        onClick={() => handleSelectEffectPreset(eff.id)}
-                        className={`flex items-center gap-2 py-1.5 px-3 rounded-xl border shrink-0 transition-all active:scale-95 ${
-                          active
-                            ? "bg-amber-400/20 border-amber-400 ring-1 ring-amber-400/50 shadow"
-                            : "bg-[#18191e] border-white/10 hover:bg-[#22242b]"
-                        }`}
-                      >
-                        <div
-                          className="w-5 h-5 rounded-lg flex items-center justify-center shrink-0"
-                          style={{
-                            background: `radial-gradient(circle at 30% 30%, ${eff.color}, #111827)`,
-                          }}
-                        >
-                          <Sparkles className="w-2.5 h-2.5 text-white" />
-                        </div>
-                        <span className="text-[11px] font-semibold text-zinc-100 whitespace-nowrap">
-                          {eff.name}
-                        </span>
-                      </button>
-                    );
-                  })}
-                </div>
-              </div>
+              </>
             )}
 
-            {activeStrip === "audio_speed" && (
-              <div className="flex flex-col gap-1.5 px-4">
+            {renderedStrip === "audio_speed" && (
+              <div
+                className={`flex flex-col gap-1.5 px-4 transition-all ease-out ${stripAnimClass}`}
+                style={{ transitionDuration: `${SHEET_ANIM_MS}ms` }}
+              >
                 <div className="flex items-center justify-between pb-0.5">
                   <span className="text-[11px] font-bold text-zinc-300">
                     {selectedItemType === "audio" ? "Müzik Ayarları" : "Klip Hız & Ses"}
@@ -1326,8 +1511,11 @@ export default function ReelsEditor({
               </div>
             )}
 
-            {activeStrip === "filters" && (
-              <div className="flex items-center gap-2 px-4">
+            {renderedStrip === "filters" && (
+              <div
+                className={`flex items-center gap-2 px-4 transition-all ease-out ${stripAnimClass}`}
+                style={{ transitionDuration: `${SHEET_ANIM_MS}ms` }}
+              >
                 <div className="flex-1 flex items-center gap-2 overflow-x-auto no-scrollbar py-0.5">
                   {FILTER_PRESETS.map((preset, idx) => {
                     const active = activeFilterIndex === idx;
@@ -1363,8 +1551,8 @@ export default function ReelsEditor({
               <div className="flex items-center justify-between gap-2 px-4 pt-0.5">
                 <button
                   type="button"
-                  onClick={handleSplitSelected}
-                  disabled={!canSplitSelected}
+                  onClick={() => runDelayedAction("split", handleSplitSelected)}
+                  disabled={!canSplitSelected || pendingActionKey !== null}
                   className="flex-1 flex flex-col items-center gap-1 disabled:opacity-35 group"
                 >
                   <div className="w-full h-11 rounded-2xl bg-[#1c1c1e] group-hover:bg-[#26262a] flex items-center justify-center text-white transition-all active:scale-95">
@@ -1377,8 +1565,11 @@ export default function ReelsEditor({
 
                 <button
                   type="button"
-                  onClick={handleDeleteSelected}
-                  disabled={selectedItemType === "video" && clips.length <= 1}
+                  onClick={() => runDelayedAction("delete", handleDeleteSelected)}
+                  disabled={
+                    (selectedItemType === "video" && clips.length <= 1) ||
+                    pendingActionKey !== null
+                  }
                   className="flex-1 flex flex-col items-center gap-1 disabled:opacity-35 group"
                 >
                   <div className="w-full h-11 rounded-2xl bg-red-500/15 hover:bg-red-500/25 border border-red-500/25 flex items-center justify-center text-red-400 transition-all active:scale-95">
@@ -1388,6 +1579,30 @@ export default function ReelsEditor({
                     Sil
                   </span>
                 </button>
+
+                {selectedItemType === "effect" && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (selectedEffectClip) {
+                        setEffectDraft({
+                          id: selectedEffectClip.id,
+                          isNew: false,
+                          originalEffect: selectedEffectClip.effect,
+                        });
+                      }
+                      setActiveStrip("effects");
+                    }}
+                    className="flex-1 flex flex-col items-center gap-1 group"
+                  >
+                    <div className="w-full h-11 rounded-2xl bg-[#1c1c1e] group-hover:bg-[#26262a] flex items-center justify-center text-white transition-all active:scale-95">
+                      <BsStars className="w-4 h-4" />
+                    </div>
+                    <span className="text-[11px] font-medium text-zinc-200">
+                      Efekt
+                    </span>
+                  </button>
+                )}
 
                 {(selectedItemType === "video" ||
                   selectedItemType === "photo") && (
@@ -1441,8 +1656,9 @@ export default function ReelsEditor({
 
                 <button
                   type="button"
-                  onClick={handleDuplicateSelected}
-                  className="flex-1 flex flex-col items-center gap-1 group"
+                  onClick={() => runDelayedAction("duplicate", handleDuplicateSelected)}
+                  disabled={pendingActionKey !== null}
+                  className="flex-1 flex flex-col items-center gap-1 group disabled:opacity-60"
                 >
                   <div className="w-full h-11 rounded-2xl bg-[#1c1c1e] group-hover:bg-[#26262a] flex items-center justify-center text-white transition-all active:scale-95">
                     <Copy className="w-4 h-4" />
@@ -1488,7 +1704,7 @@ export default function ReelsEditor({
                     className="flex flex-col items-center gap-1 shrink-0 group"
                   >
                     <div className="w-14 h-11 rounded-2xl bg-[#1c1c1e] group-hover:bg-[#26262a] flex items-center justify-center text-white transition-all active:scale-95">
-                      <Sticker className="w-4 h-4" />
+                      <PiStickerLight className="w-4 h-4" />
                     </div>
                     <span className="text-[11px] font-medium text-zinc-200">
                       Sticker
@@ -1503,7 +1719,7 @@ export default function ReelsEditor({
                     className="flex flex-col items-center gap-1 shrink-0 group"
                   >
                     <div className="w-14 h-11 rounded-2xl bg-[#1c1c1e] group-hover:bg-[#26262a] flex items-center justify-center text-white transition-all active:scale-95">
-                      <ImageIcon className="w-4 h-4" />
+                      <TbPhotoPlus className="w-4 h-4" />
                     </div>
                     <span className="text-[11px] font-medium text-zinc-200">
                       Fotoğraf
@@ -1546,7 +1762,7 @@ export default function ReelsEditor({
                         : "bg-[#1c1c1e] group-hover:bg-[#26262a] text-white"
                     }`}
                   >
-                    <Sparkles className="w-4 h-4" />
+                    <BsStars className="w-4 h-4" />
                   </div>
                   <span className="text-[11px] font-medium text-zinc-200">
                     Efektler
@@ -1567,7 +1783,7 @@ export default function ReelsEditor({
                         : "bg-[#1c1c1e] group-hover:bg-[#26262a] text-white"
                     }`}
                   >
-                    <Palette className="w-4 h-4" />
+                    <RiColorFilterAiLine className="w-4 h-4" />
                   </div>
                   <span className="text-[11px] font-medium text-zinc-200">
                     Filtre

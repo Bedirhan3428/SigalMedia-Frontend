@@ -56,6 +56,7 @@ import {
   X,
   Music,
 } from "lucide-react";
+import { TbPhotoPlus } from "react-icons/tb";
 
 // 18 Canlı Instagram Hikaye Renk Paleti
 const STORY_COLORS = [
@@ -1433,7 +1434,7 @@ export default function ShareStoryPage() {
               className="flex flex-col items-center justify-center gap-2 p-3.5 rounded-2xl bg-white/5 hover:bg-white/10 border border-white/10 active:scale-95 transition-all text-white group"
             >
               <div className="w-11 h-11 rounded-full bg-emerald-500/20 text-emerald-400 flex items-center justify-center group-hover:scale-105 transition-transform">
-                <ImageIcon className="w-5 h-5" />
+                <TbPhotoPlus className="w-5 h-5" />
               </div>
               <span className="text-xs font-medium">Fotoğraf</span>
             </button>

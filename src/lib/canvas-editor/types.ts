@@ -1,125 +1,13 @@
 export type MediaType = 'image' | 'video';
 
-// [MODIFIED BY Bedirhan]
 export interface EditorMedia {
   type: MediaType;
   element: HTMLImageElement | HTMLVideoElement;
   width: number;
   height: number;
   duration?: number;
-  source?: string | Blob | File;
   objectUrl?: string;
 }
-
-// [START] CREATED BY Bedirhan
-export type ShareMode = 'story' | 'reels' | 'post';
-
-export type PostStudioFilterId =
-  | 'none'
-  | 'cinematic'
-  | 'vintage_90s'
-  | 'cold_nordic'
-  | 'warm_portrait'
-  | 'mono_contrast'
-  | 'fade_film';
-
-export type ReelsEffectId =
-  | 'none'
-  | 'glitch'
-  | 'zoom_pulse'
-  | 'flash'
-  | 'rgb_shift'
-  | 'vhs_grain'
-  | 'shake'
-  | 'cyber_neon'
-  | 'cinema_warm';
-
-export interface ReelsEffectClip {
-  id: string;
-  effect: ReelsEffectId;
-  startTime: number;
-  endTime: number;
-  intensity: number; // 0 .. 100
-}
-
-export interface PostAdjustmentState {
-  brightness: number;   // -100 .. +100 (0 default)
-  contrast: number;     // -100 .. +100 (0 default)
-  saturation: number;   // -100 .. +100 (0 default)
-  warmth: number;       // -100 .. +100 (0 default)
-  vignette: number;     // 0 .. 100 (0 default)
-  sharpness: number;    // 0 .. 100 (0 default)
-  grain: number;        // 0 .. 100 (0 default)
-  lightLeak: number;    // 0 .. 100 (0 default)
-  bokehGlow: number;    // 0 .. 100 (0 default)
-  filterPreset: PostStudioFilterId;
-}
-
-export const DEFAULT_POST_ADJUSTMENTS: PostAdjustmentState = {
-  brightness: 0,
-  contrast: 0,
-  saturation: 0,
-  warmth: 0,
-  vignette: 0,
-  sharpness: 0,
-  grain: 0,
-  lightLeak: 0,
-  bokehGlow: 0,
-  filterPreset: 'none',
-};
-
-export interface VideoTrackClip {
-  id: string;              // Benzersiz kimlik (örn: "clip_x9d2a")
-  sourceMediaId: string;   // Orijinal video/fotoğraf referansı
-  sourceStart: number;     // Orijinal medyadaki başlangıç saniyesi (sn)
-  sourceEnd: number;       // Orijinal medyadaki bitiş saniyesi (sn)
-  duration: number;        // (sourceEnd - sourceStart) / playbackRate
-  playbackRate: number;    // Oynatma hızı (0.5x, 1x, 1.5x, 2x)
-  volume: number;          // 0.0 - 1.0
-  muted: boolean;
-  isMotionPhoto?: boolean; // Reels için foto karesi
-  transform?: LayerTransform; // Klip bazlı bağımsız kadraj/kırpma (scale, x, y, rotation, flipH, flipV)
-  fitMode?: FitMode;       // Klip bazlı 9:16 Doldur ('cover') veya Sığdır ('contain')
-  cropRect?: { x: number; y: number; width: number; height: number }; // Normalize [0..1] 8 tutamaçlı kırpma kutusu
-  media?: EditorMedia;     // Klip bazlı bağımsız medya kaynağı ([+] ile eklenen klipler için)
-  thumbnailUrl?: string;   // Klip önizleme karesi
-  thumbnails?: string[];   // Klip boyunca ardışık video kareleri (film şeridi için)
-}
-
-export interface OverlayTrackItem {
-  id: string;
-  layerId: string;         // CanvasEngine BaseLayer id'si
-  type: 'text' | 'sticker' | 'photo' | 'audio';
-  timelineStart: number;   // Başlangıç saniyesi
-  timelineEnd: number;     // Bitiş saniyesi
-  label: string;
-  previewUrl?: string;     // Sticker/fotoğraf küçük resmi
-  color?: string;          // Bar rengi (Metin için sarı, Foto için mor, vb.)
-}
-
-export interface NLETimelineState {
-  clips: VideoTrackClip[];
-  overlayItems: OverlayTrackItem[];
-  selectedItemId: string | null;
-  selectedItemType: 'video' | 'text' | 'sticker' | 'photo' | 'audio' | 'effect' | null;
-  totalDuration: number;
-  currentTime: number;
-  pps: number;
-}
-
-export interface VideoState {
-  isVideo: boolean;
-  isMotionPhoto?: boolean;
-  duration: number;
-  trimStart: number;
-  trimEnd: number;
-  playbackRate: number;
-  volume: number;
-  muted: boolean;
-  currentTime: number;
-  isPlaying: boolean;
-}
-// [END] CREATED BY Bedirhan
 
 export interface MediaFilters {
   brightness: number; // 100 = default (%)
@@ -152,14 +40,6 @@ export type OverlayShapeMode = 'original' | 'rounded' | 'circle' | 'polaroid' | 
 export type FontPreset = 'modern' | 'classic' | 'neon' | 'typewriter' | 'heavy';
 export type TextBgPreset = 'none' | 'solid' | 'translucent' | 'neon';
 
-// [MODIFIED BY Bedirhan]
-export interface AudioTrackSegment {
-  id: string;
-  timelineStart: number;
-  timelineEnd: number;
-  songOffset: number;
-}
-
 export interface StoryAudioMeta {
   id: string;
   title: string;
@@ -171,9 +51,6 @@ export interface StoryAudioMeta {
   duration: number;
   totalDuration: number;
   lyricsSnippet?: string;
-  timelineStart?: number;
-  timelineEnd?: number;
-  segments?: AudioTrackSegment[];
 }
 
 export interface SnapGuideState {
@@ -407,3 +284,105 @@ export interface EngineOptions {
   height?: number;         // Logical canvas height (default 1080)
   fitMode?: FitMode;       // How the media fits canvas
 }
+
+// [START] CREATED BY Bedirhan
+export type ShareMode = 'story' | 'reels' | 'post';
+
+export interface VideoState {
+  isVideo: boolean;
+  isMotionPhoto?: boolean;
+  duration: number;
+  trimStart: number;
+  trimEnd: number;
+  playbackRate: number;
+  volume: number;
+  muted: boolean;
+  currentTime: number;
+  isPlaying: boolean;
+}
+
+export interface VideoTrackClip {
+  id: string;
+  sourceMediaId: string;
+  sourceStart: number;
+  sourceEnd: number;
+  duration: number;
+  playbackRate: number;
+  volume: number;
+  muted: boolean;
+  isMotionPhoto?: boolean;
+  transform?: LayerTransform;
+  fitMode?: FitMode;
+  cropRect?: Rect;
+  media?: EditorMedia;
+  thumbnailUrl?: string;
+  thumbnails?: string[];
+}
+
+export type OverlayTrackType = 'text' | 'sticker' | 'photo';
+
+export interface OverlayTrackItem {
+  id: string;
+  layerId: string;
+  type: OverlayTrackType;
+  timelineStart: number;
+  timelineEnd: number;
+  label: string;
+  color: string;
+  previewUrl?: string;
+}
+
+export type PostStudioFilterId =
+  | 'none'
+  | 'cinematic'
+  | 'vintage_90s'
+  | 'cold_nordic'
+  | 'warm_portrait'
+  | 'mono_contrast'
+  | 'fade_film';
+
+export interface PostAdjustmentState {
+  brightness: number; // -100..100
+  contrast: number;   // -100..100
+  saturation: number; // -100..100
+  warmth: number;     // -100..100
+  vignette: number;   // 0..100
+  sharpness: number;  // 0..100
+  grain: number;      // 0..100
+  lightLeak: number;  // 0..100
+  bokehGlow: number;  // 0..100
+  filterPreset: PostStudioFilterId;
+}
+
+export const DEFAULT_POST_ADJUSTMENTS: PostAdjustmentState = {
+  brightness: 0,
+  contrast: 0,
+  saturation: 0,
+  warmth: 0,
+  vignette: 0,
+  sharpness: 0,
+  grain: 0,
+  lightLeak: 0,
+  bokehGlow: 0,
+  filterPreset: 'none',
+};
+
+export type ReelsEffectId =
+  | 'none'
+  | 'glitch'
+  | 'zoom_pulse'
+  | 'flash'
+  | 'shake'
+  | 'rgb_shift'
+  | 'cyber_neon'
+  | 'cinema_warm'
+  | 'vhs_grain';
+
+export interface ReelsEffectClip {
+  id: string;
+  effect: ReelsEffectId;
+  startTime: number;
+  endTime: number;
+  intensity?: number; // 0..100
+}
+// [END] CREATED BY Bedirhan
