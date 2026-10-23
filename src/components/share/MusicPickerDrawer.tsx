@@ -190,14 +190,6 @@ export default function MusicPickerDrawer({
     };
   }, [isOpen, selectedTrack?.id]);
 
-  // Yükleme durumu için emniyet zaman aşımı (maksimum 2 saniye sonra yükleniyor zorla kapanır)
-  useEffect(() => {
-    if (!isAudioLoading) return;
-    const timer = setTimeout(() => {
-      setIsAudioLoading(false);
-    }, 2000);
-    return () => clearTimeout(timer);
-  }, [isAudioLoading]);
 
   // Dalga formu görünür alan genişliğini izle
   useEffect(() => {
@@ -347,24 +339,16 @@ export default function MusicPickerDrawer({
     getTrackLyrics(track.id, track.title, track.artist).then((lyr) => setLyrics(lyr));
 
     if (audioRef.current) {
+      const audio = audioRef.current;
+      audio.pause();
+      const streamUrl = getAudioStreamUrl(track.id);
+      if (audio.src !== streamUrl) {
+        audio.src = streamUrl;
+      }
       try {
-        audioRef.current.pause();
-        audioRef.current.currentTime = 0;
+        audio.currentTime = defaultStart;
       } catch {}
-
-      audioRef.current.src = getAudioStreamUrl(track.id);
-      audioRef.current.load();
-
-      audioRef.current
-        .play()
-        .then(() => {
-          setIsPlaying(true);
-          setIsAudioLoading(false);
-        })
-        .catch(() => {
-          setIsPlaying(false);
-          setIsAudioLoading(false);
-        });
+      audio.play().catch(() => {});
     }
   }, []);
 
@@ -388,27 +372,23 @@ export default function MusicPickerDrawer({
   // 4. Oynat / Duraklat Toggle
   const togglePlayPause = () => {
     if (!audioRef.current || !selectedTrack) return;
-    if (isPlaying) {
-      audioRef.current.pause();
+    const audio = audioRef.current;
+    if (!audio.paused) {
+      audio.pause();
       setIsPlaying(false);
     } else {
       setIsAudioLoading(true);
       setAudioErrorTrackId(null);
-      const cur = audioRef.current.currentTime;
+      const cur = audio.currentTime;
       if (cur < selectedStartSec || cur >= selectedStartSec + FIXED_DURATION) {
-        audioRef.current.currentTime = selectedStartSec;
-        setCurrentPlayTime(selectedStartSec);
+        try {
+          audio.currentTime = selectedStartSec;
+          setCurrentPlayTime(selectedStartSec);
+        } catch {}
       }
-      audioRef.current
-        .play()
-        .then(() => {
-          setIsPlaying(true);
-          setIsAudioLoading(false);
-        })
-        .catch(() => {
-          setIsPlaying(false);
-          setIsAudioLoading(false);
-        });
+      audio.play().catch(() => {
+        setIsAudioLoading(false);
+      });
     }
   };
 
@@ -650,22 +630,32 @@ export default function MusicPickerDrawer({
         onLoadedData={() => {
           syncBufferedEnd();
         }}
+        onPlay={() => {
+          setIsPlaying(true);
+        }}
+        onPlaying={() => {
+          setIsPlaying(true);
+          setIsAudioLoading(false);
+        }}
+        onPause={() => {
+          setIsPlaying(false);
+        }}
         onCanPlay={() => {
           setIsAudioLoading(false);
           setAudioErrorTrackId(null);
           syncBufferedEnd();
           if (audioRef.current && pendingSeekRef.current !== null) {
-            try {
-              audioRef.current.currentTime = pendingSeekRef.current;
-            } catch {}
+            const target = pendingSeekRef.current;
             pendingSeekRef.current = null;
+            if (target > 0) {
+              try {
+                audioRef.current.currentTime = target;
+              } catch {}
+            }
           }
         }}
         onSeeking={() => {
-          setIsAudioLoading(false);
-        }}
-        onPlaying={() => {
-          setIsAudioLoading(false);
+          setIsAudioLoading(true);
         }}
         onSeeked={() => {
           setIsAudioLoading(false);
