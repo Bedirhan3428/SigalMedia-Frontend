@@ -442,9 +442,13 @@ export default function MusicPickerDrawer({
     setCurrentPlayTime(newSec);
     lastTimeUpdateRef.current = newSec;
     if (audioRef.current) {
-      try {
-        audioRef.current.currentTime = newSec;
-      } catch {}
+      if (audioRef.current.readyState >= 1) {
+        try {
+          audioRef.current.currentTime = newSec;
+        } catch {}
+      } else {
+        pendingSeekRef.current = newSec;
+      }
       setIsAudioLoading(true);
       audioRef.current
         .play()
@@ -535,17 +539,6 @@ export default function MusicPickerDrawer({
         const now = performance.now();
         let cur = audio.currentTime;
 
-        // R2 hazır değilken oynatma konumunu güvenli sınıra (bufferedEnd - 0.3s) kenetle
-        if (!isR2ReadyRef.current) {
-          const safeLimit = getSafeBufferedLimit();
-          if (safeLimit > 0 && cur > safeLimit) {
-            const clampedPos = Math.min(startRef.current, safeLimit);
-            try {
-              audio.currentTime = clampedPos;
-              cur = clampedPos;
-            } catch {}
-          }
-        }
 
         if (cur !== lastAudioTime) {
           lastAudioTime = cur;
@@ -712,12 +705,6 @@ export default function MusicPickerDrawer({
         onError={() => {
           setIsPlaying(false);
           setIsAudioLoading(false);
-          // Eğer 30s alanının sonuna gelindiyse veya dosya sonu hatasıysa başa al
-          if (audioRef.current) {
-            try {
-              audioRef.current.currentTime = selectedStartSec;
-            } catch {}
-          }
           if (selectedTrack) {
             setAudioErrorTrackId(selectedTrack.id);
           }
