@@ -1,5 +1,6 @@
 import { BaseLayer } from './BaseLayer';
 import { LayerTransform, Rect, OverlayShapeMode } from '../types';
+import { LayerBitmapCache } from '../utils/layerBitmapCache';
 
 export class OverlayImageLayer extends BaseLayer {
   public override type = 'image_overlay';
@@ -123,10 +124,56 @@ export class OverlayImageLayer extends BaseLayer {
     ctx.closePath();
   }
 
+  private bitmapCache = new LayerBitmapCache();
+
   public override render(ctx: CanvasRenderingContext2D, canvasWidth: number, canvasHeight: number): void {
     if (!this.visible || !this.image) return;
 
     const center = this.getPixelPosition(canvasWidth, canvasHeight);
+
+    // Durağan haldeyken şekil + gölge + görsel bir kez gizli tuvale çizilir
+    let bitmap: HTMLCanvasElement | null = null;
+    if (!this.isInteracting && this.image.complete) {
+      const dims = this.getBaseDimensions(canvasWidth);
+      const size = canvasWidth * 0.40;
+      const margin = 48;
+      const scale = Math.abs(this.transform.scale);
+      const bmpW = Math.max(dims.width, size) * scale + margin * 2;
+      const bmpH = Math.max(dims.height, size) * scale + margin * 2;
+      const key = [
+        this.shapeMode,
+        this.transform.flipH ? 1 : 0,
+        this.transform.flipV ? 1 : 0,
+        scale.toFixed(3),
+        canvasWidth,
+        this.naturalWidth,
+        this.naturalHeight,
+      ].join('|');
+      bitmap = this.bitmapCache.get(key, bmpW, bmpH, (bctx) =>
+        this.drawContent(bctx, canvasWidth, bmpW / 2, bmpH / 2, 0)
+      );
+    }
+
+    if (bitmap) {
+      ctx.save();
+      ctx.filter = 'none';
+      ctx.translate(center.x, center.y);
+      ctx.rotate((this.transform.rotation * Math.PI) / 180);
+      ctx.drawImage(bitmap, -bitmap.width / 2, -bitmap.height / 2);
+      ctx.restore();
+      return;
+    }
+
+    this.drawContent(ctx, canvasWidth, center.x, center.y, this.transform.rotation);
+  }
+
+  private drawContent(
+    ctx: CanvasRenderingContext2D,
+    canvasWidth: number,
+    originX: number,
+    originY: number,
+    rotationDeg: number
+  ): void {
     const dims = this.getBaseDimensions(canvasWidth);
     const size = canvasWidth * 0.40;
 
@@ -135,8 +182,8 @@ export class OverlayImageLayer extends BaseLayer {
     // 1. Filtrelerden Kesinlikle Etkilenmesin (Story filtreleri bu katmana sızamaz)
     ctx.filter = 'none';
 
-    ctx.translate(center.x, center.y);
-    ctx.rotate((this.transform.rotation * Math.PI) / 180);
+    ctx.translate(originX, originY);
+    ctx.rotate((rotationDeg * Math.PI) / 180);
 
     // Hafif ve zarif etkileşim yaylanması (%2 spring scale, çerçeve çizgisi yok)
     const interactionScale = this.isInteracting ? 1.02 : 1.0;

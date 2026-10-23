@@ -1,5 +1,6 @@
 import { BaseLayer } from './BaseLayer';
 import { Rect, TextStyle, FontPreset, TextBgPreset } from '../types';
+import { LayerBitmapCache } from '../utils/layerBitmapCache';
 
 export { type FontPreset, type TextBgPreset };
 
@@ -265,16 +266,42 @@ export class TextLayer extends BaseLayer {
     return this.cachedBounds;
   }
 
+  private bitmapCache = new LayerBitmapCache();
+
   public override render(ctx: CanvasRenderingContext2D, canvasWidth: number, canvasHeight: number): void {
     if (!this.visible || !this.style.text) return;
 
     const center = this.getPixelPosition(canvasWidth, canvasHeight);
     const bounds = this.getBoundingBox(ctx, canvasWidth, canvasHeight);
-    const lines = this.style.text.split('\n');
-    const lineHeight = this.style.fontSize * 1.25;
-    const hasBg = this.bgPreset === 'solid' || this.bgPreset === 'translucent';
-    const padding = hasBg ? (this.style.backgroundPadding ?? 18) : 8;
     const resScale = canvasWidth / 1080;
+    const interactionScale = this.isInteracting ? 1.015 : 1.0;
+    const finalScale = this.transform.scale * interactionScale * this.pulseScale * resScale;
+
+    // Gölge/neon parlaması için piksel cinsinden kenar payı
+    const margin = 48;
+    const bmpW = bounds.width * finalScale + margin * 2;
+    const bmpH = bounds.height * finalScale + margin * 2;
+    const key = [
+      this.style.text,
+      this.getFontString(),
+      this.style.color,
+      this.style.textAlign,
+      this.style.backgroundColor,
+      this.style.backgroundPadding,
+      this.style.borderRadius,
+      this.bgPreset,
+      this.fontPreset,
+      finalScale.toFixed(3),
+    ].join('|');
+    // Dokunma/pulse animasyonunda ölçek her karede değişir; o sırada doğrudan çiz
+    const isAnimating = this.isInteracting || this.pulseScale !== 1;
+    const bitmap = isAnimating
+      ? null
+      : this.bitmapCache.get(key, bmpW, bmpH, (bctx) => {
+          bctx.translate(bmpW / 2, bmpH / 2);
+          bctx.scale(finalScale, finalScale);
+          this.drawContent(bctx, bounds);
+        });
 
     ctx.save();
     // 0. Story filtrelerinden kesinlikle etkilenmesin (Metin her zaman berrak ve net kalır)
@@ -282,9 +309,21 @@ export class TextLayer extends BaseLayer {
 
     ctx.translate(center.x, center.y);
     ctx.rotate((this.transform.rotation * Math.PI) / 180);
-    const interactionScale = this.isInteracting ? 1.015 : 1.0;
-    const finalScale = this.transform.scale * interactionScale * this.pulseScale * resScale;
-    ctx.scale(finalScale, finalScale);
+    if (bitmap) {
+      ctx.drawImage(bitmap, -bitmap.width / 2, -bitmap.height / 2);
+    } else {
+      ctx.scale(finalScale, finalScale);
+      this.drawContent(ctx, bounds);
+    }
+    ctx.restore();
+  }
+
+  // Yerel koordinatlarda (merkez 0,0) arka plan + metin çizimi
+  private drawContent(ctx: CanvasRenderingContext2D, bounds: Rect): void {
+    const lines = this.style.text.split('\n');
+    const lineHeight = this.style.fontSize * 1.25;
+    const hasBg = this.bgPreset === 'solid' || this.bgPreset === 'translucent';
+    const padding = hasBg ? (this.style.backgroundPadding ?? 18) : 8;
 
     // 1. Arka Plan Kutusu (Solid veya Translucent)
     if (hasBg && this.style.backgroundColor && this.style.backgroundColor !== 'transparent') {
@@ -351,6 +390,8 @@ export class TextLayer extends BaseLayer {
       ctx.fillText(line, lineX, lineY);
     });
 
-    ctx.restore();
+    ctx.shadowColor = 'transparent';
+    ctx.shadowBlur = 0;
+    ctx.shadowOffsetY = 0;
   }
 }

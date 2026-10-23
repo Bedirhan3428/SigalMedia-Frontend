@@ -539,7 +539,7 @@ export class MediaRecorderFallback {
       codec: 'mp4a.40.2',
       sampleRate: 44100,
       numberOfChannels: 2,
-      bitrate: 192_000,
+      bitrate: 128_000,
     },
     signal?: AbortSignal,
     onError?: (err: Error) => void
@@ -837,7 +837,7 @@ export class MediaRecorderFallback {
       codec: 'mp4a.40.2',
       sampleRate: 44100,
       numberOfChannels: 2,
-      bitrate: 192_000,
+      bitrate: 128_000,
     };
 
     const audioSupportPromise =
@@ -924,9 +924,9 @@ export class MediaRecorderFallback {
 
     const width = options?.width || 720;
     const height = options?.height || 1280;
-    // Akıllı FPS Seçimi: Standart 30 FPS ve 4.5 Mbps
+    // Akıllı FPS Seçimi: Standart 30 FPS ve 2.5 Mbps
     const fps = options?.fps && options.fps <= 30 ? options.fps : 30;
-    const bitrate = options?.bitrate || 4_500_000;
+    const bitrate = options?.bitrate || 2_500_000;
     const signal = options?.signal;
 
     const exportCanvas = document.createElement('canvas');

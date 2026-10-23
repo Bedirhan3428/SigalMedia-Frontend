@@ -1,5 +1,6 @@
 import { BaseLayer } from './BaseLayer';
 import { Rect, StoryAudioMeta } from '../types';
+import { LayerBitmapCache } from '../utils/layerBitmapCache';
 
 export class MusicStickerLayer extends BaseLayer {
   public override type = 'music_sticker';
@@ -50,6 +51,8 @@ export class MusicStickerLayer extends BaseLayer {
     };
   }
 
+  private bitmapCache = new LayerBitmapCache();
+
   public override render(ctx: CanvasRenderingContext2D, canvasWidth: number, canvasHeight: number): void {
     if (!this.visible) return;
 
@@ -57,15 +60,45 @@ export class MusicStickerLayer extends BaseLayer {
     const bounds = this.getBoundingBox(ctx, canvasWidth);
     const w = bounds.width;
     const h = bounds.height;
-    const radius = h / 2; // Tam yuvarlatılmış hap (pill)
+    const interactionScale = this.isInteracting ? 1.03 : 1.0;
+    const scale = this.transform.scale * interactionScale;
+
+    // Dokunma sırasında gölge ve ölçek değişir; yalnızca durağan halde önbellekten bas
+    const margin = 40;
+    const bmpW = w * scale + margin * 2;
+    const bmpH = h * scale + margin * 2;
+    const key = [
+      this.audioMeta.title,
+      this.audioMeta.artist,
+      this.isImageLoaded ? 'img' : 'noimg',
+      w,
+      scale.toFixed(3),
+    ].join('|');
+    const bitmap = this.isInteracting
+      ? null
+      : this.bitmapCache.get(key, bmpW, bmpH, (bctx) => {
+          bctx.translate(bmpW / 2, bmpH / 2);
+          bctx.scale(scale, scale);
+          this.drawContent(bctx, w, h);
+        });
 
     ctx.save();
     ctx.filter = 'none';
 
     ctx.translate(center.x, center.y);
     ctx.rotate((this.transform.rotation * Math.PI) / 180);
-    const interactionScale = this.isInteracting ? 1.03 : 1.0;
-    ctx.scale(this.transform.scale * interactionScale, this.transform.scale * interactionScale);
+    if (bitmap) {
+      ctx.drawImage(bitmap, -bitmap.width / 2, -bitmap.height / 2);
+    } else {
+      ctx.scale(scale, scale);
+      this.drawContent(ctx, w, h);
+    }
+    ctx.restore();
+  }
+
+  // Yerel koordinatlarda (merkez 0,0) hap zemin + kapak + başlık/sanatçı çizimi
+  private drawContent(ctx: CanvasRenderingContext2D, w: number, h: number): void {
+    const radius = h / 2; // Tam yuvarlatılmış hap (pill)
 
     // 1. Yumuşak Dış Gölge
     ctx.shadowColor = 'rgba(0, 0, 0, 0.45)';
@@ -154,7 +187,5 @@ export class MusicStickerLayer extends BaseLayer {
       artist += '...';
     }
     ctx.fillText(artist, textStartX, h * 0.18);
-
-    ctx.restore();
   }
 }

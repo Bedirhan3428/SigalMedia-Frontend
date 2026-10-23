@@ -171,16 +171,12 @@ export default function TimelineOverlayTracks({
       hasMoved: false,
     };
 
+    // Seçili öğe: mobilde parmak bar dışına çıksa da hareket kaybolmasın diye hemen yakala
     if (info.isSelected) {
-      longPressTimerRef.current = setTimeout(() => {
-        longPressTimerRef.current = null;
-        if (typeof navigator !== "undefined" && navigator.vibrate) {
-          try {
-            navigator.vibrate(35);
-          } catch {}
-        }
-        setElevatedItemId(info.id);
-      }, 350);
+      e.stopPropagation();
+      try {
+        rootTrackContainerRef.current?.setPointerCapture(e.pointerId);
+      } catch {}
     }
   };
 
@@ -188,18 +184,23 @@ export default function TimelineOverlayTracks({
     // 1. Öğeye basıldığında kaydırma hareketi var mı kontrol et (Min 8px Eşik)
     const pr = pressRef.current;
     if (pr && !dragRef.current) {
+      // Seçili öğe üzerindeki hareket timeline'ı kaydırmasın
+      if (pr.isSelected) e.stopPropagation();
       const moveDist = Math.hypot(e.clientX - pr.startX, e.clientY - pr.startY);
       if (moveDist >= DRAG_THRESHOLD_PX) {
         pr.hasMoved = true;
         clearLongPress();
 
-        // Öğe zaten seçiliyse VE uzun basılarak havaya kaldırılmışsa (isElevated) taşıma moduna geç
-        if (pr.isSelected && elevatedItemId === pr.id) {
+        // Seçili öğe doğrudan sürüklenerek taşınır (mobilde uzun basma gerekmez)
+        if (pr.isSelected) {
           onPauseVideo?.();
           onCommitHistory?.();
-          try {
-            rootTrackContainerRef.current?.setPointerCapture(pr.pointerId);
-          } catch {}
+          setElevatedItemId(pr.id);
+          if (typeof navigator !== "undefined" && navigator.vibrate) {
+            try {
+              navigator.vibrate(20);
+            } catch {}
+          }
           dragRef.current = {
             targetKind: pr.targetKind,
             mode: "move",
@@ -389,7 +390,8 @@ export default function TimelineOverlayTracks({
     <div
       ref={rootTrackContainerRef}
       className="flex flex-col gap-1.5 select-none"
-      style={{ width: `${trackWidthPx}px` }}
+      style={{ width: `${trackWidthPx}px`, WebkitTouchCallout: "none" }}
+      onContextMenu={(e) => e.preventDefault()}
       onPointerMove={handlePointerMove}
       onPointerUp={handlePointerEnd}
       onPointerCancel={handlePointerEnd}
@@ -432,7 +434,7 @@ export default function TimelineOverlayTracks({
                       isSelected,
                     });
                   }}
-                  className={`absolute top-0 bottom-0 rounded flex items-center px-2.5 gap-1.5 touch-pan-x select-none transition-transform duration-150 ${
+                  className={`absolute top-0 bottom-0 rounded flex items-center px-2.5 gap-1.5 ${isSelected ? "touch-none" : "touch-pan-x"} select-none transition-transform duration-150 ${
                     isSelected
                       ? "cursor-grab active:cursor-grabbing"
                       : "cursor-pointer"
@@ -485,7 +487,7 @@ export default function TimelineOverlayTracks({
                             initEnd: item.timelineEnd,
                           })
                         }
-                        className="absolute -left-1.5 w-3.5 rounded-l bg-white flex items-center justify-center cursor-ew-resize z-30 shadow touch-none"
+                        className="absolute -left-1.5 w-3.5 rounded-l bg-white flex items-center justify-center cursor-ew-resize z-30 shadow touch-none before:absolute before:content-[''] before:-inset-x-2.5 before:-inset-y-1.5"
                         style={{ top: 0, bottom: 0, height: "100%" }}
                       >
                         <div className="w-[1.5px] h-3.5 rounded-full bg-black" />
@@ -502,7 +504,7 @@ export default function TimelineOverlayTracks({
                             initEnd: item.timelineEnd,
                           })
                         }
-                        className="absolute -right-1.5 w-3.5 rounded-r bg-white flex items-center justify-center cursor-ew-resize z-30 shadow touch-none"
+                        className="absolute -right-1.5 w-3.5 rounded-r bg-white flex items-center justify-center cursor-ew-resize z-30 shadow touch-none before:absolute before:content-[''] before:-inset-x-2.5 before:-inset-y-1.5"
                         style={{ top: 0, bottom: 0, height: "100%" }}
                       >
                         <div className="w-[1.5px] h-3.5 rounded-full bg-black" />
@@ -608,7 +610,7 @@ export default function TimelineOverlayTracks({
                           isSelected,
                         });
                       }}
-                      className={`absolute top-0 bottom-0 rounded flex items-center px-2.5 gap-1.5 touch-pan-x select-none transition-transform duration-150 ${
+                      className={`absolute top-0 bottom-0 rounded flex items-center px-2.5 gap-1.5 ${isSelected ? "touch-none" : "touch-pan-x"} select-none transition-transform duration-150 ${
                         isSelected
                           ? "cursor-grab active:cursor-grabbing"
                           : "cursor-pointer"
@@ -646,7 +648,7 @@ export default function TimelineOverlayTracks({
                                 initEnd: fx.endTime,
                               })
                             }
-                            className="absolute -left-1.5 w-4 rounded-l bg-white flex items-center justify-center cursor-ew-resize z-30 shadow touch-none"
+                            className="absolute -left-1.5 w-4 rounded-l bg-white flex items-center justify-center cursor-ew-resize z-30 shadow touch-none before:absolute before:content-[''] before:-inset-x-2.5 before:-inset-y-1.5"
                             style={{ top: 0, bottom: 0, height: "100%" }}
                           >
                             <div className="w-[1.5px] h-3.5 rounded-full bg-black" />
@@ -663,7 +665,7 @@ export default function TimelineOverlayTracks({
                                 initEnd: fx.endTime,
                               })
                             }
-                            className="absolute -right-1.5 w-4 rounded-r bg-white flex items-center justify-center cursor-ew-resize z-30 shadow touch-none"
+                            className="absolute -right-1.5 w-4 rounded-r bg-white flex items-center justify-center cursor-ew-resize z-30 shadow touch-none before:absolute before:content-[''] before:-inset-x-2.5 before:-inset-y-1.5"
                             style={{ top: 0, bottom: 0, height: "100%" }}
                           >
                             <div className="w-[1.5px] h-3.5 rounded-full bg-black" />
@@ -712,7 +714,7 @@ export default function TimelineOverlayTracks({
                     isSelected,
                   });
                 }}
-                className={`absolute top-0 bottom-0 rounded bg-sky-600/80 flex items-center px-2.5 gap-2 touch-pan-x select-none overflow-visible transition-transform duration-150 ${
+                className={`absolute top-0 bottom-0 rounded bg-sky-600/80 flex items-center px-2.5 gap-2 ${isSelected ? "touch-none" : "touch-pan-x"} select-none overflow-visible transition-transform duration-150 ${
                   isSelected
                     ? "cursor-grab active:cursor-grabbing"
                     : "cursor-pointer"
@@ -763,7 +765,7 @@ export default function TimelineOverlayTracks({
                           initEnd: seg.timelineEnd,
                         })
                       }
-                      className="absolute -left-1.5 w-3.5 rounded-l bg-white flex items-center justify-center cursor-ew-resize z-30 shadow touch-none"
+                      className="absolute -left-1.5 w-3.5 rounded-l bg-white flex items-center justify-center cursor-ew-resize z-30 shadow touch-none before:absolute before:content-[''] before:-inset-x-2.5 before:-inset-y-1.5"
                       style={{ top: 0, bottom: 0, height: "100%" }}
                     >
                       <div className="w-[1.5px] h-3.5 rounded-full bg-black" />
@@ -780,7 +782,7 @@ export default function TimelineOverlayTracks({
                           initEnd: seg.timelineEnd,
                         })
                       }
-                      className="absolute -right-1.5 w-3.5 rounded-r bg-white flex items-center justify-center cursor-ew-resize z-30 shadow touch-none"
+                      className="absolute -right-1.5 w-3.5 rounded-r bg-white flex items-center justify-center cursor-ew-resize z-30 shadow touch-none before:absolute before:content-[''] before:-inset-x-2.5 before:-inset-y-1.5"
                       style={{ top: 0, bottom: 0, height: "100%" }}
                     >
                       <div className="w-[1.5px] h-3.5 rounded-full bg-black" />

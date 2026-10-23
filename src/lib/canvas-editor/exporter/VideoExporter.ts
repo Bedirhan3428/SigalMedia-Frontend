@@ -32,7 +32,8 @@ const H264_CODEC_CANDIDATES = [
 ];
 
 const OUTPUT_FPS = 30;
-const DEFAULT_BITRATE = 6_000_000;
+// 720x1280 @ 30 FPS dikey video için yeterli; 6 Mbps dosyayı ~3 kat şişiriyordu
+const DEFAULT_BITRATE = 2_500_000;
 const AUDIO_SAMPLE_RATE = 44100;
 
 function abortError(): DOMException {
@@ -602,7 +603,7 @@ export class VideoExporter {
         codec: 'mp4a.40.2',
         sampleRate: AUDIO_SAMPLE_RATE,
         numberOfChannels: 2,
-        bitrate: 192_000,
+        bitrate: 128_000,
       };
 
       const audioSupportPromise =
