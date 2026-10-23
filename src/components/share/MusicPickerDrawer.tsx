@@ -11,6 +11,7 @@ import {
   Check,
   Flame,
   ChevronDown,
+  Heart,
 } from "lucide-react";
 import {
   SoundTrack,
@@ -24,20 +25,47 @@ import {
   LyricLine,
   HotChunk,
 } from "@/services/soundService";
-import { StoryAudioMeta } from "@/lib/canvas-editor";
+import { ShareMode, StoryAudioMeta } from "@/lib/canvas-editor";
 
 interface MusicPickerDrawerProps {
   isOpen: boolean;
   onClose: () => void;
   onSelectMusic: (meta: StoryAudioMeta) => void;
   currentMusic?: StoryAudioMeta | null;
+  mode?: ShareMode;
+  // Reels: timeline toplam süresi (sn)
+  clipDuration?: number;
 }
 
-// Instagram Story ses süresi: Sabit 30 saniye
-const FIXED_DURATION = 30;
-// Görünür pencere: 7.5s soluk + 30s aktif + 7.5s soluk
-const EDGE_SEC = 7.5;
-const VIEW_WINDOW_SEC = FIXED_DURATION + EDGE_SEC * 2;
+type PickerTab = "discover" | "recent" | "saved";
+
+// Hikaye ses süresi: Sabit 30 saniye; Reels'te timeline süresi (5-60 sn)
+const STORY_DURATION = 30;
+const REELS_MIN_DURATION = 5;
+const REELS_MAX_DURATION = 60;
+// Görünür pencere: aktif pencerenin her iki yanında %25 soluk alan
+const EDGE_RATIO = 0.25;
+// Listede şarkıya dokununca çalan kısa önizleme süresi
+const LIST_PREVIEW_SEC = 15;
+const RECENT_KEY = "sigal_music_recent";
+const SAVED_KEY = "sigal_music_saved";
+const MAX_STORED_TRACKS = 30;
+
+function readStoredTracks(key: string): SoundTrack[] {
+  try {
+    const raw = window.localStorage.getItem(key);
+    const parsed = raw ? JSON.parse(raw) : [];
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+function writeStoredTracks(key: string, list: SoundTrack[]): void {
+  try {
+    window.localStorage.setItem(key, JSON.stringify(list.slice(0, MAX_STORED_TRACKS)));
+  } catch {}
+}
 // Saniye başına çizgi yoğunluğu
 const BARS_PER_SEC = 1.5;
 const BAR_WIDTH_PX = 2.5;
@@ -69,7 +97,43 @@ export default function MusicPickerDrawer({
   onClose,
   onSelectMusic,
   currentMusic,
+  mode = "story",
+  clipDuration,
 }: MusicPickerDrawerProps) {
+  const windowSec =
+    mode === "reels"
+      ? Math.round(
+          Math.max(REELS_MIN_DURATION, Math.min(REELS_MAX_DURATION, clipDuration || STORY_DURATION))
+        )
+      : STORY_DURATION;
+  const edgeSec = windowSec * EDGE_RATIO;
+  const viewWindowSec = windowSec + edgeSec * 2;
+  const windowSecRef = useRef(windowSec);
+  windowSecRef.current = windowSec;
+  const confirmLabel = mode === "reels" ? "Reels'e Ekle" : "Hikayeye Ekle";
+
+  const [activeTab, setActiveTab] = useState<PickerTab>("discover");
+  const [recentTracks, setRecentTracks] = useState<SoundTrack[]>([]);
+  const [savedTracks, setSavedTracks] = useState<SoundTrack[]>([]);
+
+  // Liste önizlemesi (kırpıcıdan bağımsız kısa dinleme)
+  const listPreviewAudioRef = useRef<HTMLAudioElement | null>(null);
+  const listPreviewTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [previewTrackId, setPreviewTrackId] = useState<string | null>(null);
+  const [isPreviewLoading, setIsPreviewLoading] = useState(false);
+
+  const stopListPreview = useCallback(() => {
+    if (listPreviewTimerRef.current) {
+      clearTimeout(listPreviewTimerRef.current);
+      listPreviewTimerRef.current = null;
+    }
+    if (listPreviewAudioRef.current && !listPreviewAudioRef.current.paused) {
+      listPreviewAudioRef.current.pause();
+    }
+    setPreviewTrackId(null);
+    setIsPreviewLoading(false);
+  }, []);
+
   const [searchQuery, setSearchQuery] = useState("");
   const [isSearching, setIsSearching] = useState(false);
   const [tracks, setTracks] = useState<SoundTrack[]>([]);
@@ -109,7 +173,7 @@ export default function MusicPickerDrawer({
   const lastTimeUpdateRef = useRef<number>(0);
   const emaDeltaRef = useRef<number>(0.22); // Senaryo 3: Lookahead EMA gecikme tamponu (varsayılan 0.22s)
   startRef.current = selectedStartSec;
-  ppsRef.current = viewportWidth > 0 ? viewportWidth / VIEW_WINDOW_SEC : 0;
+  ppsRef.current = viewportWidth > 0 ? viewportWidth / viewWindowSec : 0;
 
   /**
    * HTML5 audio.buffered aralıklarını izleyerek en son inmiş saniyeyi (bufferedEnd) günceller
@@ -218,17 +282,23 @@ export default function MusicPickerDrawer({
         audioRef.current.pause();
         audioRef.current.currentTime = 0;
       }
+      stopListPreview();
       setIsPlaying(false);
       return;
     }
 
     let isMounted = true;
     setIsSearching(true);
+    setRecentTracks(readStoredTracks(RECENT_KEY));
+    setSavedTracks(readStoredTracks(SAVED_KEY));
+    // Değiştir akışında önceki seçim taşınmaz
+    if (!currentMusic) setSelectedTrack(null);
 
     searchTracks(searchQuery || "trend", 20).then((res) => {
       if (!isMounted) return;
       setTracks(res);
       setIsSearching(false);
+      res.slice(0, 3).forEach((t) => warmTrackAudio(t.id));
 
       if (currentMusic) {
         const found = res.find((t) => t.id === currentMusic.id);
@@ -260,6 +330,10 @@ export default function MusicPickerDrawer({
   // Arka plana geçildiğinde (document.hidden) çalan önizleme müziğini derhal durdur ve Android medya çaları gizle
   useEffect(() => {
     const handleVisibilityChange = () => {
+      if (document.hidden && listPreviewAudioRef.current && !listPreviewAudioRef.current.paused) {
+        listPreviewAudioRef.current.pause();
+        setPreviewTrackId(null);
+      }
       if (document.hidden && audioRef.current && !audioRef.current.paused) {
         audioRef.current.pause();
         setIsPlaying(false);
@@ -313,12 +387,69 @@ export default function MusicPickerDrawer({
       if (!abortController.signal.aborted) {
         setTracks(results);
         setIsSearching(false);
+        results.slice(0, 3).forEach((t) => warmTrackAudio(t.id));
       }
     }, 250);
   };
 
+  // 2b. Liste Önizlemesi: satıra dokununca nakarattan (yoksa baştan) 15 sn çalar
+  const toggleListPreview = (track: SoundTrack) => {
+    if (previewTrackId === track.id) {
+      stopListPreview();
+      return;
+    }
+    stopListPreview();
+    // Kırpıcı çalıyorsa iki ses üst üste binmesin
+    if (audioRef.current && !audioRef.current.paused) {
+      audioRef.current.pause();
+      setIsPlaying(false);
+    }
+    if (!listPreviewAudioRef.current) {
+      listPreviewAudioRef.current = new Audio();
+      listPreviewAudioRef.current.preload = "auto";
+    }
+    const audio = listPreviewAudioRef.current;
+    audio.src = getAudioStreamUrl(track.id);
+    setPreviewTrackId(track.id);
+    setIsPreviewLoading(true);
+    warmTrackAudio(track.id);
+
+    getTrackHotChunks(track.id).then((chunks) => {
+      // Nakarat geldiğinde önizleme henüz başındaysa oraya atla
+      if (chunks[0] && audio.src === getAudioStreamUrl(track.id) && audio.currentTime < 2) {
+        try {
+          audio.currentTime = chunks[0].start;
+        } catch {}
+      }
+    });
+
+    audio
+      .play()
+      .then(() => {
+        setIsPreviewLoading(false);
+        listPreviewTimerRef.current = setTimeout(stopListPreview, LIST_PREVIEW_SEC * 1000);
+      })
+      .catch(() => {
+        setIsPreviewLoading(false);
+        setPreviewTrackId(null);
+      });
+  };
+
+  useEffect(() => stopListPreview, [stopListPreview]);
+
+  const savedIds = useMemo(() => new Set(savedTracks.map((t) => t.id)), [savedTracks]);
+
+  const toggleSavedTrack = (track: SoundTrack) => {
+    const next = savedIds.has(track.id)
+      ? savedTracks.filter((t) => t.id !== track.id)
+      : [track, ...savedTracks];
+    setSavedTracks(next);
+    writeStoredTracks(SAVED_KEY, next);
+  };
+
   // 3. Şarkı Seçimi & Ses Yükleme
   const handleSelectTrack = useCallback((track: SoundTrack) => {
+    stopListPreview();
     setSelectedTrack(track);
     setAudioErrorTrackId(null);
     setIsAudioLoading(true);
@@ -350,7 +481,7 @@ export default function MusicPickerDrawer({
       } catch {}
       audio.play().catch(() => {});
     }
-  }, []);
+  }, [stopListPreview]);
 
   // Hover Ön-Isıtma
   const hoverWarmupTimerRef = useRef<{ [trackId: string]: NodeJS.Timeout }>({});
@@ -377,10 +508,11 @@ export default function MusicPickerDrawer({
       audio.pause();
       setIsPlaying(false);
     } else {
+      stopListPreview();
       setIsAudioLoading(true);
       setAudioErrorTrackId(null);
       const cur = audio.currentTime;
-      if (cur < selectedStartSec || cur >= selectedStartSec + FIXED_DURATION) {
+      if (cur < selectedStartSec || cur >= selectedStartSec + windowSec) {
         try {
           audio.currentTime = selectedStartSec;
           setCurrentPlayTime(selectedStartSec);
@@ -404,7 +536,7 @@ export default function MusicPickerDrawer({
         ? audioDur
         : (selectedTrack?.duration || 0);
     const deltaSafe = calculateDeltaSafe(effDur);
-    return Math.max(0, effDur - FIXED_DURATION - deltaSafe);
+    return Math.max(0, effDur - windowSec - deltaSafe);
   };
 
   const clampStart = (sec: number) => {
@@ -414,7 +546,7 @@ export default function MusicPickerDrawer({
   };
 
   const getPxPerSec = () =>
-    viewportWidth > 0 ? viewportWidth / VIEW_WINDOW_SEC : 0;
+    viewportWidth > 0 ? viewportWidth / viewWindowSec : 0;
 
   const handleSeek = (rawSec: number) => {
     const newSec = clampStart(rawSec);
@@ -499,7 +631,7 @@ export default function MusicPickerDrawer({
     const el = progressRef.current;
     if (!el) return;
     const pps = ppsRef.current;
-    const elapsed = Math.max(0, Math.min(FIXED_DURATION, t - startRef.current));
+    const elapsed = Math.max(0, Math.min(windowSecRef.current, t - startRef.current));
     el.style.width = `${elapsed * pps}px`;
   }, []);
 
@@ -531,7 +663,7 @@ export default function MusicPickerDrawer({
             (Math.min(now - lastStamp, 250) / 1000) * (audio.playbackRate || 1);
 
         const start = startRef.current;
-        const endSec = start + FIXED_DURATION;
+        const endSec = start + windowSecRef.current;
         // Senaryo 3: Lookahead Döngü Yakalama (t_k + Delta_t_EMA >= endSec)
         const predictedNext = cur + emaDeltaRef.current;
         const isAtLoopEnd =
@@ -595,10 +727,17 @@ export default function MusicPickerDrawer({
       thumbnail: selectedTrack.thumbnail,
       streamUrl: getAudioStreamUrl(selectedTrack.id),
       startTime: selectedStartSec,
-      duration: FIXED_DURATION,
+      duration: windowSec,
       totalDuration: selectedTrack.duration,
       lyricsSnippet: currentLyricSnippet || undefined,
     };
+
+    const nextRecent = [
+      selectedTrack,
+      ...readStoredTracks(RECENT_KEY).filter((t) => t.id !== selectedTrack.id),
+    ];
+    setRecentTracks(nextRecent);
+    writeStoredTracks(RECENT_KEY, nextRecent);
 
     onSelectMusic(audioMeta);
     onClose();
@@ -607,14 +746,23 @@ export default function MusicPickerDrawer({
   if (!isOpen) return null;
 
   // Sabit Çerçeve / Kaydırılabilir Dalga Formu Hesaplamaları
-  const pxPerSec = viewportWidth > 0 ? viewportWidth / VIEW_WINDOW_SEC : 0;
+  const pxPerSec = viewportWidth > 0 ? viewportWidth / viewWindowSec : 0;
   const barPitchPx = pxPerSec / BARS_PER_SEC;
-  const clipEndSec = selectedStartSec + FIXED_DURATION;
-  // Şarkının 0. saniyesi, aktif çerçevenin sol sınırına (7.5s) hizalanır
-  const trackOffsetPx = (EDGE_SEC - selectedStartSec) * pxPerSec;
-  const frameLeftPercent = (EDGE_SEC / VIEW_WINDOW_SEC) * 100;
-  const frameWidthPercent = (FIXED_DURATION / VIEW_WINDOW_SEC) * 100;
+  const clipEndSec = selectedStartSec + windowSec;
+  // Şarkının 0. saniyesi, aktif çerçevenin sol sınırına (edgeSec) hizalanır
+  const trackOffsetPx = (edgeSec - selectedStartSec) * pxPerSec;
+  const frameLeftPercent = (edgeSec / viewWindowSec) * 100;
+  const frameWidthPercent = (windowSec / viewWindowSec) * 100;
   const safeBufferedLimitSec = Math.max(0, bufferedEnd - SAFE_BUFFER_MARGIN_SEC);
+
+  const isSearchActive = searchQuery.trim().length > 0;
+  const visibleTracks = isSearchActive
+    ? tracks
+    : activeTab === "recent"
+      ? recentTracks
+      : activeTab === "saved"
+        ? savedTracks
+        : tracks;
 
   return (
     <div className="fixed inset-0 z-50 flex flex-col bg-neutral-950/98 text-white backdrop-blur-2xl animate-in slide-in-from-bottom duration-300 ease-out select-none">
@@ -668,7 +816,7 @@ export default function MusicPickerDrawer({
           if (audioRef.current && !dragRef.current) {
             let cur = audioRef.current.currentTime;
             const dur = audioRef.current.duration;
-            const endSec = selectedStartSec + FIXED_DURATION;
+            const endSec = selectedStartSec + windowSec;
 
             // EMA Delta hesaplama (alfa = 0.3)
             if (lastTimeUpdateRef.current > 0 && cur > lastTimeUpdateRef.current) {
@@ -769,14 +917,42 @@ export default function MusicPickerDrawer({
         </div>
       </div>
 
+      {/* 2b. SEKMELER (Arama yapılırken gizlenir) */}
+      {!isSearchActive && (
+        <div className="px-4 pb-1 shrink-0">
+          <div className="grid grid-cols-3 gap-1 bg-white/5 p-1 rounded-2xl border border-white/10">
+            {([
+              ["discover", "Keşfet"],
+              ["recent", "Son Kullanılanlar"],
+              ["saved", "Kaydedilenler"],
+            ] as const).map(([key, label]) => (
+              <button
+                key={key}
+                type="button"
+                onClick={() => setActiveTab(key)}
+                className={`py-1.5 rounded-xl text-[11px] font-bold transition-all truncate ${
+                  activeTab === key
+                    ? "bg-white text-black shadow-sm"
+                    : "text-zinc-400 hover:text-white"
+                }`}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
       {/* 3. ŞARKI LİSTESİ */}
       <div className="flex-1 overflow-y-auto px-4 py-2 space-y-2 no-scrollbar">
-        {tracks.map((track) => {
+        {visibleTracks.map((track) => {
           const isSelected = selectedTrack?.id === track.id;
+          const isPreviewing = previewTrackId === track.id;
+          const isSaved = savedIds.has(track.id);
           return (
             <div
               key={track.id}
-              onClick={() => handleSelectTrack(track)}
+              onClick={() => toggleListPreview(track)}
               onMouseEnter={() => handleTrackHover(track.id)}
               onMouseLeave={() => handleTrackLeave(track.id)}
               className={`w-full flex items-center justify-between p-2.5 rounded-2xl border cursor-pointer transition-all active:scale-[0.99] ${
@@ -797,11 +973,19 @@ export default function MusicPickerDrawer({
                   ) : (
                     <Music className="w-5 h-5 text-pink-400" />
                   )}
-                  {isSelected && isPlaying && (
-                    <div className="absolute inset-0 bg-black/40 flex items-center justify-center">
-                      <Pause className="w-4 h-4 text-pink-400 fill-current" />
-                    </div>
-                  )}
+                  <div
+                    className={`absolute inset-0 flex items-center justify-center transition-opacity ${
+                      isPreviewing ? "bg-black/50 opacity-100" : "bg-black/30 opacity-0"
+                    }`}
+                  >
+                    {isPreviewing && isPreviewLoading ? (
+                      <Loader2 className="w-4 h-4 text-white animate-spin" />
+                    ) : isPreviewing ? (
+                      <Pause className="w-4 h-4 text-white fill-current" />
+                    ) : (
+                      <Play className="w-4 h-4 text-white fill-current" />
+                    )}
+                  </div>
                 </div>
 
                 <div className="min-w-0">
@@ -811,10 +995,20 @@ export default function MusicPickerDrawer({
                   <p className="text-[11px] text-zinc-400 truncate mt-0.5">
                     {track.artist}
                   </p>
+                  {isPreviewing && !isPreviewLoading && (
+                    <div className="mt-1.5 h-0.5 w-24 rounded-full bg-white/15 overflow-hidden">
+                      <div
+                        className="h-full bg-pink-400 rounded-full"
+                        style={{
+                          animation: `musicPreviewBar ${LIST_PREVIEW_SEC}s linear forwards`,
+                        }}
+                      />
+                    </div>
+                  )}
                 </div>
               </div>
 
-              <div className="shrink-0 flex items-center gap-2 pl-2">
+              <div className="shrink-0 flex items-center gap-1.5 pl-2">
                 <span className="text-[11px] text-zinc-400 font-mono">
                   {track.durationFormatted}
                 </span>
@@ -822,39 +1016,42 @@ export default function MusicPickerDrawer({
                   type="button"
                   onClick={(e) => {
                     e.stopPropagation();
-                    if (isSelected) {
-                      togglePlayPause();
-                    } else {
-                      handleSelectTrack(track);
-                    }
+                    toggleSavedTrack(track);
                   }}
-                  className={`w-8 h-8 rounded-full flex items-center justify-center transition-all ${
+                  className="w-8 h-8 rounded-full flex items-center justify-center text-zinc-400 hover:text-white transition-all active:scale-90"
+                >
+                  <Heart
+                    className={`w-4 h-4 ${isSaved ? "fill-pink-500 text-pink-500" : ""}`}
+                  />
+                </button>
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    if (!isSelected) handleSelectTrack(track);
+                  }}
+                  className={`h-8 px-3 rounded-full flex items-center justify-center gap-1 text-[11px] font-bold transition-all active:scale-95 ${
                     isSelected
                       ? "bg-pink-500 text-white"
                       : "bg-white/10 text-white hover:bg-white/20"
                   }`}
                 >
-                  {isSelected && isAudioLoading ? (
-                    <Loader2 className="w-3.5 h-3.5 text-white animate-spin" />
-                  ) : isSelected && isPlaying ? (
-                    <Pause className="w-3.5 h-3.5 fill-current" />
-                  ) : (
-                    <Play className="w-3.5 h-3.5 fill-current ml-0.5" />
-                  )}
+                  {isSelected ? <Check className="w-3.5 h-3.5" /> : <span>Kullan</span>}
                 </button>
               </div>
             </div>
           );
         })}
 
-        {tracks.length === 0 && !isSearching && (
+        {visibleTracks.length === 0 && !isSearching && (
           <div className="py-16 text-center text-xs text-zinc-500">
-            Sonuç bulunamadı
+            Şarkı yok
           </div>
         )}
       </div>
+      <style>{`@keyframes musicPreviewBar { from { width: 0% } to { width: 100% } }`}</style>
 
-      {/* 4. INSTAGRAM STİLİ 15 SANİYELİK AYARLAMA BARI (INSTAGRAM MUSIC TRIMMER) */}
+      {/* 4. KIRPICI BAR (Hikaye 30 sn / Reels timeline süresi) */}
       {selectedTrack && (
         <div className="shrink-0 p-4 pb-6 border-t border-white/10 bg-neutral-900/95 backdrop-blur-2xl flex flex-col gap-3.5 animate-in slide-in-from-bottom duration-200">
           {/* Üst Satır: Şarkı Bilgisi, Canlı Saniye Göstergesi & Popüler Nakarat */}
@@ -862,7 +1059,7 @@ export default function MusicPickerDrawer({
             <div className="flex items-center gap-2.5 min-w-0">
               <span className="text-xs font-bold text-white font-mono bg-white/10 px-2.5 py-1 rounded-full">
                 {formatSeconds(selectedStartSec)} -{" "}
-                {formatSeconds(selectedStartSec + FIXED_DURATION)}
+                {formatSeconds(selectedStartSec + windowSec)}
               </span>
               <span className="text-[11px] text-zinc-400">
                 / {selectedTrack.durationFormatted}
@@ -893,7 +1090,7 @@ export default function MusicPickerDrawer({
             </div>
           )}
 
-          {/* INSTAGRAM SES DALGASI VE 30s PENCERE BARI */}
+          {/* INSTAGRAM SES DALGASI VE AKTİF PENCERE BARI */}
           <div className="flex items-center gap-3">
             {/* Oynat / Duraklat Düğmesi */}
             <button
@@ -910,7 +1107,7 @@ export default function MusicPickerDrawer({
               )}
             </button>
 
-            {/* Sabit 30s Çerçeve + Kaydırılabilir Dalga Formu (45s görünür alan) */}
+            {/* Sabit Çerçeve + Kaydırılabilir Dalga Formu (pencere + iki yanda %25) */}
             <div
               ref={setViewportEl}
               onPointerDown={handleWavePointerDown}
@@ -978,7 +1175,7 @@ export default function MusicPickerDrawer({
                 </div>
               </div>
 
-              {/* Sabit Aktif Çerçeve (30s) */}
+              {/* Sabit Aktif Çerçeve */}
               <div
                 className="absolute inset-y-0.5 rounded-xl border-2 border-white/90 pointer-events-none"
                 style={{
@@ -989,13 +1186,13 @@ export default function MusicPickerDrawer({
             </div>
           </div>
 
-          {/* Instagram Stili "Hikayeye Ekle" Butonu */}
+          {/* Moda Göre Ekle Butonu */}
           <button
             type="button"
             onClick={handleConfirm}
             className="w-full py-3.5 rounded-2xl bg-gradient-to-r from-pink-500 via-rose-500 to-amber-500 hover:opacity-95 active:scale-[0.98] text-white font-bold text-sm shadow-xl shadow-pink-500/25 transition-all flex items-center justify-center gap-2"
           >
-            <span>Hikayeye Ekle</span>
+            <span>{confirmLabel}</span>
             <Check className="w-4 h-4 stroke-[3]" />
           </button>
         </div>

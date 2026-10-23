@@ -3,6 +3,7 @@
 import { CanvasEngine } from '../Engine';
 import { EditorMedia, StoryAudioMeta, VideoTrackClip } from '../types';
 import { FastDemuxer, DemuxedSample, DemuxedVideoTrack } from './FastDemuxer';
+import { applyMusicFadeToGain } from '../utils/musicFade';
 import { MediaRecorderFallback } from './MediaRecorderFallback';
 
 export interface ExportVideoOptions {
@@ -477,7 +478,7 @@ export class VideoExporter {
                 ? music.segments.map((s) => ({
                     start: s.timelineStart,
                     end: s.timelineEnd,
-                    offset: (music.startTime || 0) + (s.songOffset || 0),
+                    offset: s.songOffset || 0,
                   }))
                 : (() => {
                     const segStart =
@@ -489,6 +490,10 @@ export class VideoExporter {
                     return [{ start: segStart, end: segEnd, offset: music.startTime || 0 }];
                   })();
 
+            const fadeRange = {
+              start: Math.max(0, Math.min(...segments.map((sg) => sg.start))),
+              end: Math.min(outputDuration, Math.max(...segments.map((sg) => sg.end))),
+            };
             for (const seg of segments) {
               const segStart = Math.max(0, seg.start);
               const segEnd = Math.min(outputDuration, seg.end);
@@ -496,7 +501,7 @@ export class VideoExporter {
               const node = offlineCtx.createBufferSource();
               node.buffer = decodedMusic;
               const gain = offlineCtx.createGain();
-              gain.gain.value = vol;
+              applyMusicFadeToGain(gain, music, vol, segStart, segEnd, fadeRange);
               node.connect(gain);
               gain.connect(offlineCtx.destination);
               node.start(segStart, Math.max(0, seg.offset), segEnd - segStart);

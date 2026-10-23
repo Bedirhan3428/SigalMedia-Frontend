@@ -13,5 +13,7 @@ export * from './exporter/FastDemuxer';
 export * from './exporter/VideoExporter';
 export * from './exporter/MediaRecorderFallback';
 export * from './utils/videoThumbs';
+export * from './utils/musicFade';
+export * from './utils/framePreview';
 export * from './image-adjustments';
 // [END] CREATED BY Bedirhan

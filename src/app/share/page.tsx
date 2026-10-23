@@ -27,8 +27,12 @@ import {
   ReelsEffectClip,
   ReelsEffectId,
   FILTER_PRESETS,
+  getMusicFadeGain,
+  getMusicTimelineRange,
+  captureFramePreview,
 } from "@/lib/canvas-editor";
 import MusicPickerDrawer from "@/components/share/MusicPickerDrawer";
+import MusicSettingsPanel from "@/components/share/MusicSettingsPanel";
 // [START] CREATED BY Bedirhan
 import VideoToolsDrawer from "@/components/share/VideoToolsDrawer";
 import ExportProgress from "@/components/share/ExportProgress";
@@ -81,7 +85,7 @@ const STORY_COLORS = [
 ];
 
 // [MODIFIED BY Bedirhan]
-type ActiveDrawer = "none" | "sticker_sheet" | "tag" | "video_tools";
+type ActiveDrawer = "none" | "sticker_sheet" | "tag" | "video_tools" | "music_settings";
 
 // [START] CREATED BY Bedirhan
 const INITIAL_VIDEO_STATE: VideoState = {
@@ -146,6 +150,8 @@ export default function ShareStoryPage() {
 
   // Müzik Durumları
   const [isMusicDrawerOpen, setIsMusicDrawerOpen] = useState(false);
+  // "replace": seçici mevcut şarkıyı ön seçmeden açılır; "trim": mevcut şarkının kırpıcısıyla açılır
+  const [musicPickerIntent, setMusicPickerIntent] = useState<"replace" | "trim">("trim");
   const [selectedMusic, setSelectedMusic] = useState<StoryAudioMeta | null>(null);
 
   // [START] CREATED BY Bedirhan
@@ -334,12 +340,23 @@ export default function ShareStoryPage() {
     if (audio.src !== selectedMusic.streamUrl) {
       audio.src = selectedMusic.streamUrl;
     }
-    audio.volume = Math.max(0, Math.min(1, musicVolume));
+    const baseVolume = Math.max(0, Math.min(1, musicVolume));
+    audio.volume = baseVolume;
+    const fadeRange = getMusicTimelineRange(
+      selectedMusic,
+      videoState.trimStart,
+      videoState.trimEnd || videoState.duration
+    );
 
     let rafId: number | null = null;
     const syncAudioTick = () => {
       const eng = engineRef.current;
       if (!eng || !selectedMusic) return;
+
+      if (videoState.isVideo && videoState.isPlaying) {
+        audio.volume =
+          baseVolume * getMusicFadeGain(selectedMusic, eng.getCurrentTime(), fadeRange);
+      }
 
       if (!videoState.isVideo) {
         if (audio.paused) {
@@ -922,10 +939,20 @@ export default function ShareStoryPage() {
   const handleSelectMusic = (meta: StoryAudioMeta) => {
     const engine = getOrCreateEngine();
     const vState = engine ? engine.getVideoState() : videoState;
-    const defaultStart = vState.isVideo ? vState.trimStart : 0;
-    const defaultEnd = vState.isVideo
-      ? vState.trimEnd || vState.duration || 15
-      : 15;
+    // Şarkı değiştirilirken timeline yerleşimi ve fade ayarları korunur; segmentler tek parçaya döner
+    const prev = selectedMusic;
+    const defaultStart =
+      typeof prev?.timelineStart === "number"
+        ? prev.timelineStart
+        : vState.isVideo
+          ? vState.trimStart
+          : 0;
+    const defaultEnd =
+      typeof prev?.timelineEnd === "number" && prev.timelineEnd > defaultStart
+        ? prev.timelineEnd
+        : vState.isVideo
+          ? vState.trimEnd || vState.duration || 15
+          : 15;
     const enrichedMeta: StoryAudioMeta = {
       ...meta,
       timelineStart:
@@ -934,12 +961,43 @@ export default function ShareStoryPage() {
         typeof meta.timelineEnd === "number" && meta.timelineEnd > defaultStart
           ? meta.timelineEnd
           : defaultEnd,
+      segments: undefined,
+      fadeIn: meta.fadeIn ?? prev?.fadeIn,
+      fadeOut: meta.fadeOut ?? prev?.fadeOut,
     };
     setSelectedMusic(enrichedMeta);
     if (engine) {
       engine.addMusicSticker(enrichedMeta, 0.5, 0.65);
     }
   };
+
+  const openMusicPicker = (intent: "replace" | "trim" = "trim") => {
+    setActiveDrawer("none");
+    setMusicPickerIntent(intent);
+    setIsMusicDrawerOpen(true);
+  };
+
+  // Hikaye: müzik varsa ayar paneli, yoksa seçici açılır
+  const handleStoryMusicButton = () => {
+    if (selectedMusic) {
+      setActiveDrawer("music_settings");
+    } else {
+      openMusicPicker();
+    }
+  };
+
+  const handleRemoveMusic = () => {
+    const engine = engineRef.current;
+    const sticker = engine?.getMusicSticker();
+    if (engine && sticker) engine.removeLayer(sticker.id);
+    setSelectedMusic(null);
+    setActiveDrawer("none");
+  };
+
+  const getMediaPreviewFrame = useCallback(
+    () => captureFramePreview(engineRef.current?.getMedia()?.element, 96, 128),
+    []
+  );
 
   // [START] CREATED BY Bedirhan
   const handleCancelExport = () => {
@@ -1272,7 +1330,7 @@ export default function ShareStoryPage() {
             selectedMusic={selectedMusic}
             onOpenTextEditor={() => openTextEditor()}
             onOpenStickerSheet={() => setActiveDrawer("sticker_sheet")}
-            onOpenMusicPicker={() => setIsMusicDrawerOpen(true)}
+            onOpenMusicPicker={handleStoryMusicButton}
             onOpenTagSheet={() => setActiveDrawer("tag")}
           />
 
@@ -1327,7 +1385,7 @@ export default function ShareStoryPage() {
           onSeek={(t) => engineRef.current?.seekVideo(t)}
           onTogglePlay={() => engineRef.current?.toggleVideoPlay()}
           onOpenTextEditor={() => openTextEditor()}
-          onOpenMusicPicker={() => setIsMusicDrawerOpen(true)}
+          onOpenMusicPicker={openMusicPicker}
           onOpenStickerSheet={() => setActiveDrawer("sticker_sheet")}
           onOpenPhotoOverlay={() => overlayFileInputRef.current?.click()}
           onSelectFilterIndex={handleSelectFilterIndex}
@@ -1358,6 +1416,7 @@ export default function ShareStoryPage() {
 
           <PostPhotoEditor
             adjustments={postAdjustments}
+            getPreviewFrame={getMediaPreviewFrame}
             isPublishing={isPublishing}
             onChangeAdjustments={handleChangePostAdjustments}
             onResetAdjustments={handleResetPostAdjustments}
@@ -1458,8 +1517,11 @@ export default function ShareStoryPage() {
             <button
               type="button"
               onClick={() => {
-                setActiveDrawer("none");
-                setIsMusicDrawerOpen(true);
+                if (selectedMusic) {
+                  setActiveDrawer("music_settings");
+                } else {
+                  openMusicPicker();
+                }
               }}
               className="flex flex-col items-center justify-center gap-2 p-3.5 rounded-2xl bg-white/5 hover:bg-white/10 border border-white/10 active:scale-95 transition-all text-white group"
             >
@@ -1477,8 +1539,27 @@ export default function ShareStoryPage() {
         isOpen={isMusicDrawerOpen}
         onClose={() => setIsMusicDrawerOpen(false)}
         onSelectMusic={handleSelectMusic}
-        currentMusic={selectedMusic}
+        currentMusic={musicPickerIntent === "trim" ? selectedMusic : null}
+        mode={shareMode}
+        clipDuration={engineRef.current?.getTotalTimelineDuration() || videoState.duration}
       />
+
+      {/* 11B. SEÇİLİ ŞARKI AYAR PANELİ (HİKAYE) */}
+      {activeDrawer === "music_settings" && selectedMusic && (
+        <div className="fixed inset-x-0 bottom-0 z-50 rounded-t-3xl backdrop-blur-2xl bg-neutral-900/95 border-t border-white/10 p-5 pb-8 animate-in slide-in-from-bottom duration-200 shadow-2xl">
+          <div className="w-10 h-1 rounded-full bg-white/20 mx-auto mb-4" />
+          <MusicSettingsPanel
+            music={selectedMusic}
+            volume={musicVolume}
+            onChangeVolume={setMusicVolume}
+            onChangeMusic={setSelectedMusic}
+            onReplace={() => openMusicPicker("replace")}
+            onTrim={() => openMusicPicker("trim")}
+            onRemove={handleRemoveMusic}
+            onClose={() => setActiveDrawer("none")}
+          />
+        </div>
+      )}
       {/* 12. ALTTAN AÇILAN ETİKETLEME PANELİ */}
       {activeDrawer === "tag" && (
         <div className="fixed inset-x-0 bottom-0 z-50 rounded-t-3xl backdrop-blur-2xl bg-neutral-900/95 border-t border-white/10 p-5 pb-8 flex flex-col max-h-[52vh] animate-in slide-in-from-bottom duration-200 shadow-2xl">

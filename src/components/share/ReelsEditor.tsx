@@ -39,8 +39,11 @@ import {
   StoryAudioMeta,
   VideoState,
   VideoTrackClip,
+  captureFramePreview,
 } from "@/lib/canvas-editor";
 import VideoTimelineNLE from "./VideoTimelineNLE";
+import MusicSettingsPanel from "./MusicSettingsPanel";
+import PreviewThumb from "./PreviewThumb";
 import { NLESelectedType } from "./TimelineOverlayTracks";
 import OnCanvasCropOverlay from "./OnCanvasCropOverlay";
 
@@ -66,7 +69,7 @@ export interface ReelsEditorProps {
   onSeek: (time: number) => void;
   onTogglePlay: () => void;
   onOpenTextEditor: () => void;
-  onOpenMusicPicker: () => void;
+  onOpenMusicPicker: (intent?: "replace" | "trim") => void;
   onOpenStickerSheet?: () => void;
   onOpenPhotoOverlay?: () => void;
   onSelectFilterIndex: (index: number) => void;
@@ -74,7 +77,13 @@ export interface ReelsEditorProps {
   onPublish: () => void;
 }
 
-type ActiveToolStrip = "none" | "effects" | "audio_speed" | "filters" | "crop";
+type ActiveToolStrip =
+  | "none"
+  | "effects"
+  | "audio_speed"
+  | "music"
+  | "filters"
+  | "crop";
 
 type NLEHistorySnapshot = {
   clips: VideoTrackClip[];
@@ -173,6 +182,13 @@ export default function ReelsEditor({
     );
     return () => timers.forEach((t) => window.clearTimeout(t));
   }, [activeStrip]);
+
+  // Filtre / efekt küçük resimleri için panel açılırken tek seferlik kare
+  const [previewFrame, setPreviewFrame] = useState<string | null>(null);
+  useEffect(() => {
+    if (renderedStrip !== "filters" && renderedStrip !== "effects") return;
+    setPreviewFrame(captureFramePreview(engine?.getMedia()?.element));
+  }, [renderedStrip, engine]);
 
   const stripAnimClass = stripVisible
     ? "opacity-100 translate-y-0"
@@ -920,7 +936,6 @@ export default function ReelsEditor({
 
   const activeClipFitMode = selectedVideoClip?.fitMode || "cover";
 
-  const effectiveMusicVolume = Math.round(musicVolume * 100);
 
   return (
     <>
@@ -1124,7 +1139,7 @@ export default function ReelsEditor({
             onTogglePlay={onTogglePlay}
             onUndo={handleUndo}
             onRedo={handleRedo}
-            onOpenMusicPicker={onOpenMusicPicker}
+            onOpenMusicPicker={() => onOpenMusicPicker()}
             onOpenTextEditor={onOpenTextEditor}
             onQuickAddEffect={() => {
               engine?.pauseVideo();
@@ -1339,37 +1354,25 @@ export default function ReelsEditor({
                         const active = selectedEffectClip?.effect === eff.id;
                         const pending = pendingActionKey === `fx_${eff.id}`;
                         return (
-                          <button
+                          <PreviewThumb
                             key={eff.id}
-                            type="button"
+                            src={previewFrame}
+                            label={eff.name}
+                            active={active || pending}
+                            tint={eff.color}
+                            className="w-full"
                             disabled={pendingActionKey !== null}
+                            icon={
+                              <BsStars
+                                className={`w-4 h-4 ${pending ? "animate-pulse" : ""}`}
+                              />
+                            }
                             onClick={() =>
                               runDelayedAction(`fx_${eff.id}`, () =>
                                 handleSelectEffectPreset(eff.id)
                               )
                             }
-                            className={`flex flex-col items-center gap-1.5 p-1.5 rounded-xl border transition-all duration-200 active:scale-95 disabled:cursor-wait ${
-                              pending
-                                ? "scale-95 bg-amber-400/10 border-amber-400/60"
-                                : active
-                                  ? "bg-amber-400/15 border-amber-400 ring-1 ring-amber-400/40"
-                                  : "bg-[#16171b] border-white/5 hover:bg-[#1e2026]"
-                            }`}
-                          >
-                            <div
-                              className="w-full aspect-square rounded-lg flex items-center justify-center"
-                              style={{
-                                background: `radial-gradient(circle at 30% 30%, ${eff.color}, #111827)`,
-                              }}
-                            >
-                              <BsStars
-                                className={`w-4 h-4 text-white ${pending ? "animate-pulse" : ""}`}
-                              />
-                            </div>
-                            <span className="text-[10px] font-semibold text-zinc-100 text-center leading-tight">
-                              {eff.name}
-                            </span>
-                          </button>
+                          />
                         );
                       })}
                     </div>
@@ -1385,7 +1388,7 @@ export default function ReelsEditor({
               >
                 <div className="flex items-center justify-between pb-0.5">
                   <span className="text-[11px] font-bold text-zinc-300">
-                    {selectedItemType === "audio" ? "Müzik Ayarları" : "Klip Hız & Ses"}
+                    Hız & Ses
                   </span>
                   <button
                     type="button"
@@ -1396,28 +1399,7 @@ export default function ReelsEditor({
                   </button>
                 </div>
 
-                {selectedItemType === "audio" && selectedMusic ? (
-                  <div className="flex items-center gap-3 bg-[#16171b] rounded-2xl px-3.5 py-1.5">
-                    <Music className="w-4 h-4 text-sky-400 shrink-0" />
-                    <span className="text-xs font-medium text-zinc-300 w-16 truncate shrink-0">
-                      {selectedMusic.title}
-                    </span>
-                    <input
-                      type="range"
-                      min={0}
-                      max={100}
-                      value={effectiveMusicVolume}
-                      onChange={(e) =>
-                        onChangeMusicVolume(Number(e.target.value) / 100)
-                      }
-                      className="flex-1 h-1.5 bg-white/15 rounded-lg appearance-none cursor-pointer accent-white"
-                    />
-                    <span className="text-xs font-semibold text-white w-9 text-right tabular-nums">
-                      {effectiveMusicVolume}%
-                    </span>
-                  </div>
-                ) : (
-                  <>
+                <>
                     {/* Klip Hız Seçenekleri (0.5x - 2x) */}
                     <div className="grid grid-cols-4 gap-2">
                       {SPEED_OPTIONS.map((rate) => {
@@ -1506,8 +1488,32 @@ export default function ReelsEditor({
                         </span>
                       </div>
                     )}
-                  </>
-                )}
+                </>
+              </div>
+            )}
+
+            {renderedStrip === "music" && selectedMusic && (
+              <div
+                className={`px-4 transition-all ease-out ${stripAnimClass}`}
+                style={{ transitionDuration: `${SHEET_ANIM_MS}ms` }}
+              >
+                <MusicSettingsPanel
+                  music={selectedMusic}
+                  volume={musicVolume}
+                  onChangeVolume={onChangeMusicVolume}
+                  onChangeMusic={(next) => onChangeMusicMeta?.(next)}
+                  onBeforeChange={commitHistory}
+                  onReplace={() => onOpenMusicPicker("replace")}
+                  onTrim={() => onOpenMusicPicker("trim")}
+                  onRemove={() => {
+                    commitHistory();
+                    onChangeMusicMeta?.(null);
+                    setSelectedItemId(null);
+                    setSelectedItemType(null);
+                    setActiveStrip("none");
+                  }}
+                  onClose={() => setActiveStrip("none")}
+                />
               </div>
             )}
 
@@ -1516,29 +1522,22 @@ export default function ReelsEditor({
                 className={`flex items-center gap-2 px-4 transition-all ease-out ${stripAnimClass}`}
                 style={{ transitionDuration: `${SHEET_ANIM_MS}ms` }}
               >
-                <div className="flex-1 flex items-center gap-2 overflow-x-auto no-scrollbar py-0.5">
-                  {FILTER_PRESETS.map((preset, idx) => {
-                    const active = activeFilterIndex === idx;
-                    return (
-                      <button
-                        key={preset.id}
-                        type="button"
-                        onClick={() => onSelectFilterIndex(idx)}
-                        className={`px-3 py-1.5 rounded-xl text-xs font-semibold shrink-0 border transition-all active:scale-95 ${
-                          active
-                            ? "bg-white text-black border-white"
-                            : "bg-[#1c1c1e] text-zinc-300 border-white/5 hover:bg-[#26262a]"
-                        }`}
-                      >
-                        {preset.name}
-                      </button>
-                    );
-                  })}
+                <div className="flex-1 flex items-start gap-2 overflow-x-auto no-scrollbar py-0.5">
+                  {FILTER_PRESETS.map((preset, idx) => (
+                    <PreviewThumb
+                      key={preset.id}
+                      src={previewFrame}
+                      label={preset.name}
+                      active={activeFilterIndex === idx}
+                      cssFilter={preset.cssFilter}
+                      onClick={() => onSelectFilterIndex(idx)}
+                    />
+                  ))}
                 </div>
                 <button
                   type="button"
                   onClick={() => setActiveStrip("none")}
-                  className="w-7 h-7 rounded-xl bg-white/10 hover:bg-white/20 text-zinc-300 flex items-center justify-center shrink-0 active:scale-90 transition-all"
+                  className="w-7 h-7 self-start rounded-xl bg-white/10 hover:bg-white/20 text-zinc-300 flex items-center justify-center shrink-0 active:scale-90 transition-all"
                 >
                   <X className="w-3.5 h-3.5" />
                 </button>
@@ -1547,7 +1546,7 @@ export default function ReelsEditor({
 
             {/* 3. DİNAMİK ALT ARAÇ ÇUBUĞU (Contextual Action Toolbar) */}
             {selectedItemId && selectedItemType ? (
-              /* BİR KLİP, KATMAN VEYA ŞARKI PARÇASI SEÇİLİYKEN: [ ✂️ Böl ] [ 🗑️ Sil ] [ 📐 Kırp ] [ 🔊 Ses / Hız ] [ 📑 Kopyala ] */
+              /* BİR KLİP, KATMAN VEYA ŞARKI PARÇASI SEÇİLİYKEN: [ ✂️ Böl ] [ 🗑️ Sil ] [ 📐 Kırp ] [ 🔊 Hız & Ses | 🎵 Müzik ] [ 📑 Kopyala ] */
               <div className="flex items-center justify-between gap-2 px-4 pt-0.5">
                 <button
                   type="button"
@@ -1628,8 +1627,30 @@ export default function ReelsEditor({
                   </button>
                 )}
 
-                {(selectedItemType === "video" ||
-                  selectedItemType === "audio") && (
+                {selectedItemType === "audio" && selectedMusic && (
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setActiveStrip((p) => (p === "music" ? "none" : "music"))
+                    }
+                    className="flex-1 flex flex-col items-center gap-1 group"
+                  >
+                    <div
+                      className={`w-full h-11 rounded-2xl flex items-center justify-center transition-all active:scale-95 ${
+                        activeStrip === "music"
+                          ? "bg-amber-400 text-black"
+                          : "bg-[#1c1c1e] group-hover:bg-[#26262a] text-white"
+                      }`}
+                    >
+                      <Music className="w-4 h-4" />
+                    </div>
+                    <span className="text-[11px] font-medium text-zinc-200">
+                      Müzik
+                    </span>
+                  </button>
+                )}
+
+                {selectedItemType === "video" && (
                   <button
                     type="button"
                     onClick={() =>
@@ -1649,7 +1670,7 @@ export default function ReelsEditor({
                       <Gauge className="w-4 h-4" />
                     </div>
                     <span className="text-[11px] font-medium text-zinc-200">
-                      Ses / Hız
+                      Hız & Ses
                     </span>
                   </button>
                 )}
@@ -1729,7 +1750,11 @@ export default function ReelsEditor({
 
                 <button
                   type="button"
-                  onClick={onOpenMusicPicker}
+                  onClick={() =>
+                    selectedMusic
+                      ? setActiveStrip((p) => (p === "music" ? "none" : "music"))
+                      : onOpenMusicPicker()
+                  }
                   className="flex flex-col items-center gap-1 shrink-0 group"
                 >
                   <div

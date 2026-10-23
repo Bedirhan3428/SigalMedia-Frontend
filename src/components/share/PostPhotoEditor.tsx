@@ -19,9 +19,11 @@ import {
   PostAdjustmentState,
   PostStudioFilterId,
 } from "@/lib/canvas-editor";
+import PreviewThumb from "./PreviewThumb";
 
 export interface PostPhotoEditorProps {
   adjustments: PostAdjustmentState;
+  getPreviewFrame?: () => string | null;
   isPublishing: boolean;
   onChangeAdjustments: (partial: Partial<PostAdjustmentState>) => void;
   onResetAdjustments: () => void;
@@ -71,6 +73,7 @@ const EFFECT_CONTROLS: Array<{
 
 export default function PostPhotoEditor({
   adjustments,
+  getPreviewFrame,
   isPublishing,
   onChangeAdjustments,
   onResetAdjustments,
@@ -83,6 +86,7 @@ export default function PostPhotoEditor({
   const [activeTab, setActiveTab] = useState<StudioTab>("adjust");
   const [activeAdjustKey, setActiveAdjustKey] = useState<AdjustKey>("brightness");
   const [activeEffectKey, setActiveEffectKey] = useState<EffectKey>("grain");
+  const [previewFrame, setPreviewFrame] = useState<string | null>(null);
 
   const currentAdjustCfg =
     ADJUST_CONTROLS.find((c) => c.key === activeAdjustKey) || ADJUST_CONTROLS[0];
@@ -146,26 +150,20 @@ export default function PostPhotoEditor({
       )}
 
       {activeTab === "filters" && (
-        <div className="flex items-center gap-2 overflow-x-auto no-scrollbar py-2">
-          {POST_STUDIO_FILTERS.map((f) => {
-            const active = adjustments.filterPreset === f.id;
-            return (
-              <button
-                key={f.id}
-                type="button"
-                onClick={() =>
-                  onChangeAdjustments({ filterPreset: f.id as PostStudioFilterId })
-                }
-                className={`px-3.5 py-2 rounded-xl text-xs font-bold shrink-0 border transition-all active:scale-95 ${
-                  active
-                    ? "bg-white text-black border-white shadow-lg"
-                    : "bg-white/5 text-zinc-300 border-white/10 hover:bg-white/10"
-                }`}
-              >
-                {f.name}
-              </button>
-            );
-          })}
+        <div className="flex items-start gap-2 overflow-x-auto no-scrollbar py-2">
+          {POST_STUDIO_FILTERS.map((f) => (
+            <PreviewThumb
+              key={f.id}
+              src={previewFrame}
+              label={f.name}
+              active={adjustments.filterPreset === f.id}
+              cssFilter={f.cssFilter}
+              className="w-16"
+              onClick={() =>
+                onChangeAdjustments({ filterPreset: f.id as PostStudioFilterId })
+              }
+            />
+          ))}
         </div>
       )}
 
@@ -280,7 +278,11 @@ export default function PostPhotoEditor({
 
           <button
             type="button"
-            onClick={() => setActiveTab("filters")}
+            onClick={() => {
+              // Filtre küçük resimleri için tek seferlik kare
+              if (getPreviewFrame) setPreviewFrame(getPreviewFrame());
+              setActiveTab("filters");
+            }}
             className={`flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-semibold transition-all ${
               activeTab === "filters"
                 ? "bg-white text-black font-bold"

@@ -6,6 +6,8 @@ export interface EditorMedia {
   width: number;
   height: number;
   duration?: number;
+  // Ham kaynak (export sırasında demux için yeniden okunur)
+  source?: string | Blob | File;
   objectUrl?: string;
 }
 
@@ -51,6 +53,21 @@ export interface StoryAudioMeta {
   duration: number;
   totalDuration: number;
   lyricsSnippet?: string;
+  // Reels timeline yerleşimi (sn)
+  timelineStart?: number;
+  timelineEnd?: number;
+  segments?: MusicSegment[];
+  // Giriş / çıkış ses yumuşatma süresi (sn)
+  fadeIn?: number;
+  fadeOut?: number;
+}
+
+export interface MusicSegment {
+  id: string;
+  timelineStart: number;
+  timelineEnd: number;
+  // Şarkı içindeki mutlak başlangıç saniyesi (startTime dahil)
+  songOffset: number;
 }
 
 export interface SnapGuideState {

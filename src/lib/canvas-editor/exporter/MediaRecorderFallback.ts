@@ -2,6 +2,7 @@
 // [MODIFIED BY Umut]
 import { CanvasEngine } from '../Engine';
 import { StoryAudioMeta, VideoTrackClip } from '../types';
+import { applyMusicFadeToGain } from '../utils/musicFade';
 
 export interface MediaRecorderExportOptions {
   width?: number;
@@ -714,6 +715,10 @@ export class MediaRecorderFallback {
             const decodedMusic = await offlineCtx.decodeAudioData(musicBuf.slice(0));
 
             if (isReelsNle && music.segments && music.segments.length > 0) {
+              const fadeRange = {
+                start: Math.max(0, Math.min(...music.segments.map((sg) => sg.timelineStart))),
+                end: Math.min(outputDuration, Math.max(...music.segments.map((sg) => sg.timelineEnd))),
+              };
               for (const seg of music.segments) {
                 const segStart = Math.max(0, seg.timelineStart);
                 const segEnd = Math.min(outputDuration, seg.timelineEnd);
@@ -721,14 +726,18 @@ export class MediaRecorderFallback {
                   const musicNode = offlineCtx.createBufferSource();
                   musicNode.buffer = decodedMusic;
                   const musicGain = offlineCtx.createGain();
-                  musicGain.gain.value = Math.max(0, Math.min(1, musicVolume));
+                  applyMusicFadeToGain(
+                    musicGain,
+                    music,
+                    Math.max(0, Math.min(1, musicVolume)),
+                    segStart,
+                    segEnd,
+                    fadeRange
+                  );
                   musicNode.connect(musicGain);
                   musicGain.connect(offlineCtx.destination);
 
-                  const offset = Math.max(
-                    0,
-                    (music.startTime || 0) + (seg.songOffset || 0)
-                  );
+                  const offset = Math.max(0, seg.songOffset || 0);
                   musicNode.start(segStart, offset, segEnd - segStart);
                   hasAnySource = true;
                 }
@@ -764,6 +773,14 @@ export class MediaRecorderFallback {
                 );
                 const songOffsetSec =
                   Math.max(0, music.startTime || 0) + Math.max(0, trimStart - clipStart);
+                applyMusicFadeToGain(
+                  musicGain,
+                  music,
+                  Math.max(0, Math.min(1, musicVolume)),
+                  delayInOutSec,
+                  delayInOutSec + playDurInOutSec,
+                  { start: delayInOutSec, end: delayInOutSec + playDurInOutSec }
+                );
                 musicNode.start(delayInOutSec, songOffsetSec, playDurInOutSec);
                 hasAnySource = true;
               }
