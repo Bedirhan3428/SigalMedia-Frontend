@@ -161,11 +161,13 @@ export default function MusicPickerDrawer({
     }
 
     let isCancelled = false;
+    let pollCount = 0;
     const abortController = new AbortController();
     statusAbortRef.current = abortController;
 
     const pollStatus = async () => {
-      if (isCancelled || isR2ReadyRef.current) return;
+      if (isCancelled || isR2ReadyRef.current || pollCount >= 6) return;
+      pollCount++;
       const status = await getTrackAudioStatus(trackId, abortController.signal);
       if (isCancelled) return;
       if (status.ready) {
@@ -173,10 +175,10 @@ export default function MusicPickerDrawer({
         setIsR2Ready(true);
         return;
       }
-      statusPollTimerRef.current = setTimeout(pollStatus, 350);
+      statusPollTimerRef.current = setTimeout(pollStatus, 3000);
     };
 
-    pollStatus();
+    statusPollTimerRef.current = setTimeout(pollStatus, 1500);
 
     return () => {
       isCancelled = true;
@@ -306,7 +308,7 @@ export default function MusicPickerDrawer({
       return;
     }
 
-    // 400ms İdeal Eşik: Kullanıcı yazmayı bitirdiğinde gecikme hissettirmeden tetiklenir
+    // 250ms İdeal Eşik: Kullanıcı yazmayı bitirdiğinde gecikme hissettirmeden tetiklenir
     searchTimeoutRef.current = setTimeout(async () => {
       const abortController = new AbortController();
       searchAbortControllerRef.current = abortController;
@@ -320,7 +322,7 @@ export default function MusicPickerDrawer({
         setTracks(results);
         setIsSearching(false);
       }
-    }, 400);
+    }, 250);
   };
 
   // 3. Şarkı Seçimi & Ses Yükleme
@@ -335,7 +337,7 @@ export default function MusicPickerDrawer({
 
     warmTrackAudio(track.id);
 
-    // İlk 512 KB HTTP 206 diliminin 0. saniyeden anında çalması için 0s'den başlatılır
+    // İlk dilimin anında çalması için 0s'den başlatılır
     const defaultStart = 0;
     setSelectedStartSec(defaultStart);
     setCurrentPlayTime(defaultStart);
@@ -366,14 +368,14 @@ export default function MusicPickerDrawer({
     }
   }, []);
 
-  // Hover Debounce Ön-Isıtma (Kullanıcı fareyle şarkının üzerinde 800ms durursa sessizce ön-yükle)
+  // Hover Ön-Isıtma
   const hoverWarmupTimerRef = useRef<{ [trackId: string]: NodeJS.Timeout }>({});
   const handleTrackHover = useCallback((trackId: string) => {
     if (hoverWarmupTimerRef.current[trackId]) return;
     hoverWarmupTimerRef.current[trackId] = setTimeout(() => {
       warmTrackAudio(trackId);
       delete hoverWarmupTimerRef.current[trackId];
-    }, 800);
+    }, 1500);
   }, []);
 
   const handleTrackLeave = useCallback((trackId: string) => {
@@ -393,12 +395,9 @@ export default function MusicPickerDrawer({
       setIsAudioLoading(true);
       setAudioErrorTrackId(null);
       const cur = audioRef.current.currentTime;
-      const safeTarget = isR2ReadyRef.current
-        ? selectedStartSec
-        : Math.min(selectedStartSec, getSafeBufferedLimit());
       if (cur < selectedStartSec || cur >= selectedStartSec + FIXED_DURATION) {
-        audioRef.current.currentTime = safeTarget;
-        setCurrentPlayTime(safeTarget);
+        audioRef.current.currentTime = selectedStartSec;
+        setCurrentPlayTime(selectedStartSec);
       }
       audioRef.current
         .play()
@@ -413,7 +412,7 @@ export default function MusicPickerDrawer({
     }
   };
 
-  // 5. Senaryo 1 & 2: Dinamik VBR Emniyet Marjı (Δsafe), Tmax ve Buffered Sınır Kenetlemesi
+  // 5. Dinamik Sınır Kenetlemesi
   const calculateDeltaSafe = (effDur: number) => {
     return 0.45 + 0.0065 * effDur;
   };
@@ -430,13 +429,7 @@ export default function MusicPickerDrawer({
 
   const clampStart = (sec: number) => {
     const maxVal = getMaxStart();
-    let clamped = Math.min(maxVal, Math.max(0, sec));
-    // R2'de dosya hazır olana kadar henüz inmemiş saniyelere gidilmesini engelle,
-    // oynatma konumunu güvenli sınıra (bufferedEnd - 0.3s) kenetle
-    if (!isR2ReadyRef.current) {
-      const safeLimit = getSafeBufferedLimit();
-      clamped = Math.min(clamped, safeLimit);
-    }
+    const clamped = Math.min(maxVal, Math.max(0, sec));
     return Math.round(clamped * 1000) / 1000;
   };
 
@@ -444,22 +437,13 @@ export default function MusicPickerDrawer({
     viewportWidth > 0 ? viewportWidth / VIEW_WINDOW_SEC : 0;
 
   const handleSeek = (rawSec: number) => {
-    if (!isR2ReadyRef.current) {
-      const safeLimit = getSafeBufferedLimit();
-      if (rawSec > safeLimit) {
-        rawSec = safeLimit;
-      }
-    }
     const newSec = clampStart(rawSec);
     setSelectedStartSec(newSec);
     setCurrentPlayTime(newSec);
     lastTimeUpdateRef.current = newSec;
     if (audioRef.current) {
-      const targetTime = isR2ReadyRef.current
-        ? newSec
-        : Math.min(newSec, getSafeBufferedLimit());
       try {
-        audioRef.current.currentTime = targetTime;
+        audioRef.current.currentTime = newSec;
       } catch {}
       setIsAudioLoading(true);
       audioRef.current
@@ -478,17 +462,6 @@ export default function MusicPickerDrawer({
   const handleWavePointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
     const pps = getPxPerSec();
     if (!selectedTrack || pps === 0) return;
-
-    // R2 hazır değilken henüz inmemiş bir saniyeye doğrudan tıklanmasını engelle
-    if (!isR2ReadyRef.current) {
-      const rect = e.currentTarget.getBoundingClientRect();
-      const relX = e.clientX - rect.left;
-      const clickedSec = selectedStartSec + (relX / pps - EDGE_SEC);
-      const safeLimit = getSafeBufferedLimit();
-      if (clickedSec > safeLimit && safeLimit <= 0) {
-        return;
-      }
-    }
 
     e.currentTarget.setPointerCapture(e.pointerId);
     dragRef.current = {
@@ -689,25 +662,14 @@ export default function MusicPickerDrawer({
           setAudioErrorTrackId(null);
           syncBufferedEnd();
           if (audioRef.current && pendingSeekRef.current !== null) {
-            const desiredSeek = pendingSeekRef.current;
-            const targetSeek = isR2ReadyRef.current
-              ? desiredSeek
-              : Math.min(desiredSeek, getSafeBufferedLimit());
             try {
-              audioRef.current.currentTime = targetSeek;
+              audioRef.current.currentTime = pendingSeekRef.current;
             } catch {}
             pendingSeekRef.current = null;
           }
         }}
         onSeeking={() => {
-          if (audioRef.current && !isR2ReadyRef.current) {
-            const safeLimit = getSafeBufferedLimit();
-            if (safeLimit > 0 && audioRef.current.currentTime > safeLimit) {
-              try {
-                audioRef.current.currentTime = safeLimit;
-              } catch {}
-            }
-          }
+          setIsAudioLoading(false);
         }}
         onPlaying={() => {
           setIsAudioLoading(false);
@@ -724,18 +686,6 @@ export default function MusicPickerDrawer({
             let cur = audioRef.current.currentTime;
             const dur = audioRef.current.duration;
             const endSec = selectedStartSec + FIXED_DURATION;
-
-            // R2 hazır değilken oynatma konumunu güvenli sınıra (bufferedEnd - 0.3s) kenetle
-            if (!isR2ReadyRef.current) {
-              const safeLimit = getSafeBufferedLimit();
-              if (safeLimit > 0 && cur > safeLimit) {
-                const clampedPos = Math.min(selectedStartSec, safeLimit);
-                try {
-                  audioRef.current.currentTime = clampedPos;
-                  cur = clampedPos;
-                } catch {}
-              }
-            }
 
             // EMA Delta hesaplama (alfa = 0.3)
             if (lastTimeUpdateRef.current > 0 && cur > lastTimeUpdateRef.current) {
@@ -943,27 +893,18 @@ export default function MusicPickerDrawer({
             </div>
 
             {/* Popüler Nakarat Rozeti (Varsa) */}
-            {hotChunks.length > 0 && (() => {
-              const isChorusLocked = !isR2Ready && hotChunks[0].start > safeBufferedLimitSec;
-              return (
-                <button
-                  type="button"
-                  disabled={isChorusLocked}
-                  onClick={() => {
-                    if (isChorusLocked) return;
-                    handleSeek(hotChunks[0].start);
-                  }}
-                  className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-amber-500/15 border border-amber-500/30 text-amber-300 transition-all text-[11px] font-semibold ${
-                    isChorusLocked
-                      ? "opacity-45 cursor-not-allowed"
-                      : "hover:bg-amber-500/25 active:scale-95"
-                  }`}
-                >
-                  <Flame className="w-3.5 h-3.5 fill-amber-400 text-amber-400" />
-                  <span>Nakarat ({formatSeconds(hotChunks[0].start)})</span>
-                </button>
-              );
-            })()}
+            {hotChunks.length > 0 && (
+              <button
+                type="button"
+                onClick={() => {
+                  handleSeek(hotChunks[0].start);
+                }}
+                className="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-amber-500/15 border border-amber-500/30 text-amber-300 hover:bg-amber-500/25 active:scale-95 transition-all text-[11px] font-semibold"
+              >
+                <Flame className="w-3.5 h-3.5 fill-amber-400 text-amber-400" />
+                <span>Nakarat ({formatSeconds(hotChunks[0].start)})</span>
+              </button>
+            )}
           </div>
 
           {/* Senkronize Şarkı Sözü Satırı */}
@@ -1011,21 +952,16 @@ export default function MusicPickerDrawer({
                 }`}
                 style={{ transform: `translate3d(${trackOffsetPx}px, 0, 0)` }}
               >
-                {/* Taban Çizgiler (soluk kenarlar / parlak aktif alan / henüz inmemiş alan) */}
+                {/* Taban Çizgiler (soluk kenarlar / parlak aktif alan) */}
                 {waveformBars.map((height, idx) => {
                   const barSec = idx / BARS_PER_SEC;
                   const isInsideClip = barSec >= selectedStartSec && barSec < clipEndSec;
-                  const isUnbuffered = !isR2Ready && barSec > safeBufferedLimitSec;
 
                   return (
                     <div
                       key={idx}
                       className={`absolute top-1/2 -translate-y-1/2 rounded-full ${
-                        isUnbuffered
-                          ? "bg-white/10"
-                          : isInsideClip
-                          ? "bg-white/85"
-                          : "bg-white/20"
+                        isInsideClip ? "bg-white/90" : "bg-white/20"
                       }`}
                       style={{
                         left: `${idx * barPitchPx}px`,

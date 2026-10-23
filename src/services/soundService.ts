@@ -89,26 +89,54 @@ export function parseDurationToSeconds(val: unknown): number {
   return 180; // default 3 min fallback
 }
 
+// İstemci tarafı hızlı arama önbelleği (Tekrarlayan aramaları 0ms yapar)
+const clientSearchCache = new Map<string, { data: SoundTrack[]; timestamp: number }>();
+const SEARCH_CACHE_TTL_MS = 10 * 60 * 1000; // 10 dakika
+
 /**
  * Ses mikroservisinde şarkı arama
  */
 export async function searchTracks(query: string, limit = 20, signal?: AbortSignal): Promise<SoundTrack[]> {
   const trimmed = query.trim();
   const searchQ = trimmed.length > 0 ? trimmed : 'Tarkan';
+  const cacheKey = `${searchQ.toLowerCase()}_${limit}`;
+
+  // 1. Önbellekte varsa anında (0ms) dön
+  const cached = clientSearchCache.get(cacheKey);
+  if (cached && Date.now() - cached.timestamp < SEARCH_CACHE_TTL_MS) {
+    return cached.data;
+  }
 
   try {
     const isClient = typeof window !== 'undefined';
-    const url = isClient
-      ? `/api/music/proxy?type=search&q=${encodeURIComponent(searchQ)}&limit=${limit}`
-      : `${SOUND_SERVICE_URL}/api/audio/search?q=${encodeURIComponent(
-        searchQ
-      )}&limit=${limit}&apiKey=${encodeURIComponent(SOUND_API_KEY)}`;
+    // İstemcide CORS destekli doğrudan servis URL'sini dene (en hızlı, Next.js proxy gecikmesiz)
+    const directUrl = `${CLIENT_SOUND_SERVICE_URL.replace(/\/+$/, '')}/api/audio/search?q=${encodeURIComponent(
+      searchQ
+    )}&limit=${limit}&apiKey=${encodeURIComponent(CLIENT_SOUND_API_KEY)}`;
+    const proxyUrl = `/api/music/proxy?type=search&q=${encodeURIComponent(searchQ)}&limit=${limit}`;
 
-    const res = await fetch(url, {
-      method: 'GET',
-      headers: isClient ? {} : { 'x-api-key': SOUND_API_KEY },
-      signal,
-    });
+    let res: Response | null = null;
+
+    if (isClient) {
+      try {
+        res = await fetch(directUrl, {
+          method: 'GET',
+          signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(6000)]) : AbortSignal.timeout(6000),
+        });
+      } catch {
+        // Doğrudan bağlantıda hata olursa proxy üzerinden dene
+        res = null;
+      }
+    }
+
+    if (!res || !res.ok) {
+      const urlToUse = isClient ? proxyUrl : directUrl;
+      res = await fetch(urlToUse, {
+        method: 'GET',
+        headers: isClient ? {} : { 'x-api-key': SOUND_API_KEY },
+        signal,
+      });
+    }
 
     if (!res.ok) {
       // Fallback: /api/music endpointini dene
@@ -122,7 +150,7 @@ export async function searchTracks(query: string, limit = 20, signal?: AbortSign
       if (!fallbackRes.ok) return [];
       const fallbackData = await fallbackRes.json();
       if (Array.isArray(fallbackData)) {
-        return fallbackData.map((item: any) => {
+        const mapped = fallbackData.map((item: any) => {
           const durSec = parseDurationToSeconds(item.duration);
           return {
             id: item.id,
@@ -135,6 +163,8 @@ export async function searchTracks(query: string, limit = 20, signal?: AbortSign
             streamUrl: getAudioStreamUrl(item.id),
           };
         });
+        clientSearchCache.set(cacheKey, { data: mapped, timestamp: Date.now() });
+        return mapped;
       }
       return [];
     }
@@ -142,7 +172,7 @@ export async function searchTracks(query: string, limit = 20, signal?: AbortSign
     const json = await res.json();
     const rawList = Array.isArray(json.data) ? json.data : Array.isArray(json) ? json : [];
 
-    return rawList.map((item: any) => {
+    const tracks: SoundTrack[] = rawList.map((item: any) => {
       const durSec = parseDurationToSeconds(item.duration);
       return {
         id: item.id,
@@ -155,6 +185,12 @@ export async function searchTracks(query: string, limit = 20, signal?: AbortSign
         streamUrl: getAudioStreamUrl(item.id),
       };
     });
+
+    if (tracks.length > 0) {
+      clientSearchCache.set(cacheKey, { data: tracks, timestamp: Date.now() });
+    }
+
+    return tracks;
   } catch (err: any) {
     if (err.name === 'AbortError') {
       return [];

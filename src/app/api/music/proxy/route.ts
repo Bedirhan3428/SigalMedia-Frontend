@@ -8,17 +8,12 @@ export async function GET(req: NextRequest) {
   const { searchParams } = new URL(req.url);
   const type = searchParams.get('type') || 'search';
 
-  const isDev = process.env.NODE_ENV === 'development';
-  const defaultUrl = isDev ? 'http://localhost:4000' : 'https://sound.sigalmedia.com.tr';
-  const primaryUrl = process.env.AUDIO_SERVICE_URL || defaultUrl;
+  const defaultUrl = 'https://sound.sigalmedia.com.tr';
+  const primaryUrl = process.env.AUDIO_SERVICE_URL || process.env.NEXT_PUBLIC_AUDIO_SERVICE_URL || defaultUrl;
 
   const candidateUrls = Array.from(
-    new Set(
-      isDev
-        ? ['http://localhost:4000', primaryUrl, 'https://sound.sigalmedia.com.tr']
-        : [primaryUrl, 'https://sound.sigalmedia.com.tr']
-    )
-  ).filter((url) => isDev || (!url.includes('localhost') && !url.includes('127.0.0.1')));
+    new Set([primaryUrl, defaultUrl])
+  ).filter(Boolean);
 
   let pathAndQuery = '';
   if (type === 'search') {
