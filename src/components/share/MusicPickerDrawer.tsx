@@ -17,6 +17,8 @@ import {
   SoundTrack,
   searchTracks,
   getAudioStreamUrl,
+  getPlaybackUrl,
+  resolveAudioSource,
   getTrackAudioStatus,
   getTrackHotChunks,
   getTrackLyrics,
@@ -174,6 +176,26 @@ export default function MusicPickerDrawer({
   const emaDeltaRef = useRef<number>(0.22); // Senaryo 3: Lookahead EMA gecikme tamponu (varsayılan 0.22s)
   startRef.current = selectedStartSec;
   ppsRef.current = viewportWidth > 0 ? viewportWidth / viewWindowSec : 0;
+  const selectedTrackIdRef = useRef<string | null>(null);
+  selectedTrackIdRef.current = selectedTrack?.id ?? null;
+  // Dokunma → ilk ses süresi ölçümü (konsola yazılır)
+  const playTapRef = useRef<{ id: string; at: number; source: "r2" | "proxy" } | null>(null);
+
+  /**
+   * Döngü başında (pencere sonu → başlangıç) şarkı R2'ye hazır olduysa kaynağı imzalı R2
+   * URL'sine geçirir. Çalma ortasında değiştirmek takılma yaratır; döngü başı zaten bir sıçrama.
+   */
+  const swapToR2AtLoopStart = (audio: HTMLAudioElement, start: number): boolean => {
+    const id = selectedTrackIdRef.current;
+    if (!id) return false;
+    const next = getPlaybackUrl(id);
+    if (next === audio.src || next === getAudioStreamUrl(id)) return false;
+    audio.src = next;
+    pendingSeekRef.current = start;
+    audio.play().catch(() => {});
+    console.info(`[Müzik] ${id} döngü başında R2'ye geçildi`);
+    return true;
+  };
 
   /**
    * HTML5 audio.buffered aralıklarını izleyerek en son inmiş saniyeyi (bufferedEnd) günceller
@@ -230,13 +252,17 @@ export default function MusicPickerDrawer({
     statusAbortRef.current = abortController;
 
     const pollStatus = async () => {
-      if (isCancelled || isR2ReadyRef.current || pollCount >= 6) return;
+      if (isCancelled || pollCount >= 8) return;
       pollCount++;
       const status = await getTrackAudioStatus(trackId, abortController.signal);
       if (isCancelled) return;
-      if (status.ready) {
+      if (status.ready && !isR2ReadyRef.current) {
         isR2ReadyRef.current = true;
         setIsR2Ready(true);
+      }
+      // R2'ye geçtiği an imzalı URL'yi önceden al: bir sonraki döngü başında R2'den çalınır
+      if (status.r2Ready) {
+        resolveAudioSource(trackId).catch(() => {});
         return;
       }
       statusPollTimerRef.current = setTimeout(pollStatus, 3000);
@@ -298,7 +324,6 @@ export default function MusicPickerDrawer({
       if (!isMounted) return;
       setTracks(res);
       setIsSearching(false);
-      res.slice(0, 3).forEach((t) => warmTrackAudio(t.id));
 
       if (currentMusic) {
         const found = res.find((t) => t.id === currentMusic.id);
@@ -385,9 +410,10 @@ export default function MusicPickerDrawer({
 
       // Sadece istek iptal edilmediyse sonuçları ekrana bas (eski yanıtlar yenilerin üstüne yazılamaz)
       if (!abortController.signal.aborted) {
+        // Sonuçlar otomatik ısıtılmaz: her arama 3 şarkı için sunucuda iş başlatıp
+        // sonradan seçilen şarkıyı yavaşlatıyordu. Isıtma hover/önizleme/seçimde yapılır.
         setTracks(results);
         setIsSearching(false);
-        results.slice(0, 3).forEach((t) => warmTrackAudio(t.id));
       }
     }, 250);
   };
@@ -409,23 +435,33 @@ export default function MusicPickerDrawer({
       listPreviewAudioRef.current.preload = "auto";
     }
     const audio = listPreviewAudioRef.current;
-    audio.src = getAudioStreamUrl(track.id);
+    // R2'de hazırsa (önceden alınmış imzalı URL) doğrudan R2'den çalar
+    audio.src = getPlaybackUrl(track.id);
+    const previewSrc = audio.src;
     setPreviewTrackId(track.id);
     setIsPreviewLoading(true);
     warmTrackAudio(track.id);
+    // "Kullan"a basıldığında imzalı URL hazır olsun
+    resolveAudioSource(track.id).catch(() => {});
 
     getTrackHotChunks(track.id).then((chunks) => {
-      // Nakarat geldiğinde önizleme henüz başındaysa oraya atla
-      if (chunks[0] && audio.src === getAudioStreamUrl(track.id) && audio.currentTime < 2) {
+      // Nakarat geldiğinde önizleme hâlâ bu şarkıdaysa ve başındaysa oraya atla
+      if (chunks[0] && audio.src === previewSrc && audio.currentTime < 2) {
         try {
           audio.currentTime = chunks[0].start;
         } catch {}
       }
     });
 
+    const previewTapAt = performance.now();
     audio
       .play()
       .then(() => {
+        console.info(
+          `[Müzik] önizleme ${track.id} ilk ses ${Math.round(performance.now() - previewTapAt)} ms (${
+            previewSrc.includes("/api/audio/stream") ? "proxy" : "r2"
+          })`
+        );
         setIsPreviewLoading(false);
         listPreviewTimerRef.current = setTimeout(stopListPreview, LIST_PREVIEW_SEC * 1000);
       })
@@ -472,10 +508,16 @@ export default function MusicPickerDrawer({
     if (audioRef.current) {
       const audio = audioRef.current;
       audio.pause();
-      const streamUrl = getAudioStreamUrl(track.id);
-      if (audio.src !== streamUrl) {
-        audio.src = streamUrl;
+      // play() dokunma olayı içinde kalmalı (iOS); ağ beklenmez, önbellekteki imzalı URL veya kalıcı adres
+      const playbackUrl = getPlaybackUrl(track.id);
+      if (audio.src !== playbackUrl) {
+        audio.src = playbackUrl;
       }
+      playTapRef.current = {
+        id: track.id,
+        at: performance.now(),
+        source: playbackUrl === getAudioStreamUrl(track.id) ? "proxy" : "r2",
+      };
       try {
         audio.currentTime = defaultStart;
       } catch {}
@@ -489,6 +531,7 @@ export default function MusicPickerDrawer({
     if (hoverWarmupTimerRef.current[trackId]) return;
     hoverWarmupTimerRef.current[trackId] = setTimeout(() => {
       warmTrackAudio(trackId);
+      resolveAudioSource(trackId).catch(() => {});
       delete hoverWarmupTimerRef.current[trackId];
     }, 1500);
   }, []);
@@ -671,7 +714,9 @@ export default function MusicPickerDrawer({
           cur >= endSec ||
           (audio.duration && !isNaN(audio.duration) && isFinite(audio.duration) && cur >= audio.duration - 0.4);
         if (isAtLoopEnd) {
-          audio.currentTime = start;
+          if (!swapToR2AtLoopStart(audio, start)) {
+            audio.currentTime = start;
+          }
           lastAudioTime = start;
           lastStamp = now;
           lastTimeUpdateRef.current = start;
@@ -784,6 +829,13 @@ export default function MusicPickerDrawer({
         onPlaying={() => {
           setIsPlaying(true);
           setIsAudioLoading(false);
+          const tap = playTapRef.current;
+          if (tap) {
+            playTapRef.current = null;
+            console.info(
+              `[Müzik] ${tap.id} ilk ses ${Math.round(performance.now() - tap.at)} ms (${tap.source})`
+            );
+          }
         }}
         onPause={() => {
           setIsPlaying(false);
@@ -834,7 +886,9 @@ export default function MusicPickerDrawer({
 
             if (isAtLoopEnd) {
               try {
-                audioRef.current.currentTime = selectedStartSec;
+                if (!swapToR2AtLoopStart(audioRef.current, selectedStartSec)) {
+                  audioRef.current.currentTime = selectedStartSec;
+                }
                 lastTimeUpdateRef.current = selectedStartSec;
               } catch {}
             }

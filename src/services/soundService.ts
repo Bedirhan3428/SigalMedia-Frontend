@@ -255,8 +255,81 @@ export async function getTrackAudioStatus(
   }
 }
 
+export interface AudioSource {
+  url: string;
+  ready: boolean;
+  source: 'r2' | 'proxy';
+  expiresAt: number | null;
+}
+
+// İmzalı R2 URL'leri süreli; süresi dolmadan (en az 5 dk kala) yeniden kullanılır
+const audioSourceCache = new Map<string, AudioSource>();
+const SOURCE_MIN_REMAINING_MS = 5 * 60_000;
+
 /**
- * Doğrudan canlı ses akış adresi (HTML5 audio src)
+ * Çalma adresi: şarkı R2'de hazırsa süreli imzalı URL (doğrudan R2'den),
+ * değilse canlı akış adresi. Kalıcı kayıt için getAudioStreamUrl kullanılmalı.
+ */
+export async function resolveAudioSource(videoId: string, signal?: AbortSignal): Promise<AudioSource> {
+  const fallback: AudioSource = {
+    url: getAudioStreamUrl(videoId),
+    ready: false,
+    source: 'proxy',
+    expiresAt: null,
+  };
+  if (!videoId) return fallback;
+
+  const cached = audioSourceCache.get(videoId);
+  if (cached && cached.expiresAt && cached.expiresAt - Date.now() > SOURCE_MIN_REMAINING_MS) {
+    return cached;
+  }
+
+  try {
+    const baseUrl = CLIENT_SOUND_SERVICE_URL.replace(/\/+$/, '');
+    const res = await fetch(
+      `${baseUrl}/api/audio/source?id=${encodeURIComponent(videoId)}&apiKey=${encodeURIComponent(
+        CLIENT_SOUND_API_KEY
+      )}`,
+      {
+        cache: 'no-store',
+        signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(4000)]) : AbortSignal.timeout(4000),
+      }
+    );
+    if (!res.ok) return fallback;
+    const data = await res.json();
+    if (data?.source === 'r2' && typeof data.url === 'string') {
+      const entry: AudioSource = {
+        url: data.url,
+        ready: true,
+        source: 'r2',
+        expiresAt: typeof data.expiresAt === 'number' ? data.expiresAt : null,
+      };
+      audioSourceCache.set(videoId, entry);
+      return entry;
+    }
+    return fallback;
+  } catch {
+    // Servis eski sürümdeyse (uç nokta yok) veya zaman aşımında canlı akışa düş
+    return fallback;
+  }
+}
+
+/**
+ * Senkron çalma adresi: önbellekte geçerli imzalı R2 URL'si varsa o, yoksa kalıcı akış adresi.
+ * play() dokunma olayı içinde çağrılmalı (iOS), bu yüzden burada ağ beklenmez;
+ * imzalı URL resolveAudioSource ile hover/önizlemede önceden alınır.
+ */
+export function getPlaybackUrl(videoId: string): string {
+  const cached = audioSourceCache.get(videoId);
+  if (cached && cached.expiresAt && cached.expiresAt - Date.now() > SOURCE_MIN_REMAINING_MS) {
+    return cached.url;
+  }
+  return getAudioStreamUrl(videoId);
+}
+
+/**
+ * Doğrudan canlı ses akış adresi (HTML5 audio src). Gönderilere kalıcı yazılan adres budur;
+ * servis şarkı R2'de hazırsa buradan taze imzalı R2 URL'sine yönlendirir.
  */
 export function getAudioStreamUrl(videoId: string): string {
   const baseUrl = CLIENT_SOUND_SERVICE_URL.replace(/\/+$/, '');
