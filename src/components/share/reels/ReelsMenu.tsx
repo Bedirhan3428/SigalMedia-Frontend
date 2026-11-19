@@ -55,7 +55,7 @@ import MusicSettingsPanel from "../MusicSettingsPanel";
 import type { NLESelectedType } from "./TimelineOverlayTracks";
 import { REELS_STICKERS, stickerPreviewUrl, stickerToPngBlob } from "./stickers";
 
-/** Ana menü, Düzenle alt menüsü ve araç paneli aynı sabit yükseklikte durur (onLayout ölçümü sabit kalır). */
+/** Araç paneli yüksekliği: menü satırının üstüne doğru bindirilir (alt panel ölçümü ve önizleme boyutu sabit kalır). */
 export const REELS_MENU_HEIGHT = 136;
 /** Ana menü ve Düzenle menüsü: tek satır, yatay kaydırılır */
 export const REELS_MENU_ROW_HEIGHT = 76;
@@ -159,7 +159,10 @@ function MenuButton({ item }: { item: MenuItem }) {
 
 function ToolPanel({ title, onClose, children }: { title: string; onClose: () => void; children: ReactNode }) {
   return (
-    <div className="absolute inset-0 z-20 bg-black flex items-stretch gap-2 px-3 py-1.5">
+    <div
+      style={{ height: REELS_MENU_HEIGHT }}
+      className="absolute inset-x-0 bottom-0 z-20 bg-black border-t border-white/10 flex items-stretch gap-2 px-3 py-1.5"
+    >
       <div className="flex flex-col items-center gap-1 shrink-0 w-12">
         <button
           type="button"
@@ -1006,8 +1009,8 @@ export default function ReelsMenu(props: ReelsMenuProps) {
 
       {/* Menüler tek satır (yatay kaydırma); yalnızca bir araç paneli açıkken alan büyür */}
       <div
-        style={{ height: panel ? REELS_MENU_HEIGHT : REELS_MENU_ROW_HEIGHT }}
-        className="relative shrink-0 overflow-hidden bg-black"
+        style={{ height: REELS_MENU_ROW_HEIGHT }}
+        className="relative shrink-0 bg-black"
       >
         {/* Ana menü */}
         <div className="absolute inset-0 overflow-x-auto no-scrollbar touch-pan-x px-1 flex items-center">

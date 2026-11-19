@@ -1765,8 +1765,42 @@ export class CanvasEngine {
     return this.overlayCacheCanvas;
   }
 
+  /**
+   * Video karesi hazır değilken (seek sürüyor / veri yok) tuvali silip siyah kare basmayı önler:
+   * son çizilen kare korunur, kare hazır olunca yeniden çizilir. Sonsuz beklemeyi önlemek için
+   * en fazla ~0.5 sn (30 kare) ertelenir.
+   */
+  private shouldHoldLastFrame(): boolean {
+    if (this.isExportingVideo || !this.hasDrawnVideoFrame) return false;
+    const ml = this.mediaLayer;
+    if (!ml || ml.isMotionPhoto) return false;
+    const v = ml.getVideoElement();
+    if (!v || v.error) return false;
+    if (v.readyState >= 2 && !v.seeking) return false;
+    if (this.holdFrameCount >= 30) return false;
+    this.holdFrameCount++;
+    if (!this.holdRetryScheduled && typeof requestAnimationFrame !== 'undefined') {
+      this.holdRetryScheduled = true;
+      requestAnimationFrame(() => {
+        this.holdRetryScheduled = false;
+        if (!this.destroyed) this.requestRender();
+      });
+    }
+    return true;
+  }
+
+  private hasDrawnVideoFrame = false;
+  private holdFrameCount = 0;
+  private holdRetryScheduled = false;
+
   public render() {
+    if (this.shouldHoldLastFrame()) return;
+    this.holdFrameCount = 0;
     this.syncTemporalVisibility();
+    {
+      const v = this.mediaLayer?.getVideoElement();
+      if (v && v.readyState >= 2 && !v.seeking) this.hasDrawnVideoFrame = true;
+    }
     this.ctx.clearRect(0, 0, this.width, this.height);
 
     const ml = this.mediaLayer;

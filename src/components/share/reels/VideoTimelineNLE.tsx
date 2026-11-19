@@ -70,7 +70,7 @@ export function formatNLEClock(seconds: number): string {
   return `${String(mins).padStart(2, "0")}:${String(secs).padStart(2, "0")}.${tenths}`;
 }
 
-export default function VideoTimelineNLE({
+function VideoTimelineNLE({
   clips,
   overlayItems,
   effectClips,
@@ -579,3 +579,5 @@ export default function VideoTimelineNLE({
   );
 }
 // [END] CREATED BY Bedirhan
+
+export default React.memo(VideoTimelineNLE);

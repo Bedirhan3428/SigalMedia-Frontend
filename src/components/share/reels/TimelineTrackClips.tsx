@@ -245,6 +245,22 @@ function TimelineTrackClips({
     }, 350);
   };
 
+  // Trim sürüklemesi: durum + seek her karede en fazla bir kez (rAF, son değer kazanır)
+  const trimFlushRafRef = useRef<number | null>(null);
+  const trimFlushRef = useRef<{ preview: TrimPreviewState; seekSec: number } | null>(null);
+  const scheduleTrimFlush = (preview: TrimPreviewState, seekSec: number) => {
+    trimFlushRef.current = { preview, seekSec };
+    if (trimFlushRafRef.current !== null) return;
+    trimFlushRafRef.current = requestAnimationFrame(() => {
+      trimFlushRafRef.current = null;
+      const f = trimFlushRef.current;
+      trimFlushRef.current = null;
+      if (!f || !dragRef.current) return;
+      setTrimPreview(f.preview);
+      onSeek?.(f.seekSec);
+    });
+  };
+
   const handlePointerMove = (e: React.PointerEvent) => {
     if (pressOriginRef.current && !dragRef.current) {
       const moveDist = Math.hypot(
@@ -257,7 +273,8 @@ function TimelineTrackClips({
           const lastX = clipPressRef.current.lastX ?? pressOriginRef.current.x;
           const dx = e.clientX - lastX;
           clipPressRef.current.lastX = e.clientX;
-          if (onPanScroll) {
+          // Dokunmatikte yerel kaydırma zaten çalışır; elle kaydırma çift hareket (takılma) yaratır
+          if (onPanScroll && e.pointerType === "mouse") {
             onPanScroll(dx);
           }
         }
@@ -323,10 +340,7 @@ function TimelineTrackClips({
         rightGapPx: 0,
       };
       trimPreviewRef.current = nextPreview;
-      setTrimPreview(nextPreview);
-
-      const previewTimelineSec = Math.max(0, st.clipTimelineStart + shrunkSec);
-      onSeek?.(Number(previewTimelineSec.toFixed(2)));
+      scheduleTrimFlush(nextPreview, Number(Math.max(0, st.clipTimelineStart + shrunkSec).toFixed(2)));
       return;
     }
 
@@ -350,10 +364,7 @@ function TimelineTrackClips({
         rightGapPx,
       };
       trimPreviewRef.current = nextPreview;
-      setTrimPreview(nextPreview);
-
-      const previewTimelineSec = Math.max(0, st.clipTimelineStart + nextDurSec);
-      onSeek?.(Number(previewTimelineSec.toFixed(2)));
+      scheduleTrimFlush(nextPreview, Number(Math.max(0, st.clipTimelineStart + nextDurSec).toFixed(2)));
       return;
     }
 
@@ -411,6 +422,11 @@ function TimelineTrackClips({
     releaseOnRoot(e.pointerId);
 
     const activePreview = trimPreviewRef.current;
+    if (trimFlushRafRef.current !== null) {
+      cancelAnimationFrame(trimFlushRafRef.current);
+      trimFlushRafRef.current = null;
+    }
+    trimFlushRef.current = null;
     dragRef.current = null;
     trimPreviewRef.current = null;
     setTrimPreview(null);

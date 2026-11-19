@@ -218,7 +218,8 @@ function TimelineOverlayTracks({
           // Text bar / bileşen üzerinde yatay kaydırma -> Timeline Pan Scroll!
           const dx = e.clientX - pr.lastX;
           pr.lastX = e.clientX;
-          if (onPanScroll) {
+          // Dokunmatikte yerel kaydırma zaten çalışır; elle kaydırma çift hareket (takılma) yaratır
+          if (onPanScroll && e.pointerType === "mouse") {
             onPanScroll(dx);
           }
         }
