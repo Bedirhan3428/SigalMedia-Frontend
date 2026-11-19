@@ -16,7 +16,7 @@ export function formatRulerLabel(seconds: number): string {
   return `${String(mins).padStart(2, "0")}:${String(secs).padStart(2, "0")}`;
 }
 
-export default function TimelineRuler({
+function TimelineRuler({
   totalDuration,
   pps,
   onSeekToTime,
@@ -86,3 +86,5 @@ export default function TimelineRuler({
   );
 }
 // [END] CREATED BY Bedirhan
+
+export default React.memo(TimelineRuler);

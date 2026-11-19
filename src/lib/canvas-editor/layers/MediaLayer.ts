@@ -13,6 +13,7 @@ import {
   Rect,
   ReelsEffectClip,
   ReelsEffectId,
+  MAX_VIDEO_SEC,
 } from '../types';
 import { ImageAdjustmentsEngine } from '../image-adjustments';
 
@@ -58,6 +59,9 @@ export class MediaLayer extends BaseLayer {
   public cropRect?: { x: number; y: number; width: number; height: number };
   public isCropOverlayOpen: boolean = false;
   // [END] CREATED BY Bedirhan
+  // WP1: etkileşimde %3 yaylanma ve kenardan ayrılınca köşe yuvarlama (motor moda göre ayarlar)
+  public springOnInteract: boolean = true;
+  public roundCornersWhenDetached: boolean = true;
 
   private animFrameId: number | null = null;
   private onRenderCallback: (() => void) | null = null;
@@ -103,7 +107,7 @@ export class MediaLayer extends BaseLayer {
         ? (media.duration as number)
         : (Number.isFinite(media.element.duration) ? media.element.duration : 0);
       this.trimStart = 0;
-      this.trimEnd = dur > 0 ? Math.min(dur, 60) : 0;
+      this.trimEnd = dur > 0 ? Math.min(dur, MAX_VIDEO_SEC) : 0;
       this.playbackRate = 1.0;
       this.volume = 1.0;
       this.muted = false;
@@ -257,7 +261,8 @@ export class MediaLayer extends BaseLayer {
       Math.abs(this.transform.x - 0.5) < 0.005 &&
       Math.abs(this.transform.y - 0.5) < 0.005;
 
-    const cornerRadius = isFullScreenTouching ? 0 : Math.round(24 * (canvasWidth / 414));
+    const cornerRadius =
+      isFullScreenTouching || !this.roundCornersWhenDetached ? 0 : Math.round(24 * (canvasWidth / 414));
 
     ctx.save();
     if (
@@ -282,7 +287,7 @@ export class MediaLayer extends BaseLayer {
     // 2. Serbest açı (döndürme)
     ctx.rotate((this.transform.rotation * Math.PI) / 180);
     // 3. Serbest ölçekleme (büyütme / küçültme), ayna (flip) ve etkileşim yaylanması
-    const interactionScale = this.isInteracting ? 1.03 : 1.0;
+    const interactionScale = this.isInteracting && this.springOnInteract ? 1.03 : 1.0;
     const scaleX = this.transform.scale * (this.transform.flipH ? -1 : 1) * interactionScale;
     const scaleY = this.transform.scale * (this.transform.flipV ? -1 : 1) * interactionScale;
     ctx.scale(scaleX, scaleY);
@@ -518,8 +523,8 @@ export class MediaLayer extends BaseLayer {
 
   public setTrim(start: number, end: number): void {
     if (this.isMotionPhoto) {
-      const clampedStart = Math.max(0, Math.min(start, 59.5));
-      const clampedEnd = Math.max(clampedStart + 0.5, Math.min(end, 60));
+      const clampedStart = Math.max(0, Math.min(start, MAX_VIDEO_SEC - 0.5));
+      const clampedEnd = Math.max(clampedStart + 0.5, Math.min(end, MAX_VIDEO_SEC));
       this.trimStart = clampedStart;
       this.trimEnd = clampedEnd;
       this.media.duration = Math.max(5, clampedEnd);
@@ -532,7 +537,7 @@ export class MediaLayer extends BaseLayer {
     const dur = this.getDuration();
     const maxEnd = dur > 0 ? dur : Math.max(end, start + 0.1);
     const clampedStart = Math.max(0, Math.min(start, maxEnd - 0.1));
-    const clampedEnd = Math.max(clampedStart + 0.1, Math.min(end, maxEnd, clampedStart + 60));
+    const clampedEnd = Math.max(clampedStart + 0.1, Math.min(end, maxEnd, clampedStart + MAX_VIDEO_SEC));
     this.trimStart = clampedStart;
     this.trimEnd = clampedEnd;
 
@@ -660,24 +665,27 @@ export class MediaLayer extends BaseLayer {
     this.render(ctx, canvasWidth, canvasHeight);
   }
 
+  /**
+   * Katmanın kendi animasyonlarını durdurur. Medyayı SERBEST BIRAKMAZ: taban ve klip medyaları
+   * motorun medya kaydı tarafından MediaSourceManager.release() ile serbest bırakılır.
+   */
   public destroy(): void {
     if (this.animFrameId !== null) {
       cancelAnimationFrame(this.animFrameId);
       this.animFrameId = null;
     }
+    this.onRenderCallback = null;
     this.virtualPlaying = false;
     const video = this.getVideoElement();
     if (video) {
       try {
         video.pause();
-        video.removeAttribute('src');
-        video.load();
       } catch {}
     }
-    if (this.media.objectUrl) {
-      try {
-        URL.revokeObjectURL(this.media.objectUrl);
-      } catch {}
+    if (this.pixelCanvas) {
+      this.pixelCanvas.width = 0;
+      this.pixelCanvas.height = 0;
+      this.pixelCanvas = null;
     }
   }
   // [END] CREATED BY Bedirhan

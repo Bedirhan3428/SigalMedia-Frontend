@@ -1,5 +1,5 @@
 import { BaseLayer } from './BaseLayer';
-import { Rect, TextStyle, FontPreset, TextBgPreset } from '../types';
+import { Rect, TextStyle, FontPreset, TextBgPreset, LayerStateSnapshot } from '../types';
 import { LayerBitmapCache } from '../utils/layerBitmapCache';
 
 export { type FontPreset, type TextBgPreset };
@@ -108,6 +108,23 @@ export class TextLayer extends BaseLayer {
     if (options?.bgPreset) {
       this.setBgPreset(options.bgPreset);
     }
+  }
+
+  public override getState(): LayerStateSnapshot {
+    return {
+      ...super.getState(),
+      style: { ...this.style },
+      fontPreset: this.fontPreset,
+      bgPreset: this.bgPreset,
+    };
+  }
+
+  public override applyState(state: LayerStateSnapshot): void {
+    super.applyState(state);
+    if (state.style) this.style = { ...state.style };
+    if (state.fontPreset) this.fontPreset = state.fontPreset;
+    if (state.bgPreset) this.bgPreset = state.bgPreset;
+    this.pulseScale = 1.0;
   }
 
   public setStyle(newStyle: Partial<TextStyle>) {

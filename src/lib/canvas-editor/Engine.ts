@@ -3,8 +3,8 @@ import { MediaLayer } from './layers/MediaLayer';
 import { TextLayer } from './layers/TextLayer';
 import { OverlayImageLayer } from './layers/OverlayImageLayer';
 import { MusicStickerLayer } from './layers/MusicStickerLayer';
-import { MediaSourceManager } from './MediaSource';
-import { InteractionManager } from './interaction/InteractionManager';
+import { MediaSourceManager, MediaLoadError } from './MediaSource';
+import { InteractionManager, MediaGesturePolicy } from './interaction/InteractionManager';
 import { ImageExporter, ExportImageOptions } from './exporter/ImageExporter';
 import { generateVideoThumbnails } from './utils/videoThumbs';
 import {
@@ -27,25 +27,52 @@ import {
   VideoTrackClip,
   OverlayTrackItem,
   LayerTransform,
+  DragInfo,
+  EngineSnapshot,
+  PostAspect,
+  POST_ASPECT_SIZES,
+  DEFAULT_POST_ASPECT,
+  VERTICAL_LOGICAL_SIZE,
+  MAX_VIDEO_SEC,
+  FontPreset,
+  TextBgPreset,
 } from './types';
 
 // [MODIFIED BY Bedirhan]
 export type EngineEventMap = {
+  /** Her çizimden sonra (rAF). */
   'render': [];
   'select': [layer: BaseLayer | null];
+  /**
+   * Yapısal / kalıcı değişiklik: katman eklendi/silindi/sırası değişti, klip listesi veya klip verisi
+   * değişti, bir ayar (filtre, efekt, düzeltme, döndürme...) uygulandı ya da bir jest TAMAMLANDI.
+   * Jest sırasında (pointermove) ASLA tetiklenmez; onun yerine 'transform' kullanın.
+   */
   'change': [];
+  /** Jest sırasında dönüşüm değişti (rAF ile kısılmış, karede en çok 1 kez). */
+  'transform': [layer: BaseLayer | null];
   'double-tap': [layer?: BaseLayer];
   'single-tap': [layer: BaseLayer];
   'filter-swipe': [direction: string, filterName: string];
-  'drag-move': [info: { layer: BaseLayer; clientX: number; clientY: number; isDragging: boolean }];
-  'drag-end': [info: { layer: BaseLayer; clientX: number; clientY: number }];
+  /** rAF ile kısılmış. clientX/Y = katman merkezi; deletable=false ise NaN. */
+  'drag-move': [info: DragInfo];
+  /** Jest sonunda bir kez. UI yalnızca info.deletable && çöp kutusu üzerinde ise silmeli. */
+  'drag-end': [info: DragInfo];
   'snap-guide': [snap: SnapGuideState];
   'video-time': [state: VideoState];
   'video-progress': [currentTime: number];
+  /** Otomatik oynatma sesli reddedildi: video sessiz oynuyor, ses için kullanıcı dokunuşu gerek. */
+  'sound-blocked': [blocked: boolean];
+  /** Mantıksal tuval boyutu değişti (yalnızca Post en-boy değişiminde). */
+  'resize': [size: { width: number; height: number }];
+  /** Motor müzik meta verisi değişti (sticker silinince null). */
+  'music-change': [music: StoryAudioMeta | null];
 };
 
 export type EngineEvent = keyof EngineEventMap;
 export type EventListener<K extends EngineEvent = EngineEvent> = (...args: EngineEventMap[K]) => void;
+
+let mediaKeyCounter = 0;
 
 export class CanvasEngine {
   private canvas: HTMLCanvasElement;
@@ -97,6 +124,34 @@ export class CanvasEngine {
   private pendingSeekTime: number | null = null;
   // [END] CREATED BY Bedirhan
 
+  // [START] WP1
+  private postAspect: PostAspect = DEFAULT_POST_ASPECT;
+  /** loadMedia sonrası true: mod artık değiştirilemez (B7). */
+  private modeLocked = false;
+  private destroyed = false;
+  private renderRafId: number | null = null;
+  private pendingTransformLayer: BaseLayer | null = null;
+  private hasPendingTransform = false;
+  private pendingDragMove: DragInfo | null = null;
+  private loadToken = 0;
+  private baseMediaKey: string | null = null;
+  /** Otomatik oynatma sesli reddedildi (B5). Kullanıcı tercihi (muted) DEĞİŞMEZ. */
+  private soundBlocked = false;
+  /** Kullanıcı/uygulama oynatma istiyor (pauseVideo ile false). */
+  private playIntent = false;
+  /** Sayfa gizlenirken oynuyordu ve kimse açıkça durdurmadı: görünür olunca devam et. */
+  private resumeOnVisible = false;
+  private musicMeta: StoryAudioMeta | null = null;
+  /** Motorun yüklediği tüm medya (taban, klip, overlay). destroy/loadMedia'da serbest bırakılır. */
+  private mediaRegistry = new Set<EditorMedia>();
+  private overlayMedia = new Map<BaseLayer, EditorMedia>();
+  /** Artık hiçbir klibin kullanmadığı medya: undo için kısa süre tutulur (en çok 3). */
+  private orphanMedia: EditorMedia[] = [];
+  private releasedMedia = new WeakSet<EditorMedia>();
+  private revivingMedia = new Map<EditorMedia, Promise<EditorMedia | null>>();
+  private static readonly MAX_ORPHAN_MEDIA = 3;
+  // [END] WP1
+
   constructor(options: EngineOptions) {
     this.canvas = options.canvas;
     const ctx =
@@ -105,36 +160,38 @@ export class CanvasEngine {
     if (!ctx) throw new Error('Could not get 2D rendering context from canvas');
     this.ctx = ctx;
 
-    this.width = options.width || 1080;
-    this.height = options.height || 1080;
+    // WP1 (B1/B2): mantıksal boyut yalnızca moda (ve Post en-boy oranına) bağlıdır.
+    // options.width/height kasıtlı olarak yok sayılır.
+    this.shareMode = options.mode || 'story';
+    if (options.postAspect && POST_ASPECT_SIZES[options.postAspect]) {
+      this.postAspect = options.postAspect;
+    }
+    const initial = this.getLogicalSizeFor(this.shareMode, this.postAspect);
+    this.width = initial.width;
+    this.height = initial.height;
     this.fitMode = options.fitMode || 'contain';
 
-    this.updateCanvasResolution();
+    // Görüntü boyutu yalnızca CSS'tir: en-boy oranı farklı bir kutuda letterbox ile gösterilir.
+    try {
+      if (!this.canvas.style.objectFit) this.canvas.style.objectFit = 'contain';
+    } catch {}
+
+    this.canvas.width = this.width;
+    this.canvas.height = this.height;
 
     this.interactionManager = new InteractionManager({
       canvas: this.canvas,
       getLayers: () => this.getAllLayers(),
       getContext: () => this.ctx,
+      getMediaGesturePolicy: () => this.getMediaGesturePolicy(),
       onPointerDownCapture: () => {
         if (this.shareMode === 'reels' && (this.isNlePlaying || this.videoLoopId !== null)) {
           this.pauseVideo();
         }
       },
-      onStateChange: () => {
-        if (this.shareMode === 'reels' && this.mediaLayer && this.videoClips.length > 0) {
-          const active = this.getActiveClipAtTime(this.nleTimelineTime);
-          if (active) {
-            this.videoClips[active.index] = {
-              ...this.videoClips[active.index],
-              transform: { ...this.mediaLayer.transform },
-              fitMode: this.mediaLayer.fitMode,
-            };
-          }
-        }
-        this.invalidateStaticCache();
-        this.requestRender();
-        this.emit('change');
-      },
+      onTransform: (layer) => this.handleInteractionTransform(layer),
+      onGestureEnd: (layer, changed) => this.handleGestureEnd(layer, changed),
+      onRenderRequest: () => this.requestRender(),
       onSelectLayer: (layer) => {
         this.emit('select', layer);
       },
@@ -157,29 +214,405 @@ export class CanvasEngine {
       },
       onDragMove: (info) => {
         this.invalidateStaticCache();
-        this.emit('drag-move', info);
+        // rAF ile kısılır (render ile aynı karede yayınlanır)
+        this.pendingDragMove = info;
+        this.requestRender();
       },
       onDragEnd: (info) => {
         this.invalidateStaticCache();
+        // Bekleyen drag-move, drag-end'den SONRA yayınlanmamalı
+        this.pendingDragMove = null;
         this.emit('drag-end', info);
       }
     });
 
     this.requestRender();
 
+    this.canvas.addEventListener('pointerup', this.onCanvasPointerUp);
     if (typeof document !== 'undefined') {
-      document.addEventListener('visibilitychange', () => {
-        if (document.hidden) {
-          this.pauseVideo();
-          if (typeof navigator !== 'undefined' && 'mediaSession' in navigator) {
-            try {
-              navigator.mediaSession.playbackState = 'none';
-              navigator.mediaSession.metadata = null;
-            } catch {}
-          }
-        }
-      });
+      document.addEventListener('visibilitychange', this.onVisibilityChange);
     }
+  }
+
+  // ─────────────────────────────────────────────────────────────
+  // WP1: Görünürlük, jest ve ses yönetimi
+  // ─────────────────────────────────────────────────────────────
+  private onVisibilityChange = () => {
+    if (this.destroyed || typeof document === 'undefined') return;
+    if (document.hidden) {
+      if (this.isPlaying() && !this.isExportingVideo) {
+        this.resumeOnVisible = true;
+        this.pauseInternal();
+      }
+      this.clearMediaSession();
+    } else if (this.resumeOnVisible) {
+      this.resumeOnVisible = false;
+      if (!this.isExportingVideo && this.mediaLayer) {
+        this.playVideo().catch(() => {});
+      }
+    }
+  };
+
+  private clearMediaSession() {
+    if (typeof navigator !== 'undefined' && 'mediaSession' in navigator) {
+      try {
+        navigator.mediaSession.playbackState = 'none';
+        navigator.mediaSession.metadata = null;
+      } catch {}
+    }
+  }
+
+  /**
+   * Tuvalde parmak kalkınca (pointerup = tarayıcıların kullanıcı etkinleştirme olayı; dokunmatikte
+   * pointerdown değildir) ses engelini kaldırmayı dener.
+   */
+  private onCanvasPointerUp = () => {
+    if (this.soundBlocked && !this.destroyed) {
+      this.unlockSound().catch(() => {});
+    }
+  };
+
+  private setSoundBlocked(blocked: boolean) {
+    if (this.soundBlocked === blocked) return;
+    this.soundBlocked = blocked;
+    this.emit('sound-blocked', blocked);
+  }
+
+  /** Kullanıcının istediği sessiz durumu (otomatik oynatma engelinden bağımsız). */
+  private getIntendedMuted(): boolean {
+    const ml = this.mediaLayer;
+    if (!ml) return false;
+    if (this.shareMode === 'reels' && this.videoClips.length > 0) {
+      const active = this.getActiveClipAtTime(this.nleTimelineTime);
+      return active ? Boolean(active.clip.muted) : ml.muted;
+    }
+    return ml.muted;
+  }
+
+  /**
+   * video.play() çağırır; tarayıcı sesli oynatmayı reddederse (NotAllowedError) elementi
+   * yalnızca o an sessize alıp tekrar dener ve 'sound-blocked' yayınlar. Tercih (muted) kalıcı değişmez.
+   */
+  private async playElementWithFallback(video: HTMLVideoElement, wantMuted: boolean): Promise<boolean> {
+    const effectiveMuted = wantMuted || this.soundBlocked;
+    if (video.muted !== effectiveMuted) video.muted = effectiveMuted;
+    try {
+      await video.play();
+      return true;
+    } catch (err) {
+      if (this.destroyed) return false;
+      const name = (err as { name?: string } | null)?.name;
+      if (name !== 'NotAllowedError') return false;
+      if (!effectiveMuted) {
+        video.muted = true;
+        this.setSoundBlocked(true);
+        try {
+          await video.play();
+          return true;
+        } catch {
+          return false;
+        }
+      }
+      // Sessiz oynatma bile reddedildi (ör. iOS Düşük Güç Modu): dokunuş gerekir
+      this.setSoundBlocked(true);
+      return false;
+    }
+  }
+
+  /**
+   * Ses engelini kaldırır. Bir kullanıcı jesti (tıklama/dokunma) içinde SENKRON çağrılmalıdır (iOS).
+   * true: ses açık (veya kullanıcı zaten sessiz istiyor).
+   */
+  public unlockSound(): Promise<boolean> {
+    if (!this.soundBlocked) return Promise.resolve(true);
+    const video = this.mediaLayer?.getVideoElement() || null;
+    const wantMuted = this.getIntendedMuted();
+    if (!video || this.mediaLayer?.isMotionPhoto) {
+      this.setSoundBlocked(false);
+      return Promise.resolve(true);
+    }
+    video.muted = wantMuted;
+    if (video.paused && !this.playIntent) {
+      // Oynatılmıyor: bir sonraki playVideo sesli dener
+      this.setSoundBlocked(false);
+      return Promise.resolve(true);
+    }
+    let p: Promise<void>;
+    try {
+      p = video.play();
+    } catch {
+      return Promise.resolve(false);
+    }
+    return p.then(
+      () => {
+        if (this.destroyed) return false;
+        this.setSoundBlocked(false);
+        if (!this.playIntent && !video.paused) {
+          // Bu arada pauseVideo çağrıldı
+          try { video.pause(); } catch {}
+        } else if (this.videoLoopId === null && this.playIntent) {
+          this.startVideoLoop();
+        }
+        this.emit('video-time', this.getVideoState());
+        return true;
+      },
+      (err: unknown) => {
+        if (this.destroyed) return false;
+        const name = (err as { name?: string } | null)?.name;
+        if (name === 'NotAllowedError') {
+          video.muted = true;
+          if (this.playIntent) video.play().catch(() => {});
+          return false;
+        }
+        // AbortError vb. (arada pause geldi): jest içindeydik, engel kalktı say
+        this.setSoundBlocked(false);
+        return true;
+      }
+    );
+  }
+
+  /**
+   * MediaLayer.setVolume elementi doğrudan sesli yapar; ses engelliyken bu, jest içindeyse kilidi açma
+   * denemesine, değilse yeniden sessize almaya dönüşür.
+   */
+  private reconcileSoundBlockAfterVolumeChange() {
+    if (!this.soundBlocked) return;
+    if (this.getIntendedMuted()) {
+      const v = this.mediaLayer?.getVideoElement();
+      if (v) v.muted = true;
+      return;
+    }
+    this.unlockSound().catch(() => {});
+  }
+
+  /** Otomatik oynatma sesli reddedildiyse true: UI küçük bir "sesi aç" düğmesi göstermeli. */
+  public needsUserGestureForSound(): boolean {
+    return this.soundBlocked;
+  }
+
+  /** Algılanan sessiz durum (tercih veya otomatik oynatma engeli). */
+  public isMuted(): boolean {
+    return this.getIntendedMuted() || this.soundBlocked;
+  }
+
+  /**
+   * Sessiz tercihini ayarlar (Hikaye/Post: taban video; Reels: aktif klip).
+   * muted=false bir kullanıcı jesti içinde çağrılırsa ses engelini de kaldırır.
+   */
+  public setMuted(muted: boolean): void {
+    const ml = this.mediaLayer;
+    if (!ml) return;
+    if (this.shareMode === 'reels' && this.videoClips.length > 0) {
+      const active = this.getActiveClipAtTime(this.nleTimelineTime);
+      const clip = active ? active.clip : this.videoClips[0];
+      this.updateClipVolume(clip.id, muted ? clip.volume : clip.volume > 0 ? clip.volume : 1, muted);
+    } else {
+      ml.muted = muted;
+      if (!muted && ml.volume <= 0) ml.volume = 1;
+      const v = ml.getVideoElement();
+      if (v) {
+        v.volume = ml.volume;
+        if (muted || !this.soundBlocked) v.muted = muted;
+      }
+      this.emit('video-time', this.getVideoState());
+      this.emit('change');
+    }
+    if (!muted && this.soundBlocked) {
+      this.unlockSound().catch(() => {});
+    }
+  }
+
+  /** Sesi aç/kapat. Ses engelliyse önce engeli kaldırır (sesi açar). Yeni sessiz durumu döner. */
+  public toggleMute(): boolean {
+    if (this.soundBlocked) {
+      this.setMuted(false);
+      return false;
+    }
+    const next = !this.getIntendedMuted();
+    this.setMuted(next);
+    return next;
+  }
+
+  // ─────────────────────────────────────────────────────────────
+  // WP1: Jest akışı (D1: pointermove -> 'transform', jest sonu -> 'change')
+  // ─────────────────────────────────────────────────────────────
+  private handleInteractionTransform(layer: BaseLayer) {
+    if (this.mediaLayer && layer === this.mediaLayer) {
+      this.applyMediaConstraints();
+      this.syncActiveClipTransformFromMediaLayer();
+    }
+    this.pendingTransformLayer = layer;
+    this.hasPendingTransform = true;
+    this.requestRender();
+  }
+
+  private handleGestureEnd(layer: BaseLayer | null, changed: boolean) {
+    if (changed && this.mediaLayer && layer === this.mediaLayer) {
+      this.applyMediaConstraints();
+      this.syncActiveClipTransformFromMediaLayer();
+    }
+    this.requestRender();
+    if (changed) this.emit('change');
+  }
+
+  private syncActiveClipTransformFromMediaLayer() {
+    if (this.shareMode !== 'reels' || !this.mediaLayer || this.videoClips.length === 0) return;
+    const active = this.getActiveClipAtTime(this.nleTimelineTime);
+    if (active) {
+      this.videoClips[active.index] = {
+        ...this.videoClips[active.index],
+        transform: { ...this.mediaLayer.transform },
+        fitMode: this.mediaLayer.fitMode,
+      };
+    }
+  }
+
+  private getMediaGesturePolicy(): MediaGesturePolicy {
+    if (this.shareMode === 'post') {
+      return { oneFingerPan: true, allowRotate: false, filterSwipe: false };
+    }
+    if (this.shareMode === 'reels') {
+      return {
+        oneFingerPan: true,
+        allowRotate: !(this.mediaLayer && this.mediaLayer.isMotionPhoto),
+        filterSwipe: false,
+      };
+    }
+    // Hikaye: serbest yerleşim (iki parmak), tek parmak yatay kaydırma = filtre
+    return { oneFingerPan: false, allowRotate: true, filterSwipe: true };
+  }
+
+  /** Post ve Reels fotoğraf: taban medya her zaman kareyi kaplar (siyah boşluk yok). */
+  private isCoverClampActive(): boolean {
+    const ml = this.mediaLayer;
+    if (!ml) return false;
+    if (this.shareMode === 'post') return true;
+    return this.shareMode === 'reels' && ml.isMotionPhoto;
+  }
+
+  /**
+   * Kaplama (cover) sınırlaması: ölçek >= kaplama ölçeği, ofsetler kenar boşluk bırakmayacak şekilde.
+   * Döndürme 90°'nin katına yuvarlanır. Saf fonksiyon: dönüşümün sınırlanmış kopyasını döner.
+   */
+  public static clampTransformToCover(
+    transform: LayerTransform,
+    media: { width: number; height: number },
+    fitMode: FitMode,
+    canvasWidth: number,
+    canvasHeight: number
+  ): LayerTransform {
+    const mw = Math.max(1, media.width || 1);
+    const mh = Math.max(1, media.height || 1);
+    let baseW: number;
+    let baseH: number;
+    if (fitMode === 'fill') {
+      baseW = canvasWidth;
+      baseH = canvasHeight;
+    } else {
+      const s = fitMode === 'cover'
+        ? Math.max(canvasWidth / mw, canvasHeight / mh)
+        : Math.min(canvasWidth / mw, canvasHeight / mh);
+      baseW = mw * s;
+      baseH = mh * s;
+    }
+    const rotation = (((Math.round((transform.rotation || 0) / 90) * 90) % 360) + 360) % 360;
+    const swapped = rotation % 180 !== 0;
+    const bw = swapped ? baseH : baseW;
+    const bh = swapped ? baseW : baseH;
+    const minScale = Math.max(canvasWidth / bw, canvasHeight / bh);
+    const scale = Math.max(minScale, Math.min(Math.max(6, minScale), transform.scale || 1));
+    const ew = bw * scale;
+    const eh = bh * scale;
+    const minX = 1 - ew / (2 * canvasWidth);
+    const maxX = ew / (2 * canvasWidth);
+    const minY = 1 - eh / (2 * canvasHeight);
+    const maxY = eh / (2 * canvasHeight);
+    return {
+      ...transform,
+      rotation,
+      scale: Number(scale.toFixed(4)),
+      x: Math.max(Math.min(minX, maxX), Math.min(Math.max(minX, maxX), transform.x)),
+      y: Math.max(Math.min(minY, maxY), Math.min(Math.max(minY, maxY), transform.y)),
+    };
+  }
+
+  /** Aktif moda göre taban medya kısıtlarını uygular. Değiştiyse true. */
+  private applyMediaConstraints(): boolean {
+    const ml = this.mediaLayer;
+    if (!ml || !this.isCoverClampActive()) return false;
+    const next = CanvasEngine.clampTransformToCover(ml.transform, ml.media, ml.fitMode, this.width, this.height);
+    const t = ml.transform;
+    if (
+      Math.abs(next.x - t.x) < 1e-6 &&
+      Math.abs(next.y - t.y) < 1e-6 &&
+      Math.abs(next.scale - t.scale) < 1e-6 &&
+      next.rotation === t.rotation
+    ) {
+      return false;
+    }
+    ml.transform = next;
+    return true;
+  }
+
+  /** Mod değişince taban medya görsel davranışlarını ayarla. */
+  private applyModeToMediaLayer() {
+    const ml = this.mediaLayer;
+    if (!ml) return;
+    ml.springOnInteract = this.shareMode === 'story';
+    ml.roundCornersWhenDetached = this.shareMode !== 'post';
+  }
+
+  // ─────────────────────────────────────────────────────────────
+  // WP1: Mantıksal çözünürlük (B1/B2)
+  // ─────────────────────────────────────────────────────────────
+  private getLogicalSizeFor(mode: ShareMode, aspect: PostAspect): { width: number; height: number } {
+    if (mode === 'post') {
+      const s = POST_ASPECT_SIZES[aspect] || POST_ASPECT_SIZES[DEFAULT_POST_ASPECT];
+      return { width: s.width, height: s.height };
+    }
+    return { width: VERTICAL_LOGICAL_SIZE.width, height: VERTICAL_LOGICAL_SIZE.height };
+  }
+
+  /** Mantıksal boyutu moda göre uygular. Değiştiyse true. */
+  private applyLogicalSize(): boolean {
+    const size = this.getLogicalSizeFor(this.shareMode, this.postAspect);
+    const changed =
+      size.width !== this.width ||
+      size.height !== this.height ||
+      this.canvas.width !== size.width ||
+      this.canvas.height !== size.height;
+    if (!changed) return false;
+    this.width = size.width;
+    this.height = size.height;
+    this.canvas.width = size.width;
+    this.canvas.height = size.height;
+    this.invalidateStaticCache();
+    this.requestRender();
+    this.emit('resize', { width: this.width, height: this.height });
+    return true;
+  }
+
+  /** Post en-boy oranı (1:1, 4:5, 3:4, 4:3). Post dışında saklanır ve Post'a geçince uygulanır. */
+  public setPostAspect(aspect: PostAspect): void {
+    if (!POST_ASPECT_SIZES[aspect]) return;
+    const prev = this.postAspect;
+    this.postAspect = aspect;
+    if (this.shareMode !== 'post') return;
+    const resized = this.applyLogicalSize();
+    const clamped = this.applyMediaConstraints();
+    if (resized || clamped || prev !== aspect) {
+      this.invalidateStaticCache();
+      this.requestRender();
+      this.emit('change');
+    }
+  }
+
+  public getPostAspect(): PostAspect {
+    return this.postAspect;
+  }
+
+  public getLogicalSize(): { width: number; height: number } {
+    return { width: this.width, height: this.height };
   }
 
   // [START] CREATED BY Bedirhan
@@ -189,25 +622,24 @@ export class CanvasEngine {
   }
   // [END] CREATED BY Bedirhan
 
-  // [MODIFIED BY Bedirhan]
+  /**
+   * @deprecated Mantıksal boyut artık moda göre sabittir (Story/Reels 1080×1920, Post en-boy oranına göre).
+   * Hikaye/Reels'te argümanlar yok sayılır. Post'ta verilen boyut desteklenen bir en-boy oranına
+   * (±0.02) karşılık geliyorsa setPostAspect() olarak yorumlanır (eski UI 1440×1080 = 4:3 geçer).
+   */
   public updateCanvasResolution(width?: number, height?: number) {
-    const nextW = width || this.width;
-    const nextH = height || this.height;
-    const changed =
-      nextW !== this.width ||
-      nextH !== this.height ||
-      this.canvas.width !== nextW ||
-      this.canvas.height !== nextH;
-
-    this.width = nextW;
-    this.height = nextH;
-
-    if (changed) {
-      this.canvas.width = this.width;
-      this.canvas.height = this.height;
-      this.invalidateStaticCache();
-      this.requestRender();
+    if (this.shareMode === 'post' && width && height) {
+      const ratio = width / height;
+      const match = (Object.keys(POST_ASPECT_SIZES) as PostAspect[]).find((a) => {
+        const s = POST_ASPECT_SIZES[a];
+        return Math.abs(s.width / s.height - ratio) < 0.02;
+      });
+      if (match && match !== this.postAspect) {
+        this.setPostAspect(match);
+        return;
+      }
     }
+    this.applyLogicalSize();
   }
 
   public getWidth(): number {
@@ -229,37 +661,195 @@ export class CanvasEngine {
   }
 
   // [START] CREATED BY Bedirhan
-  public setShareMode(mode: ShareMode) {
-    this.shareMode = mode;
-    this.invalidateStaticCache();
-    if (mode === 'story' && this.mediaLayer && this.mediaLayer.media.type === 'video') {
-      const dur = this.mediaLayer.getDuration();
-      this.mediaLayer.trimStart = 0;
-      this.mediaLayer.trimEnd = dur > 0 ? Math.min(dur, 60) : 0;
-      this.mediaLayer.setPlaybackRate(1.0);
+  /**
+   * Modu ayarlar. Medya yüklendikten sonra mod DEĞİŞTİRİLEMEZ (B7): farklı mod için UI yeni bir
+   * oturum (yeni motor) başlatmalıdır. Kabul edildiyse true, reddedildiyse false döner.
+   */
+  public setShareMode(mode: ShareMode): boolean {
+    if (mode === this.shareMode) return true;
+    if (this.modeLocked) {
+      if (typeof console !== 'undefined') {
+        console.warn(`[CanvasEngine] Mod medya yüklendikten sonra değiştirilemez (${this.shareMode} -> ${mode}). Yeni oturum başlatın.`);
+      }
+      return false;
     }
+    this.shareMode = mode;
+    this.applyLogicalSize();
+    this.applyModeToMediaLayer();
+    this.invalidateStaticCache();
+    this.requestRender();
+    return true;
+  }
+
+  /** setShareMode ile aynı. */
+  public setMode(mode: ShareMode): boolean {
+    return this.setShareMode(mode);
   }
 
   public getShareMode(): ShareMode {
     return this.shareMode;
   }
+
+  public getMode(): ShareMode {
+    return this.shareMode;
+  }
+
+  /** Medya yüklendiyse true (mod kilitli). */
+  public isModeLocked(): boolean {
+    return this.modeLocked;
+  }
   // [END] CREATED BY Bedirhan
 
+  // ─────────────────────────────────────────────────────────────
+  // WP1: Medya kaydı (D3)
+  // ─────────────────────────────────────────────────────────────
+  private registerMedia(media: EditorMedia) {
+    this.mediaRegistry.add(media);
+  }
+
+  private releaseMediaNow(media: EditorMedia) {
+    if (this.releasedMedia.has(media)) return;
+    MediaSourceManager.release(media);
+    this.mediaRegistry.delete(media);
+    this.releasedMedia.add(media);
+    const oi = this.orphanMedia.indexOf(media);
+    if (oi !== -1) this.orphanMedia.splice(oi, 1);
+  }
+
+  private isOverlayMedia(media: EditorMedia): boolean {
+    for (const m of this.overlayMedia.values()) {
+      if (m === media) return true;
+    }
+    return false;
+  }
+
+  private isMediaInUse(media: EditorMedia): boolean {
+    if (this.mediaLayer && this.mediaLayer.media === media) return true;
+    for (let i = 0; i < this.videoClips.length; i++) {
+      if (this.videoClips[i].media === media) return true;
+    }
+    return false;
+  }
+
+  /**
+   * Hiçbir klibin kullanmadığı klip medyalarını "yetim" havuzuna alır (undo için duraklatılmış tutulur).
+   * Havuz 3'ü aşarsa en eskisi serbest bırakılır.
+   */
+  private collectUnusedClipMedia() {
+    for (const media of Array.from(this.mediaRegistry)) {
+      if (this.isOverlayMedia(media) || this.isMediaInUse(media)) {
+        const oi = this.orphanMedia.indexOf(media);
+        if (oi !== -1) this.orphanMedia.splice(oi, 1);
+        continue;
+      }
+      if (!this.orphanMedia.includes(media)) {
+        if (media.element instanceof HTMLVideoElement) {
+          try { media.element.pause(); } catch {}
+        }
+        this.orphanMedia.push(media);
+      }
+    }
+    while (this.orphanMedia.length > CanvasEngine.MAX_ORPHAN_MEDIA) {
+      const oldest = this.orphanMedia[0];
+      this.releaseMediaNow(oldest);
+    }
+  }
+
+  /** Kullanılmayan (yetim) klip medyalarını hemen serbest bırakır. Undo geçmişi temizlenince çağrılabilir. */
+  public purgeUnusedMedia(): void {
+    this.collectUnusedClipMedia();
+    for (const m of [...this.orphanMedia]) this.releaseMediaNow(m);
+  }
+
+  /** Overlay dışındaki tüm medyayı serbest bırakır (loadMedia değişimi). */
+  private releaseAllClipMedia() {
+    for (const media of Array.from(this.mediaRegistry)) {
+      if (this.isOverlayMedia(media)) continue;
+      this.releaseMediaNow(media);
+    }
+    this.orphanMedia = [];
+  }
+
+  /** restore(): serbest bırakılmış bir klip medyasını kaynağından yeniden yükler. */
+  private reviveMedia(old: EditorMedia): void {
+    if (this.revivingMedia.has(old) || !old.source) return;
+    const token = this.loadToken;
+    const p = MediaSourceManager.load(old.source, old.type)
+      .then((fresh) => {
+        if (this.destroyed || token !== this.loadToken) {
+          MediaSourceManager.release(fresh);
+          return null;
+        }
+        this.registerMedia(fresh);
+        let used = false;
+        this.videoClips = this.videoClips.map((c) => {
+          if (c.media !== old) return c;
+          used = true;
+          return { ...c, media: fresh, sourceMediaId: fresh.objectUrl || c.sourceMediaId };
+        });
+        if (this.mediaLayer && this.mediaLayer.media === old) {
+          this.mediaLayer.media = fresh;
+          used = true;
+        }
+        if (!used) {
+          this.collectUnusedClipMedia();
+        } else {
+          this.activePlayingClipId = null;
+          this.invalidateStaticCache();
+          this.requestRender();
+          this.emit('change');
+        }
+        return fresh;
+      })
+      .catch(() => null)
+      .finally(() => {
+        this.revivingMedia.delete(old);
+      });
+    this.revivingMedia.set(old, p);
+  }
+
   // [MODIFIED BY Bedirhan]
-  public async loadMedia(source: string | Blob | File, forcedType?: MediaType, autoResizeCanvas = false): Promise<EditorMedia> {
+  /**
+   * Taban medyayı yükler (veya değiştirir). Görseller ~4096 px'e küçültülür.
+   * Hata: MediaLoadError ('timeout' | 'unsupported' | 'decode'); mevcut medya korunur.
+   * Motor yok edildiyse veya araya yeni bir loadMedia girdiyse AbortError fırlatır.
+   * Post modunda video MediaLoadError('unsupported') ile reddedilir.
+   * İlk başarılı yüklemeden sonra mod kilitlenir.
+   * @param _autoResizeCanvas @deprecated Yok sayılır: tuval boyutu medyadan türetilmez (B2).
+   */
+  public async loadMedia(source: string | Blob | File, forcedType?: MediaType, _autoResizeCanvas = false): Promise<EditorMedia> {
+    void _autoResizeCanvas;
+    if (this.destroyed) throw new DOMException('Engine destroyed', 'AbortError');
+    const token = ++this.loadToken;
+
+    const media = await MediaSourceManager.load(source, forcedType);
+
+    if (this.destroyed || token !== this.loadToken) {
+      MediaSourceManager.release(media);
+      throw new DOMException('Media load superseded', 'AbortError');
+    }
+    if (this.shareMode === 'post' && media.type === 'video') {
+      MediaSourceManager.release(media);
+      throw new MediaLoadError('unsupported', 'video', 'Post mode accepts images only');
+    }
+
+    // Eski medyayı yalnızca yeni medya hazır olduktan sonra bırak (hata durumunda editör açık kalır)
+    this.pauseInternal();
     this.stopVideoLoop();
     if (this.mediaLayer) {
       this.mediaLayer.destroy();
       this.mediaLayer = null;
     }
-
-    const media = await MediaSourceManager.load(source, forcedType);
-
-    if (autoResizeCanvas && media.width && media.height) {
-      this.updateCanvasResolution(media.width, media.height);
-    }
+    this.releaseAllClipMedia();
+    this.registerMedia(media);
+    this.baseMediaKey = `media_${++mediaKeyCounter}`;
+    this.modeLocked = true;
+    this.playIntent = false;
+    this.resumeOnVisible = false;
+    this.setSoundBlocked(false);
 
     this.mediaLayer = new MediaLayer(media, { fitMode: this.fitMode });
+    this.applyModeToMediaLayer();
     const currentPreset = FILTER_PRESETS[this.activeFilterIndex];
     if (currentPreset) {
       this.mediaLayer.setPreset(currentPreset, () => this.requestRender());
@@ -268,8 +858,10 @@ export class CanvasEngine {
     if (this.shareMode === 'reels' && media.type === 'image') {
       this.mediaLayer.enableMotionPhoto(5);
     }
+    this.applyMediaConstraints();
 
-    const initDur = Math.max(0.5, this.mediaLayer.getDuration() || 5);
+    // B8: tek klip de MAX_VIDEO_SEC ile sınırlı (fazlası sessizce kaybolmaz, baştan kırpılır)
+    const initDur = Math.min(MAX_VIDEO_SEC, Math.max(0.5, this.mediaLayer.getDuration() || 5));
     this.videoClips = [
       {
         id: `clip_${Date.now().toString(36)}_0`,
@@ -288,9 +880,9 @@ export class CanvasEngine {
       },
     ];
     this.nleTimelineTime = 0;
+    this.activePlayingClipId = null;
 
     this.invalidateStaticCache();
-    this.render();
     this.requestRender();
     this.emit('change');
 
@@ -307,9 +899,11 @@ export class CanvasEngine {
   }
 
   public setFitMode(fitMode: FitMode) {
+    if (this.fitMode === fitMode && (!this.mediaLayer || this.mediaLayer.fitMode === fitMode)) return;
     this.fitMode = fitMode;
     if (this.mediaLayer) {
       this.mediaLayer.fitMode = fitMode;
+      this.applyMediaConstraints();
       this.invalidateStaticCache();
       this.requestRender();
       this.emit('change');
@@ -323,8 +917,11 @@ export class CanvasEngine {
       let next = (target.transform.rotation + degrees) % 360;
       if (next < 0) next += 360;
       target.transform.rotation = Math.round(next);
+      if (target === this.mediaLayer) {
+        this.applyMediaConstraints();
+        this.syncActiveClipTransformFromMediaLayer();
+      }
       this.invalidateStaticCache();
-      this.render();
       this.requestRender();
       this.emit('change');
     }
@@ -336,11 +933,30 @@ export class CanvasEngine {
     if (target) {
       const norm = (degrees % 360 + 360) % 360;
       target.transform.rotation = Math.round(norm);
+      if (target === this.mediaLayer) {
+        this.applyMediaConstraints();
+        this.syncActiveClipTransformFromMediaLayer();
+      }
       this.invalidateStaticCache();
-      this.render();
       this.requestRender();
       this.emit('change');
     }
+  }
+
+  /** Taban medyayı tam olarak bu dönüşüme ayarlar (Post kırpma ekranı; cover kısıtı uygulanır). */
+  public setMediaTransform(partial: Partial<LayerTransform>): void {
+    const ml = this.mediaLayer;
+    if (!ml) return;
+    ml.transform = { ...ml.transform, ...partial };
+    this.applyMediaConstraints();
+    this.syncActiveClipTransformFromMediaLayer();
+    this.invalidateStaticCache();
+    this.requestRender();
+    this.emit('change');
+  }
+
+  public getMediaTransform(): LayerTransform | null {
+    return this.mediaLayer ? { ...this.mediaLayer.transform } : null;
   }
 
   public getMediaRotation(): number {
@@ -353,7 +969,6 @@ export class CanvasEngine {
     if (this.mediaLayer) {
       this.mediaLayer.flipHorizontal();
       this.invalidateStaticCache();
-      this.render();
       this.requestRender();
       this.emit('change');
     }
@@ -364,7 +979,6 @@ export class CanvasEngine {
     if (this.mediaLayer) {
       this.mediaLayer.flipVertical();
       this.invalidateStaticCache();
-      this.render();
       this.requestRender();
       this.emit('change');
     }
@@ -374,7 +988,6 @@ export class CanvasEngine {
     if (!this.mediaLayer) return;
     this.mediaLayer.setPostAdjustments(adj);
     this.invalidateStaticCache();
-    this.render();
     this.requestRender();
     this.emit('change');
   }
@@ -383,7 +996,6 @@ export class CanvasEngine {
     if (!this.mediaLayer) return;
     this.mediaLayer.resetPostAdjustments();
     this.invalidateStaticCache();
-    this.render();
     this.requestRender();
     this.emit('change');
   }
@@ -396,7 +1008,6 @@ export class CanvasEngine {
     if (!this.mediaLayer) return;
     this.mediaLayer.setReelsEffect(effect);
     this.invalidateStaticCache();
-    this.render();
     this.requestRender();
     this.emit('change');
   }
@@ -409,7 +1020,6 @@ export class CanvasEngine {
     if (!this.mediaLayer) return;
     this.mediaLayer.setEffectClips(clips);
     this.invalidateStaticCache();
-    this.render();
     this.requestRender();
     this.emit('change');
   }
@@ -427,8 +1037,9 @@ export class CanvasEngine {
       this.mediaLayer.transform.scale = 1.0;
       this.mediaLayer.transform.flipH = false;
       this.mediaLayer.transform.flipV = false;
+      this.applyMediaConstraints();
+      this.syncActiveClipTransformFromMediaLayer();
       this.invalidateStaticCache();
-      this.render();
       this.requestRender();
       this.emit('change');
     }
@@ -516,10 +1127,17 @@ export class CanvasEngine {
   ): Promise<OverlayImageLayer> {
     let imgElement: HTMLImageElement;
 
+    let media: EditorMedia | null = null;
+
     if (source instanceof HTMLImageElement) {
       imgElement = source;
     } else {
-      const media = await MediaSourceManager.load(source, 'image');
+      if (this.destroyed) throw new DOMException('Engine destroyed', 'AbortError');
+      media = await MediaSourceManager.load(source, 'image');
+      if (this.destroyed) {
+        MediaSourceManager.release(media);
+        throw new DOMException('Engine destroyed', 'AbortError');
+      }
       imgElement = media.element as HTMLImageElement;
     }
 
@@ -527,13 +1145,17 @@ export class CanvasEngine {
       image: imgElement,
       transform: { x, y, scale: 1.0, rotation: 0 }
     });
+    if (media) {
+      // Overlay görseli silinse bile snapshot ile geri gelebilir: destroy/yeni oturumda serbest bırakılır
+      this.registerMedia(media);
+      this.overlayMedia.set(layer, media);
+    }
 
     this.assignDefaultOverlayTiming(layer);
 
     this.overlayLayers.push(layer);
     this.interactionManager.setSelectedLayer(layer);
     this.invalidateStaticCache();
-    this.render();
     this.requestRender();
     this.emit('change');
     return layer;
@@ -551,34 +1173,29 @@ export class CanvasEngine {
     this.overlayLayers.push(layer);
     this.interactionManager.setSelectedLayer(layer);
     this.invalidateStaticCache();
-    this.render();
     this.requestRender();
     this.emit('change');
     return layer;
   }
 
-  public addMusicSticker(audioMeta: StoryAudioMeta, x = 0.5, y = 0.65): MusicStickerLayer {
-    // Önceki müzik çıkartması varsa kaldır
-    this.overlayLayers = this.overlayLayers.filter((l) => !(l instanceof MusicStickerLayer));
-    const layer = new MusicStickerLayer({
-      audioMeta,
-      x,
-      y,
-      onUpdate: () => this.requestRender(),
-    });
-    const totalDur = Math.max(3, this.getTotalTimelineDuration() || 15);
-    layer.timelineStart =
-      typeof audioMeta.timelineStart === 'number' ? audioMeta.timelineStart : 0;
-    layer.timelineEnd =
-      typeof audioMeta.timelineEnd === 'number' && audioMeta.timelineEnd > layer.timelineStart
-        ? audioMeta.timelineEnd
-        : totalDur;
-    this.overlayLayers.push(layer);
-    this.interactionManager.setSelectedLayer(layer);
-    this.invalidateStaticCache();
-    this.render();
-    this.requestRender();
-    this.emit('change');
+  /**
+   * Müziği ayarlar ve (Hikaye/Post'ta) YENİ bir sticker ekler; öncekini değiştirir.
+   * Reels'te sticker eklenmez ve null döner (B6). Tercihen setMusic() kullanın.
+   */
+  public addMusicSticker(audioMeta: StoryAudioMeta, x = 0.5, y = 0.65): MusicStickerLayer | null {
+    this.musicMeta = { ...audioMeta };
+    if (this.shareMode === 'reels') {
+      if (this.overlayLayers.some((l) => l instanceof MusicStickerLayer)) {
+        this.overlayLayers = this.overlayLayers.filter((l) => !(l instanceof MusicStickerLayer));
+        this.invalidateStaticCache();
+        this.requestRender();
+        this.emit('change');
+      }
+      this.emit('music-change', { ...audioMeta });
+      return null;
+    }
+    const layer = this.createMusicStickerLayer(audioMeta, x, y);
+    this.emit('music-change', { ...audioMeta });
     return layer;
   }
 
@@ -601,7 +1218,7 @@ export class CanvasEngine {
       layer.temporalVisible = true;
     } else {
       layer.timelineStart = 0;
-      layer.timelineEnd = 60;
+      layer.timelineEnd = MAX_VIDEO_SEC;
       layer.temporalVisible = true;
     }
   }
@@ -609,6 +1226,90 @@ export class CanvasEngine {
   public getMusicSticker(): MusicStickerLayer | null {
     const found = this.overlayLayers.find((l) => l instanceof MusicStickerLayer);
     return (found as MusicStickerLayer) || null;
+  }
+
+  /**
+   * Müzik sticker'ını (ve ona bağlı müziği) kaldırır (B6). Sticker yoksa da müzik temizlenir.
+   * Kaldırılan bir şey olduysa true.
+   */
+  public removeMusicSticker(): boolean {
+    const hadSticker = this.overlayLayers.some((l) => l instanceof MusicStickerLayer);
+    const hadMusic = this.musicMeta !== null;
+    if (hadSticker) {
+      const sel = this.interactionManager.getSelectedLayer();
+      if (sel instanceof MusicStickerLayer) this.interactionManager.setSelectedLayer(null);
+      this.overlayLayers = this.overlayLayers.filter((l) => !(l instanceof MusicStickerLayer));
+    }
+    this.musicMeta = null;
+    if (hadMusic) this.emit('music-change', null);
+    if (hadSticker) {
+      this.invalidateStaticCache();
+      this.requestRender();
+      this.emit('change');
+    }
+    return hadSticker || hadMusic;
+  }
+
+  /**
+   * Müziği ayarlar ve sticker yaşam döngüsünü yönetir (B6):
+   * - null: müzik ve sticker kaldırılır.
+   * - Hikaye/Post: sticker yoksa eklenir, varsa konumu korunarak güncellenir.
+   * - Reels: sticker ASLA tuvale eklenmez (yalnızca meta tutulur).
+   * Not: Müzik sesini çalmak/dışa aktarmak UI + exporter'ın işidir (music seçeneği).
+   */
+  public setMusic(meta: StoryAudioMeta | null): void {
+    if (!meta) {
+      this.removeMusicSticker();
+      return;
+    }
+    this.musicMeta = { ...meta };
+    if (this.shareMode === 'reels') {
+      if (this.overlayLayers.some((l) => l instanceof MusicStickerLayer)) {
+        this.overlayLayers = this.overlayLayers.filter((l) => !(l instanceof MusicStickerLayer));
+        this.invalidateStaticCache();
+        this.requestRender();
+        this.emit('change');
+      }
+    } else {
+      const existing = this.getMusicSticker();
+      if (existing) {
+        existing.setAudioMeta(meta);
+        this.invalidateStaticCache();
+        this.requestRender();
+        this.emit('change');
+      } else {
+        this.createMusicStickerLayer(meta, 0.5, 0.65);
+      }
+    }
+    this.emit('music-change', { ...meta });
+  }
+
+  public getMusic(): StoryAudioMeta | null {
+    return this.musicMeta ? { ...this.musicMeta } : null;
+  }
+
+  private createMusicStickerLayer(audioMeta: StoryAudioMeta, x: number, y: number): MusicStickerLayer {
+    // Önceki müzik çıkartması varsa kaldır
+    this.overlayLayers = this.overlayLayers.filter((l) => !(l instanceof MusicStickerLayer));
+    const layer = new MusicStickerLayer({
+      audioMeta,
+      x,
+      y,
+      onUpdate: () => this.requestRender(),
+    });
+    const totalDur = Math.max(3, this.getTotalTimelineDuration() || 15);
+    layer.timelineStart =
+      typeof audioMeta.timelineStart === 'number' ? audioMeta.timelineStart : 0;
+    layer.timelineEnd =
+      typeof audioMeta.timelineEnd === 'number' && audioMeta.timelineEnd > layer.timelineStart
+        ? audioMeta.timelineEnd
+        : totalDur;
+    this.overlayLayers.push(layer);
+    this.interactionManager.setSelectedLayer(layer);
+    this.invalidateStaticCache();
+    this.requestRender();
+    this.emit('change');
+    return layer;
   }
 
   /**
@@ -660,16 +1361,26 @@ export class CanvasEngine {
     this.emit('snap-guide', snap);
   }
 
+  /**
+   * Bir üst katmanı kaldırır. Katman nesnesi yok edilmez: daha önce alınmış bir snapshot ile geri gelebilir.
+   * Müzik sticker'ı silinirse müzik de kaldırılır ('music-change' null).
+   * Taban medya katmanı bu yolla kaldırılamaz.
+   */
   public removeLayer(layerId: string) {
+    if (this.mediaLayer && this.mediaLayer.id === layerId) return;
+    const target = this.overlayLayers.find((l) => l.id === layerId);
+    if (!target) return;
+
     const sel = this.interactionManager.getSelectedLayer();
     if (sel && sel.id === layerId) {
       this.interactionManager.setSelectedLayer(null);
     }
+    target.isInteracting = false;
+    this.overlayLayers = this.overlayLayers.filter((l) => l.id !== layerId);
 
-    if (this.mediaLayer && this.mediaLayer.id === layerId) {
-      this.mediaLayer = null;
-    } else {
-      this.overlayLayers = this.overlayLayers.filter((l) => l.id !== layerId);
+    if (target instanceof MusicStickerLayer && this.musicMeta) {
+      this.musicMeta = null;
+      this.emit('music-change', null);
     }
 
     this.invalidateStaticCache();
@@ -679,6 +1390,40 @@ export class CanvasEngine {
 
   public getSelectedLayer(): BaseLayer | null {
     return this.interactionManager.getSelectedLayer();
+  }
+
+  /** Üst katmanların (z-sırasıyla, alttan üste) kopya dizisi. */
+  public getOverlayLayers(): BaseLayer[] {
+    return [...this.overlayLayers];
+  }
+
+  public getLayerById(layerId: string): BaseLayer | null {
+    return this.overlayLayers.find((l) => l.id === layerId) || null;
+  }
+
+  /**
+   * Metin katmanını tek adımda günceller (tek render + tek 'change').
+   * Boş metin katmanı SİLMEZ; UI isterse removeLayer çağırır.
+   */
+  public updateText(
+    layerId: string,
+    patch: { text?: string; style?: Partial<TextStyle>; fontPreset?: FontPreset; bgPreset?: TextBgPreset }
+  ): TextLayer | null {
+    const layer = this.overlayLayers.find((l) => l.id === layerId);
+    if (!(layer instanceof TextLayer)) return null;
+    if (patch.fontPreset) layer.setFontPreset(patch.fontPreset, () => this.requestRender());
+    if (patch.bgPreset) layer.setBgPreset(patch.bgPreset);
+    if (patch.style) layer.setStyle(patch.style);
+    if (typeof patch.text === 'string') layer.setText(patch.text);
+    if ((patch.style?.color || patch.fontPreset || patch.bgPreset) && (layer.fontPreset === 'neon' || layer.bgPreset === 'neon')) {
+      layer.setStyle({ shadowColor: layer.style.color });
+    }
+    layer.visible = true;
+    layer.temporalVisible = true;
+    this.invalidateStaticCache();
+    this.requestRender();
+    this.emit('change');
+    return layer;
   }
 
   public selectLayer(layer: BaseLayer | null) {
@@ -699,16 +1444,50 @@ export class CanvasEngine {
     return found;
   }
 
+  /**
+   * Bir sonraki karede TEK çizim planlar (D2). Aynı karede bekleyen 'transform' / 'drag-move'
+   * olayları da burada yayınlanır. Oynatma döngüsü zaten bu karede çiziyorsa ikinci çizim yapılmaz.
+   */
   public requestRender() {
     this.invalidateStaticCache();
-    if (this.isDirty) return;
+    if (this.isDirty || this.destroyed) return;
+    if (typeof requestAnimationFrame === 'undefined') return;
     this.isDirty = true;
 
-    requestAnimationFrame(() => {
-      this.render();
-      this.isDirty = false;
+    this.renderRafId = requestAnimationFrame(() => {
+      this.renderRafId = null;
+      try {
+        if (this.destroyed) return;
+        if (!this.isLoopRenderingThisFrame()) {
+          this.render();
+        }
+      } finally {
+        this.isDirty = false;
+      }
       this.emit('render');
+      if (this.hasPendingTransform) {
+        const layer = this.pendingTransformLayer;
+        this.hasPendingTransform = false;
+        this.pendingTransformLayer = null;
+        this.emit('transform', layer);
+      }
+      if (this.pendingDragMove) {
+        const info = this.pendingDragMove;
+        this.pendingDragMove = null;
+        this.emit('drag-move', info);
+      }
     });
+  }
+
+  /** Oynatma döngüsü bu karede zaten render() çağıracaksa true. */
+  private isLoopRenderingThisFrame(): boolean {
+    if (this.videoLoopId === null || this.isExportingVideo) return false;
+    const ml = this.mediaLayer;
+    if (!ml) return false;
+    if (this.shareMode === 'reels' && this.videoClips.length > 0) return this.isNlePlaying;
+    if (ml.isMotionPhoto) return ml.virtualPlaying;
+    const v = ml.getVideoElement();
+    return Boolean(v && !v.paused && !v.ended);
   }
 
   /**
@@ -1095,16 +1874,56 @@ export class CanvasEngine {
     if (this.nleTimelineTime > totalDur) {
       this.nleTimelineTime = Math.max(0, totalDur - 0.05);
     }
+    this.activePlayingClipId = null;
+    this.reviveReleasedClipMedia();
     this.syncMediaLayerWithClips();
+    this.collectUnusedClipMedia();
     this.requestRender();
     this.emit('video-time', this.getVideoState());
     this.emit('change');
   }
 
+  /** Serbest bırakılmış medyaya işaret eden klipler için yeniden yükleme başlatır (undo). */
+  private reviveReleasedClipMedia() {
+    for (let i = 0; i < this.videoClips.length; i++) {
+      const m = this.videoClips[i].media;
+      if (m && this.releasedMedia.has(m)) this.reviveMedia(m);
+    }
+  }
+
+  /** Klip medyasının gerçek süresi (sn). Fotoğraf klibi için MAX_VIDEO_SEC. */
+  private getClipMediaDuration(clip: VideoTrackClip): number {
+    if (clip.isMotionPhoto) return MAX_VIDEO_SEC;
+    const m = clip.media;
+    if (m) {
+      if (Number.isFinite(m.duration) && (m.duration || 0) > 0) return m.duration as number;
+      if (m.element instanceof HTMLVideoElement && Number.isFinite(m.element.duration) && m.element.duration > 0) {
+        return m.element.duration;
+      }
+    }
+    const mlDur = this.mediaLayer && (!m || this.mediaLayer.media === m) ? this.mediaLayer.getDuration() : 0;
+    return mlDur > 0 ? mlDur : MAX_VIDEO_SEC;
+  }
+
+  private sumClipDurations(excludeId?: string): number {
+    let sum = 0;
+    for (let i = 0; i < this.videoClips.length; i++) {
+      const c = this.videoClips[i];
+      if (excludeId && c.id === excludeId) continue;
+      sum += Math.max(0.2, c.duration);
+    }
+    return sum;
+  }
+
+  /** Reels: MAX_VIDEO_SEC'e kadar kalan timeline süresi (sn). */
+  public getRemainingTimelineCapacity(): number {
+    return Math.max(0, Number((MAX_VIDEO_SEC - this.sumClipDurations()).toFixed(2)));
+  }
+
   public getTotalTimelineDuration(): number {
     if (this.shareMode === 'reels' && this.videoClips.length > 0) {
       const sum = this.videoClips.reduce((acc, c) => acc + Math.max(0.2, c.duration), 0);
-      return Number(Math.max(0.5, Math.min(60, sum)).toFixed(2));
+      return Number(Math.max(0.5, Math.min(MAX_VIDEO_SEC, sum)).toFixed(2));
     }
     const ml = this.mediaLayer;
     if (!ml) return 0;
@@ -1205,16 +2024,23 @@ export class CanvasEngine {
     const totalDur = this.getTotalTimelineDuration();
     this.nleTimelineTime = Math.max(0, Math.min(this.nleTimelineTime, totalDur - 0.05));
     this.syncMediaLayerWithClips();
+    // Silinen klibin medyası taban katmanda kalmasın; sonra kullanılmayan medyayı topla (D3)
+    const active = this.getActiveClipAtTime(this.nleTimelineTime);
+    if (active) this.applyClipTransformToMediaLayer(active.clip);
+    this.activePlayingClipId = null;
+    this.collectUnusedClipMedia();
     this.seekVideo(this.nleTimelineTime).catch(() => {});
     this.emit('video-time', this.getVideoState());
     this.emit('change');
     return true;
   }
 
+  /** Klibi kopyalar. Toplam süre MAX_VIDEO_SEC'i aşacaksa null döner (B8). */
   public duplicateClip(id: string): VideoTrackClip | null {
     const idx = this.videoClips.findIndex((c) => c.id === id);
     if (idx === -1) return null;
     const orig = this.videoClips[idx];
+    if (Math.max(0.2, orig.duration) > this.getRemainingTimelineCapacity() + 0.01) return null;
     const clone: VideoTrackClip = {
       ...orig,
       id: `clip_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 5)}`,
@@ -1228,14 +2054,33 @@ export class CanvasEngine {
     return clone;
   }
 
+  /**
+   * Reels'e klip ekler. Kalan kapasite (MAX_VIDEO_SEC) 0.5 sn'den azsa medya yüklenmeden null döner;
+   * aksi halde yeni klip kalan kapasiteye kırpılır (B8). Yükleme hatası: MediaLoadError.
+   */
   public async appendVideoClip(source: string | Blob | File): Promise<VideoTrackClip | null> {
-    if (!this.mediaLayer) return null;
+    if (!this.mediaLayer || this.destroyed) return null;
+    if (this.getRemainingTimelineCapacity() < 0.5) return null;
     this.pauseVideo();
+    const token = this.loadToken;
     const newMedia = await MediaSourceManager.load(source);
+    if (this.destroyed || token !== this.loadToken || !this.mediaLayer) {
+      MediaSourceManager.release(newMedia);
+      return null;
+    }
+    const capacity = this.getRemainingTimelineCapacity();
+    if (capacity < 0.5) {
+      MediaSourceManager.release(newMedia);
+      return null;
+    }
+    this.registerMedia(newMedia);
     const isPhoto = newMedia.type === 'image';
-    const rawDur = isPhoto
-      ? 5
-      : Math.max(0.5, Math.min(60, Number.isFinite(newMedia.duration) && (newMedia.duration || 0) > 0 ? (newMedia.duration as number) : 5));
+    const rawDur = Math.min(
+      capacity,
+      isPhoto
+        ? 5
+        : Math.max(0.5, Math.min(MAX_VIDEO_SEC, Number.isFinite(newMedia.duration) && (newMedia.duration || 0) > 0 ? (newMedia.duration as number) : 5))
+    );
 
     let thumbnailUrl: string | undefined;
     try {
@@ -1288,6 +2133,7 @@ export class CanvasEngine {
       generateVideoThumbnails(source, {
         count: 8,
         onThumbnail: (thumbs) => {
+          if (this.destroyed) return;
           const idx = this.videoClips.findIndex((c) => c.id === newClip.id);
           if (idx !== -1 && thumbs.length > 0) {
             this.videoClips[idx] = {
@@ -1407,11 +2253,16 @@ export class CanvasEngine {
       flipH: this.mediaLayer?.transform.flipH ?? false,
       flipV: this.mediaLayer?.transform.flipV ?? false,
     };
-    const nextTransform: LayerTransform = {
+    let nextTransform: LayerTransform = {
       ...currentTransform,
       ...(partialTransform || {}),
     };
     const nextFitMode: FitMode = fitMode || clip.fitMode || this.mediaLayer?.fitMode || 'cover';
+    // Reels fotoğraf klibi her zaman kareyi kaplar (C1)
+    const clipMedia = clip.media || this.mediaLayer?.media;
+    if (this.shareMode === 'reels' && clip.isMotionPhoto && clipMedia) {
+      nextTransform = CanvasEngine.clampTransformToCover(nextTransform, clipMedia, nextFitMode, this.width, this.height);
+    }
 
     this.videoClips[idx] = {
       ...clip,
@@ -1468,12 +2319,18 @@ export class CanvasEngine {
     const idx = this.videoClips.findIndex((c) => c.id === id);
     if (idx === -1) return;
     const clip = this.videoClips[idx];
-    const maxMediaDur = clip.isMotionPhoto
-      ? 60
-      : Math.max(0.5, this.mediaLayer?.media.duration || 60);
-    const s = Math.max(0, Math.min(newSourceStart, maxMediaDur - 0.3));
-    const e = Math.max(s + 0.3, Math.min(newSourceEnd, maxMediaDur));
+    // B9: klibin KENDİ medya süresiyle sınırla (aktif medyanınkiyle değil)
+    const maxMediaDur = Math.max(0.5, this.getClipMediaDuration(clip));
     const rate = Math.max(0.25, clip.playbackRate || 1);
+    let s = Math.max(0, Math.min(newSourceStart, maxMediaDur - 0.3));
+    let e = Math.max(s + 0.3, Math.min(newSourceEnd, maxMediaDur));
+    // B8: toplam timeline MAX_VIDEO_SEC'i aşamaz; kullanıcının sürüklediği kenar sınırlanır
+    const maxSpan = Math.max(0.3, (MAX_VIDEO_SEC - this.sumClipDurations(clip.id)) * rate);
+    if (e - s > maxSpan) {
+      const startMoved = Math.abs(newSourceStart - clip.sourceStart) > Math.abs(newSourceEnd - clip.sourceEnd);
+      if (startMoved) s = Math.max(0, e - maxSpan);
+      else e = s + maxSpan;
+    }
     this.videoClips[idx] = {
       ...clip,
       sourceStart: Number(s.toFixed(2)),
@@ -1487,7 +2344,15 @@ export class CanvasEngine {
   }
 
   public updateClipSpeed(id: string, rate: number): void {
-    const clampedRate = Math.max(0.25, Math.min(3.0, rate));
+    let clampedRate = Math.max(0.25, Math.min(3.0, rate));
+    // B8: yavaşlatma toplam süreyi MAX_VIDEO_SEC üstüne çıkaramaz
+    const targets = this.videoClips.filter((c) => !id || c.id === id);
+    const span = targets.reduce((acc, c) => acc + Math.max(0, c.sourceEnd - c.sourceStart), 0);
+    const capacity = MAX_VIDEO_SEC - (id ? this.sumClipDurations(id) : 0);
+    if (span > 0 && capacity > 0.2) {
+      const minRate = span / capacity;
+      if (clampedRate < minRate) clampedRate = Math.min(3.0, Math.ceil(minRate * 100) / 100);
+    }
     this.videoClips = this.videoClips.map((c) => {
       if (id && c.id !== id) return c;
       const dur = Number(Math.max(0.2, (c.sourceEnd - c.sourceStart) / clampedRate).toFixed(2));
@@ -1518,6 +2383,7 @@ export class CanvasEngine {
     });
     if (this.mediaLayer) {
       this.mediaLayer.setVolume(clampedVol, muted);
+      this.reconcileSoundBlockAfterVolumeChange();
     }
     this.emit('video-time', this.getVideoState());
     this.emit('change');
@@ -1805,6 +2671,7 @@ export class CanvasEngine {
       return;
     }
     this.mediaLayer.setVolume(volume, muted);
+    this.reconcileSoundBlockAfterVolumeChange();
     this.emit('video-time', this.getVideoState());
     this.emit('change');
   }
@@ -1884,35 +2751,44 @@ export class CanvasEngine {
     try {
       video.playbackRate = targetRate;
       video.volume = active.clip.volume;
-      video.muted = active.clip.muted;
+      // B5: otomatik oynatma engeli yalnızca elementi sessize alır, klip tercihi değişmez
+      video.muted = Boolean(active.clip.muted) || this.soundBlocked;
       if (Math.abs(video.currentTime - active.localSourceTime) > 0.05) {
         video.currentTime = active.localSourceTime;
       }
     } catch {}
 
     if (video.paused || video.ended) {
-      video.play().catch(() => {
-        video.muted = true;
-        ml.muted = true;
-        video.play().catch(() => {});
-      });
+      this.playElementWithFallback(video, Boolean(active.clip.muted)).catch(() => {});
     }
   }
 
-  public async playVideo(): Promise<void> {
-    if (!this.mediaLayer) return;
+  /** Dışa aktarma sırasında istenen oynatma, aktarma bitince başlar (B10). */
+  private resumeAfterExport = false;
 
-    if (typeof navigator !== 'undefined' && 'mediaSession' in navigator) {
-      try {
-        navigator.mediaSession.playbackState = 'none';
-        navigator.mediaSession.metadata = null;
-      } catch {}
+  /**
+   * Oynatmayı başlatır / sürdürür (Hikaye videosu, hareketli fotoğraf veya Reels NLE).
+   * Sesli oynatma reddedilirse sessiz oynar ve 'sound-blocked' yayınlar; tercih kalıcı değişmez.
+   * Dışa aktarma sürerken çağrılırsa aktarma bitince oynatılır.
+   */
+  public async playVideo(): Promise<void> {
+    if (!this.mediaLayer || this.destroyed) return;
+    this.playIntent = true;
+    this.resumeOnVisible = false;
+
+    if (this.isExportingVideo) {
+      this.resumeAfterExport = true;
+      return;
     }
 
+    this.clearMediaSession();
+
     // Oynatma başladığında tüm etkileşim bayraklarını sıfırla (Transform sonrası kilitlenmeyi önler)
-    this.mediaLayer.isInteracting = false;
-    for (let i = 0; i < this.overlayLayers.length; i++) {
-      this.overlayLayers[i].isInteracting = false;
+    if (!this.interactionManager.isGestureActive()) {
+      this.mediaLayer.isInteracting = false;
+      for (let i = 0; i < this.overlayLayers.length; i++) {
+        this.overlayLayers[i].isInteracting = false;
+      }
     }
 
     if (this.shareMode === 'reels' && this.videoClips.length > 0) {
@@ -1948,31 +2824,36 @@ export class CanvasEngine {
       return;
     }
 
-    const video = this.mediaLayer.getVideoElement();
+    const ml = this.mediaLayer;
+    const video = ml.getVideoElement();
     if (!video) return;
 
-    if (video.currentTime < this.mediaLayer.trimStart || video.currentTime >= this.mediaLayer.trimEnd) {
-      video.currentTime = this.mediaLayer.trimStart;
-    }
-    video.playbackRate = this.mediaLayer.playbackRate;
-    video.volume = this.mediaLayer.volume;
-    video.muted = this.mediaLayer.muted;
-
+    const end = ml.trimEnd > 0 ? ml.trimEnd : ml.getDuration();
     try {
-      await video.play();
-    } catch {
-      video.muted = true;
-      this.mediaLayer.muted = true;
-      try {
-        await video.play();
-      } catch {}
+      if (video.ended || video.currentTime < ml.trimStart || (end > 0 && video.currentTime >= end - 0.02)) {
+        video.currentTime = ml.trimStart;
+      }
+      video.playbackRate = ml.playbackRate;
+      video.volume = ml.volume;
+    } catch {}
+
+    await this.playElementWithFallback(video, ml.muted);
+
+    // Bekleme sırasında durdurulduysa veya motor yok edildiyse döngüyü başlatma
+    if (this.destroyed || !this.playIntent || this.mediaLayer !== ml || this.isExportingVideo) {
+      if (!this.playIntent && !video.paused) {
+        try { video.pause(); } catch {}
+      }
+      return;
     }
 
     this.startVideoLoop();
     this.emit('video-time', this.getVideoState());
   }
 
-  public pauseVideo(): void {
+  /** Oynatmayı durdurur; niyeti değiştirmez (görünürlük ve iç kullanım için). Bir şey durduysa true. */
+  private pauseInternal(): boolean {
+    const wasPlaying = this.isPlaying() || this.videoLoopId !== null;
     this.isNlePlaying = false;
     this.activePlayingClipId = null;
 
@@ -1998,58 +2879,75 @@ export class CanvasEngine {
     }
 
     this.stopVideoLoop();
-    if (typeof navigator !== 'undefined' && 'mediaSession' in navigator) {
-      try {
-        navigator.mediaSession.playbackState = 'none';
-        navigator.mediaSession.metadata = null;
-      } catch {}
-    }
-    this.emit('video-time', this.getVideoState());
+    this.clearMediaSession();
+    if (wasPlaying) this.emit('video-time', this.getVideoState());
+    return wasPlaying;
+  }
+
+  /** Oynatmayı durdurur. Görünürlük dönüşünde otomatik devam etmez; playVideo() ile sürer. */
+  public pauseVideo(): void {
+    this.playIntent = false;
+    this.resumeOnVisible = false;
+    this.resumeAfterExport = false;
+    this.pauseInternal();
+  }
+
+  /** Gerçekten oynuyor mu (Hikaye video elementi, hareketli fotoğraf veya Reels NLE). */
+  public isPlaying(): boolean {
+    const ml = this.mediaLayer;
+    if (!ml) return false;
+    if (this.shareMode === 'reels' && this.videoClips.length > 0) return this.isNlePlaying;
+    if (ml.isMotionPhoto) return ml.virtualPlaying;
+    const v = ml.getVideoElement();
+    return Boolean(v && !v.paused && !v.ended);
   }
 
   public async toggleVideoPlay(): Promise<boolean> {
-    if (this.shareMode === 'reels' && this.videoClips.length > 0) {
-      if (this.isNlePlaying) {
-        this.pauseVideo();
-        return false;
-      } else {
-        await this.playVideo();
-        return true;
-      }
-    }
-
-    if (this.mediaLayer?.isMotionPhoto) {
-      if (this.mediaLayer.virtualPlaying) {
-        this.pauseVideo();
-        return false;
-      } else {
-        await this.playVideo();
-        return true;
-      }
-    }
-
-    const video = this.mediaLayer?.getVideoElement();
-    if (!video) return false;
-    if (video.paused || video.ended) {
-      await this.playVideo();
-      return true;
-    } else {
+    if (this.isPlaying()) {
       this.pauseVideo();
       return false;
     }
+    if (!this.mediaLayer) return false;
+    const hasTimeline =
+      (this.shareMode === 'reels' && this.videoClips.length > 0) ||
+      this.mediaLayer.isMotionPhoto ||
+      Boolean(this.mediaLayer.getVideoElement());
+    if (!hasTimeline) return false;
+    await this.playVideo();
+    return this.isPlaying();
   }
 
   public setExportingVideo(exporting: boolean): void {
+    const wasExporting = this.isExportingVideo;
     this.isExportingVideo = exporting;
     this.lastExportSourceTime = -1;
     this.lastExportClipId = '';
     this.invalidateStaticCache();
     if (exporting) {
-      this.pauseVideo();
+      const intent = this.playIntent;
+      this.pauseInternal();
+      // Aktarma öncesi oynuyorsa niyet korunur; UI aktarma sonrası playVideo() çağırabilir
+      this.playIntent = intent;
       if (this.mediaLayer) {
         Object.assign(this.mediaLayer.currentValues, this.mediaLayer.targetValues);
       }
+    } else if (wasExporting) {
+      if (this.resumeAfterExport) {
+        this.resumeAfterExport = false;
+        // Exporter renderAtTime ile kareyi geri yükledikten sonra başlat
+        setTimeout(() => {
+          if (!this.destroyed && !this.isExportingVideo && this.playIntent) {
+            this.playVideo().catch(() => {});
+          }
+        }, 0);
+      }
+      this.requestRender();
     }
+  }
+
+  /** Dışa aktarma sürüyor mu. */
+  public isExporting(): boolean {
+    return this.isExportingVideo;
   }
 
   private startVideoLoop(): void {
@@ -2057,7 +2955,7 @@ export class CanvasEngine {
     this.lastVirtualTickTime = performance.now();
 
     const tick = () => {
-      if (this.isExportingVideo) {
+      if (this.isExportingVideo || this.destroyed) {
         this.videoLoopId = null;
         return;
       }
@@ -2096,14 +2994,13 @@ export class CanvasEngine {
               if (Math.abs(video.volume - active.clip.volume) > 0.01) {
                 video.volume = active.clip.volume;
               }
-              if (video.muted !== active.clip.muted) {
-                video.muted = active.clip.muted;
+              // B5: engelliyken her karede sesi açıp kapatma salınımı yapma
+              const effectiveMuted = Boolean(active.clip.muted) || this.soundBlocked;
+              if (video.muted !== effectiveMuted) {
+                video.muted = effectiveMuted;
               }
               if (video.paused && !video.seeking) {
-                video.play().catch(() => {
-                  video.muted = true;
-                  video.play().catch(() => {});
-                });
+                this.playElementWithFallback(video, Boolean(active.clip.muted)).catch(() => {});
               }
 
               // Klip bitişi kontrolü: video klip sonuna ulaştığında sıradaki klibe kesintisiz geç
@@ -2300,11 +3197,160 @@ export class CanvasEngine {
     ImageExporter.downloadBlob(blob, filename);
   }
 
-  public on<K extends EngineEvent>(event: K, fn: EventListener<K>) {
+  // ─────────────────────────────────────────────────────────────
+  // WP1: Undo / redo temeli
+  // ─────────────────────────────────────────────────────────────
+  private static cloneClip(c: VideoTrackClip): VideoTrackClip {
+    return {
+      ...c,
+      transform: c.transform ? { ...c.transform } : undefined,
+      cropRect: c.cropRect ? { ...c.cropRect } : undefined,
+      thumbnails: c.thumbnails ? [...c.thumbnails] : undefined,
+    };
+  }
+
+  /**
+   * Belgenin anlık görüntüsü: üst katmanlar (nesne referansı + durum kopyası; sonradan silinenler de
+   * geri gelir), taban medya dönüşümü/ayarları, klipler, zamanlamalar, filtre, müzik ve seçim.
+   * Oynatma durumu ve geçici etkileşim bayrakları dahil değildir.
+   */
+  public snapshot(): EngineSnapshot {
+    const ml = this.mediaLayer;
+    const sel = this.interactionManager.getSelectedLayer();
+    return {
+      version: 1,
+      mode: this.shareMode,
+      postAspect: this.postAspect,
+      baseMediaKey: this.baseMediaKey,
+      layers: this.overlayLayers.map((layer) => ({ layer, state: layer.getState() })),
+      media: ml
+        ? {
+            transform: { ...ml.transform },
+            fitMode: ml.fitMode,
+            filters: { ...ml.filters },
+            postAdjustments: { ...ml.postAdjustments },
+            reelsEffect: ml.reelsEffect,
+            effectClips: ml.getEffectClips(),
+            trimStart: ml.trimStart,
+            trimEnd: ml.trimEnd,
+            playbackRate: ml.playbackRate,
+            volume: ml.volume,
+            muted: ml.muted,
+            cropRect: ml.cropRect ? { ...ml.cropRect } : undefined,
+          }
+        : null,
+      clips: this.videoClips.map((c) => CanvasEngine.cloneClip(c)),
+      filterIndex: this.activeFilterIndex,
+      music: this.musicMeta ? { ...this.musicMeta } : null,
+      selectedLayerId: sel && sel.type !== 'media' ? sel.id : null,
+      timelineTime: this.nleTimelineTime,
+    };
+  }
+
+  /**
+   * snapshot() ile alınmış durumu geri yükler. Oynatmayı durdurmaz.
+   * Farklı mod veya farklı taban medya (loadMedia sonrası) için false döner ve hiçbir şey yapmaz.
+   * Serbest bırakılmış klip medyası kaynağından arka planda yeniden yüklenir.
+   */
+  public restore(snap: EngineSnapshot | null | undefined): boolean {
+    if (!snap || snap.version !== 1 || this.destroyed) return false;
+    if (snap.mode !== this.shareMode || snap.baseMediaKey !== this.baseMediaKey) return false;
+
+    if (this.shareMode === 'post' && snap.postAspect !== this.postAspect) {
+      this.postAspect = snap.postAspect;
+      this.applyLogicalSize();
+    }
+
+    // 1. Üst katmanlar (silinmiş olanlar dahil, z-sırası korunur)
+    this.overlayLayers = snap.layers.map(({ layer, state }) => {
+      layer.applyState(state);
+      layer.temporalVisible = true;
+      return layer;
+    });
+
+    // 2. Taban medya
+    const ml = this.mediaLayer;
+    if (ml && snap.media) {
+      const m = snap.media;
+      ml.isInteracting = false;
+      ml.transform = { ...m.transform };
+      ml.fitMode = m.fitMode;
+      ml.filters = { ...m.filters };
+      ml.postAdjustments = { ...m.postAdjustments };
+      ml.reelsEffect = m.reelsEffect;
+      ml.setEffectClips(m.effectClips);
+      ml.trimStart = m.trimStart;
+      ml.trimEnd = m.trimEnd;
+      ml.setPlaybackRate(m.playbackRate);
+      ml.volume = m.volume;
+      ml.muted = m.muted;
+      const v = ml.getVideoElement();
+      if (v && this.shareMode !== 'reels') {
+        v.volume = m.volume;
+        v.muted = m.muted || this.soundBlocked;
+      }
+      ml.cropRect = m.cropRect ? { ...m.cropRect } : undefined;
+    }
+
+    // 3. Filtre (animasyonsuz)
+    const total = FILTER_PRESETS.length;
+    this.activeFilterIndex = ((snap.filterIndex % total) + total) % total;
+    if (ml) {
+      const preset = FILTER_PRESETS[this.activeFilterIndex];
+      ml.targetValues = { ...preset.values };
+      ml.currentValues = { ...preset.values };
+      ml.activeEffect = preset.overlayEffect || null;
+    }
+
+    // 4. Klipler
+    if (snap.clips.length > 0) {
+      this.videoClips = snap.clips.map((c) => CanvasEngine.cloneClip(c));
+      this.reviveReleasedClipMedia();
+    }
+    this.activePlayingClipId = null;
+    this.syncMediaLayerWithClips();
+    const totalDur = this.getTotalTimelineDuration();
+    this.nleTimelineTime = Math.max(0, Math.min(snap.timelineTime, Math.max(0, totalDur - 0.05)));
+    if (this.shareMode === 'reels' && this.videoClips.length > 0) {
+      const active = this.getActiveClipAtTime(this.nleTimelineTime);
+      if (active) {
+        this.applyClipTransformToMediaLayer(active.clip);
+        if (ml && ml.isMotionPhoto) ml.virtualTime = active.localSourceTime;
+      }
+    }
+    this.collectUnusedClipMedia();
+
+    // 5. Müzik
+    const prevMusic = this.musicMeta;
+    this.musicMeta = snap.music ? { ...snap.music } : null;
+    if (Boolean(prevMusic) !== Boolean(this.musicMeta) || (prevMusic && this.musicMeta && prevMusic.id !== this.musicMeta.id)) {
+      this.emit('music-change', this.getMusic());
+    }
+
+    // 6. Seçim
+    const nextSel = snap.selectedLayerId
+      ? this.overlayLayers.find((l) => l.id === snap.selectedLayerId) || null
+      : null;
+    for (let i = 0; i < this.overlayLayers.length; i++) {
+      this.overlayLayers[i].selected = false;
+    }
+    this.interactionManager.setSelectedLayer(nextSel);
+
+    this.syncTemporalVisibility(this.shareMode === 'reels' ? this.nleTimelineTime : undefined);
+    this.invalidateStaticCache();
+    this.requestRender();
+    this.emit('change');
+    this.emit('video-time', this.getVideoState());
+    return true;
+  }
+
+  /** Abone olur. Aboneliği kaldıran bir fonksiyon döner (off ile de kaldırılabilir). */
+  public on<K extends EngineEvent>(event: K, fn: EventListener<K>): () => void {
     if (!this.listeners.has(event)) {
       this.listeners.set(event, new Set());
     }
     this.listeners.get(event)!.add(fn as unknown as (args: unknown) => void);
+    return () => this.off(event, fn);
   }
 
   public off<K extends EngineEvent>(event: K, fn: EventListener<K>) {
@@ -2315,22 +3361,79 @@ export class CanvasEngine {
     if (event === 'change') {
       this.invalidateStaticCache();
     }
-    this.listeners.get(event)?.forEach((fn) => {
-      (fn as unknown as (...a: unknown[]) => void)(...args);
+    const set = this.listeners.get(event);
+    if (!set || set.size === 0) return;
+    // Bir dinleyicinin hatası motoru (rAF/oynatma döngüsü) kilitlememeli
+    Array.from(set).forEach((fn) => {
+      try {
+        (fn as unknown as (...a: unknown[]) => void)(...args);
+      } catch (err) {
+        if (typeof console !== 'undefined') console.error(`[CanvasEngine] '${String(event)}' listener error`, err);
+      }
     });
   }
 
+  /** Motor yok edildiyse true. */
+  public isDestroyed(): boolean {
+    return this.destroyed;
+  }
+
   // [MODIFIED BY Bedirhan]
+  /**
+   * Tüm kaynakları serbest bırakır: rAF döngüleri, zamanlayıcılar, görünürlük dinleyicisi, pointer
+   * dinleyicileri, tüm medya (taban, klip, overlay) ve blob URL'leri. İdempotenttir.
+   */
   public destroy() {
+    if (this.destroyed) return;
+    this.pauseInternal();
+    this.destroyed = true;
+    this.loadToken++;
+    this.playIntent = false;
+    this.resumeOnVisible = false;
+    this.resumeAfterExport = false;
     this.stopVideoLoop();
+    if (this.renderRafId !== null) {
+      try { cancelAnimationFrame(this.renderRafId); } catch {}
+      this.renderRafId = null;
+    }
+    this.isDirty = false;
+    if (this.snapGuideTimer) {
+      clearTimeout(this.snapGuideTimer);
+      this.snapGuideTimer = null;
+    }
+    this.canvas.removeEventListener('pointerup', this.onCanvasPointerUp);
+    if (typeof document !== 'undefined') {
+      document.removeEventListener('visibilitychange', this.onVisibilityChange);
+    }
     if (this.mediaLayer) {
       this.mediaLayer.destroy();
     }
     this.interactionManager.destroy();
     this.listeners.clear();
+
+    for (const media of Array.from(this.mediaRegistry)) {
+      this.releaseMediaNow(media);
+    }
+    this.mediaRegistry.clear();
+    this.overlayMedia.clear();
+    this.orphanMedia = [];
+    this.revivingMedia.clear();
+
     this.mediaLayer = null;
     this.overlayLayers = [];
     this.cachedAllLayers = [];
+    this.videoClips = [];
+    this.musicMeta = null;
+    this.pendingTransformLayer = null;
+    this.hasPendingTransform = false;
+    this.pendingDragMove = null;
+    // iOS: offscreen tuval belleğini hemen bırak
+    for (const c of [this.staticSceneCacheCanvas, this.overlayCacheCanvas, this.ambientBgCacheCanvas]) {
+      if (c) {
+        c.width = 0;
+        c.height = 0;
+      }
+    }
     this.staticSceneCacheCanvas = null;
     this.staticSceneCacheCtx = null;
     this.overlayCacheCanvas = null;

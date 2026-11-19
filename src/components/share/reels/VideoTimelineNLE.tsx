@@ -35,6 +35,8 @@ export interface VideoTimelineNLEProps {
   selectedItemType: NLESelectedType;
   canUndo: boolean;
   canRedo: boolean;
+  /** MAX_VIDEO_SEC - toplam: kalan kapasite (sn). */
+  remainingSec?: number;
   getCurrentTime?: () => number;
   onSelectItem: (id: string | null, type: NLESelectedType) => void;
   onTrimClip: (clipId: string, newSourceStart: number, newSourceEnd: number) => void;
@@ -82,6 +84,7 @@ export default function VideoTimelineNLE({
   selectedItemType,
   canUndo,
   canRedo,
+  remainingSec,
   getCurrentTime,
   onSelectItem,
   onTrimClip,
@@ -111,6 +114,7 @@ export default function VideoTimelineNLE({
   const scrollIdleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const handleDragTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const programmaticScrollRef = useRef<boolean>(false);
+  const lastScrollLeftRef = useRef<number>(0);
 
   const isPointerDownRef = useRef<boolean>(false);
   const scrollRafIdRef = useRef<number | null>(null);
@@ -129,6 +133,7 @@ export default function VideoTimelineNLE({
       if (Math.abs(el.scrollLeft - targetPx) < 1.5) return;
       programmaticScrollRef.current = true;
       el.scrollLeft = targetPx;
+      lastScrollLeftRef.current = el.scrollLeft;
     },
     [pps, safeTotal]
   );
@@ -167,6 +172,10 @@ export default function VideoTimelineNLE({
     if (!isPointerDownRef.current && !userScrollingRef.current) {
       return;
     }
+
+    // Dikey kaydırma (overlay kanalları) zamanı değiştirmez
+    if (Math.abs(el.scrollLeft - lastScrollLeftRef.current) < 0.5) return;
+    lastScrollLeftRef.current = el.scrollLeft;
 
     if (isPlaying) {
       onPauseVideo?.();
@@ -252,6 +261,8 @@ export default function VideoTimelineNLE({
     const pp = pointerPanRef.current;
     const el = scrollContainerRef.current;
     if (!pp || !el || handleDraggingRef.current) return;
+    // Dokunmatik kaydırmayı tarayıcı yapar; elle kaydırma yalnızca fare için (C3)
+    if (e.pointerType !== "mouse") return;
 
     const dx = e.clientX - pp.startX;
     if (!pp.isPanning && Math.abs(dx) >= 6) {
@@ -337,21 +348,44 @@ export default function VideoTimelineNLE({
     el.scrollLeft = Math.max(0, el.scrollLeft + deltaPx);
   }, []);
 
+  const handleSelectClip = useCallback(
+    (clipId: string) => onSelectItem(clipId, "video"),
+    [onSelectItem]
+  );
+  const handleReorderModeChange = useCallback(
+    (active: boolean) => {
+      setIsClipReordering(active);
+      if (active) {
+        if (scrollContainerRef.current) {
+          programmaticScrollRef.current = true;
+          scrollContainerRef.current.scrollLeft = 0;
+          lastScrollLeftRef.current = 0;
+        }
+      } else {
+        requestAnimationFrame(() => {
+          const live = getCurrentTime ? getCurrentTime() : currentTime;
+          syncScrollToTimeAnalog(live);
+        });
+      }
+    },
+    [getCurrentTime, currentTime, syncScrollToTimeAnalog]
+  );
+
   return (
     <div
-      className="w-full flex flex-col gap-1.5 select-none pointer-events-auto"
+      className="w-full flex flex-col gap-1.5 select-none pointer-events-auto min-h-0 flex-1"
       onClick={() => onSelectItem(null, null)}
     >
       {/* 1. Üst Oynatma, Zaman Sayacı, Geri Al / İleri Al ve Ölçek (PPS Zoom) Satırı */}
       <div
-        className="flex items-center justify-between px-4 pb-1"
+        className="flex items-center justify-between px-4 pb-1 shrink-0"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-center gap-2">
           <button
             type="button"
             onClick={onTogglePlay}
-            className="w-9 h-9 rounded-full bg-[#1c1c1e] hover:bg-[#28282d] active:scale-90 transition-all flex items-center justify-center text-white shadow"
+            className="w-11 h-11 rounded-full bg-[#1c1c1e] hover:bg-[#28282d] active:scale-90 transition-all flex items-center justify-center text-white shadow"
           >
             {isPlaying ? (
               <Pause className="w-4 h-4 fill-white" />
@@ -366,6 +400,13 @@ export default function VideoTimelineNLE({
             </span>
             <span className="text-zinc-600">/</span>
             <span className="text-zinc-400">{formatNLEClock(safeTotal)}</span>
+            {typeof remainingSec === "number" && (
+              <span
+                className={`ml-1.5 text-[10px] font-medium ${remainingSec < 5 ? "text-amber-400" : "text-zinc-500"}`}
+              >
+                Kalan {Math.floor(remainingSec)} sn
+              </span>
+            )}
           </div>
         </div>
 
@@ -377,7 +418,7 @@ export default function VideoTimelineNLE({
               onPauseVideo?.();
               setPps((p) => Math.max(40, p - 10));
             }}
-            className="w-8 h-8 rounded-full bg-[#1c1c1e] hover:bg-[#28282d] active:scale-90 transition-all flex items-center justify-center text-zinc-300"
+            className="w-11 h-11 rounded-full bg-[#1c1c1e] hover:bg-[#28282d] active:scale-90 transition-all flex items-center justify-center text-zinc-300"
           >
             <ZoomOut className="w-3.5 h-3.5" />
           </button>
@@ -387,7 +428,7 @@ export default function VideoTimelineNLE({
               onPauseVideo?.();
               setPps((p) => Math.min(100, p + 10));
             }}
-            className="w-8 h-8 rounded-full bg-[#1c1c1e] hover:bg-[#28282d] active:scale-90 transition-all flex items-center justify-center text-zinc-300"
+            className="w-11 h-11 rounded-full bg-[#1c1c1e] hover:bg-[#28282d] active:scale-90 transition-all flex items-center justify-center text-zinc-300"
           >
             <ZoomIn className="w-3.5 h-3.5" />
           </button>
@@ -400,7 +441,7 @@ export default function VideoTimelineNLE({
               onUndo();
             }}
             disabled={!canUndo}
-            className="w-8 h-8 rounded-full bg-[#1c1c1e] hover:bg-[#28282d] disabled:opacity-35 active:scale-90 transition-all flex items-center justify-center text-zinc-200"
+            className="w-11 h-11 rounded-full bg-[#1c1c1e] hover:bg-[#28282d] disabled:opacity-35 active:scale-90 transition-all flex items-center justify-center text-zinc-200"
           >
             <Undo2 className="w-3.5 h-3.5" />
           </button>
@@ -411,7 +452,7 @@ export default function VideoTimelineNLE({
               onRedo();
             }}
             disabled={!canRedo}
-            className="w-8 h-8 rounded-full bg-[#1c1c1e] hover:bg-[#28282d] disabled:opacity-35 active:scale-90 transition-all flex items-center justify-center text-zinc-200"
+            className="w-11 h-11 rounded-full bg-[#1c1c1e] hover:bg-[#28282d] disabled:opacity-35 active:scale-90 transition-all flex items-center justify-center text-zinc-200"
           >
             <Redo2 className="w-3.5 h-3.5" />
           </button>
@@ -419,7 +460,8 @@ export default function VideoTimelineNLE({
       </div>
 
       {/* 2. Sabit Merkez İbreli (Fixed Center Playhead) ve 50vw Boşluklu 60 FPS Analog Kayar Konteyner */}
-      <div className="relative w-full bg-[#0b0c0e] border-y border-white/10 py-2">
+      {/* Panel max-height'ı (42dvh) aşınca kanallar buradan taşmaz, içeride kayar (A5) */}
+      <div className="relative w-full flex-1 min-h-[104px] flex flex-col overflow-hidden bg-[#0b0c0e] border-y border-white/10 py-2">
         {/* SABİT MERKEZ PLAYHEAD (left: 50%, üstte yuvarlak başlık + dikey beyaz ibre) */}
         {!isClipReordering && (
           <div className="pointer-events-none absolute top-0 bottom-0 left-1/2 -translate-x-1/2 z-40 flex flex-col items-center">
@@ -448,28 +490,17 @@ export default function VideoTimelineNLE({
               userScrollingRef.current = false;
             }, 250);
           }}
-          onWheel={(e) => {
+          onWheel={() => {
+            // Yerel kaydırma zaten çalışır; yalnızca kullanıcı kaydırması olarak işaretle
             if (isPlaying) onPauseVideo?.();
-            const el = scrollContainerRef.current;
-            if (el) {
-              userScrollingRef.current = true;
-              isPointerDownRef.current = true;
-              const delta = Math.abs(e.deltaX) > Math.abs(e.deltaY) ? e.deltaX : e.deltaY;
-              el.scrollLeft += delta;
-              const scrubbedSec = Math.max(0, Math.min(safeTotal, el.scrollLeft / pps));
-              if (timeLabelRef.current) {
-                timeLabelRef.current.textContent = formatNLEClock(scrubbedSec);
-              }
-              onSeek(Number(scrubbedSec.toFixed(3)));
-              if (scrollIdleTimerRef.current) clearTimeout(scrollIdleTimerRef.current);
-              scrollIdleTimerRef.current = setTimeout(() => {
-                isPointerDownRef.current = false;
-                userScrollingRef.current = false;
-              }, 250);
-            }
+            userScrollingRef.current = true;
+            if (scrollIdleTimerRef.current) clearTimeout(scrollIdleTimerRef.current);
+            scrollIdleTimerRef.current = setTimeout(() => {
+              userScrollingRef.current = false;
+            }, 250);
           }}
-          className={`w-full no-scrollbar cursor-grab active:cursor-grabbing ${
-            isClipReordering ? "overflow-x-hidden px-4" : "overflow-x-auto"
+          className={`w-full flex-1 min-h-0 no-scrollbar overscroll-contain cursor-grab active:cursor-grabbing ${
+            isClipReordering ? "overflow-x-hidden overflow-y-auto px-4" : "overflow-auto"
           }`}
           style={{ WebkitOverflowScrolling: "touch" }}
         >
@@ -501,23 +532,10 @@ export default function VideoTimelineNLE({
                 pps={pps}
                 thumbnails={thumbnails}
                 selectedClipId={selectedItemType === "video" ? selectedItemId : null}
-                onSelectClip={(clipId) => onSelectItem(clipId, "video")}
+                onSelectClip={handleSelectClip}
                 onTrimClip={onTrimClip}
                 onReorderClips={onReorderClips}
-                onReorderModeChange={(active) => {
-                  setIsClipReordering(active);
-                  if (active) {
-                    if (scrollContainerRef.current) {
-                      programmaticScrollRef.current = true;
-                      scrollContainerRef.current.scrollLeft = 0;
-                    }
-                  } else {
-                    requestAnimationFrame(() => {
-                      const live = getCurrentTime ? getCurrentTime() : currentTime;
-                      syncScrollToTimeAnalog(live);
-                    });
-                  }
-                }}
+                onReorderModeChange={handleReorderModeChange}
                 onAppendClipClick={onAppendClipClick}
                 onEdgeScroll={handleEdgeScroll}
                 onPanScroll={handlePanScroll}

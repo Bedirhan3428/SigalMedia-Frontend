@@ -29,19 +29,16 @@ import {
   FILTER_PRESETS,
   getMusicFadeGain,
   getMusicTimelineRange,
-  captureFramePreview,
 } from "@/lib/canvas-editor";
 import MusicPickerDrawer from "@/components/share/MusicPickerDrawer";
 import MusicSettingsPanel from "@/components/share/MusicSettingsPanel";
 // [START] CREATED BY Bedirhan
-import VideoToolsDrawer from "@/components/share/VideoToolsDrawer";
 import ExportProgress from "@/components/share/ExportProgress";
 import ModeSelectorModal from "@/components/share/ModeSelectorModal";
-import StoryEditor from "@/components/share/StoryEditor";
-import ReelsEditor from "@/components/share/ReelsEditor";
-import PostPhotoEditor from "@/components/share/PostPhotoEditor";
+import StoryEditor from "@/components/share/story/StoryEditor";
+import ReelsEditor from "@/components/share/reels/ReelsEditor";
+import PostEditor from "@/components/share/post/PostEditor";
 // [END] CREATED BY Bedirhan
-import { commitAudioClip } from "@/services/soundService";
 // [MODIFIED BY Bedirhan]
 import {
   ChevronLeft,
@@ -121,7 +118,11 @@ export default function ShareStoryPage() {
   const [shareMode, setShareMode] = useState<ShareMode>("story");
   const shareModeRef = useRef<ShareMode>("story");
   const [isModeSelectorOpen, setIsModeSelectorOpen] = useState<boolean>(true);
-  const [postAdjustments, setPostAdjustments] = useState<PostAdjustmentState>(DEFAULT_POST_ADJUSTMENTS);
+  const [, setPostAdjustments] = useState<PostAdjustmentState>(DEFAULT_POST_ADJUSTMENTS);
+  // Post: alt panel yüksekliği + tuval en-boy oranı (PostEditor bildirir)
+  const [postLayout, setPostLayout] = useState({ bottom: 0, ratio: 4 / 5 });
+  // Reels: alt panel yüksekliği (ReelsEditor ölçüp bildirir); önizleme bunun üstünde kalır (C5)
+  const [reelsLayout, setReelsLayout] = useState({ bottom: 0 });
   const [activeFilterIndex, setActiveFilterIndex] = useState<number>(0);
   const [activeReelsEffect, setActiveReelsEffect] = useState<ReelsEffectId>("none");
   const [effectClips, setEffectClips] = useState<ReelsEffectClip[]>([]);
@@ -332,7 +333,8 @@ export default function ShareStoryPage() {
     }
     const audio = previewAudioRef.current;
 
-    if (!selectedMusic?.streamUrl || !hasMedia || isExportingVideo || isMusicDrawerOpen) {
+    // Story önizleme sesi story/StoryEditor içinde yönetilir (B12)
+    if (shareMode === "story" || !selectedMusic?.streamUrl || !hasMedia || isExportingVideo || isMusicDrawerOpen) {
       if (!audio.paused) audio.pause();
       return;
     }
@@ -432,6 +434,7 @@ export default function ShareStoryPage() {
     hasMedia,
     isExportingVideo,
     isMusicDrawerOpen,
+    shareMode,
     musicVolume,
     selectedMusic,
     videoState.duration,
@@ -526,6 +529,7 @@ export default function ShareStoryPage() {
     // - Metin katmanı ise 5 ana arketip arasında geçiş yapar (Modern ➔ Klasik ➔ Neon ➔ Daktilo ➔ Güçlü)
     // - İkincil fotoğraf ise 5 kesim maskesi arasında geçiş yapar (Kare ➔ Daire ➔ Polaroid ➔ Kalp ➔ Yıldız)
     engine.on("single-tap", (layer: BaseLayer) => {
+      if (shareModeRef.current === "story") return; // Story: story/StoryEditor yönetir
       if (layer instanceof TextLayer) {
         const nextFont = layer.cycleFontPreset(() => engine.requestRender());
         setActiveFontPreset(nextFont);
@@ -538,6 +542,7 @@ export default function ShareStoryPage() {
 
     // Çift Dokunma: Doğrudan Canlı Metin Yazma Ekranını Aç
     engine.on("double-tap", (layer?: BaseLayer) => {
+      if (shareModeRef.current === "story") return;
       if (layer instanceof TextLayer) {
         openTextEditorRef.current(layer);
       } else {
@@ -550,6 +555,7 @@ export default function ShareStoryPage() {
       const currentPreset = engine.getCurrentFilterPreset();
       setActiveFilterGradient(currentPreset.backgroundGradient);
       setActiveFilterIndex(engine.getCurrentFilterIndex());
+      if (shareModeRef.current === "story") return; // Story rozeti StoryEditor içinde
       setFilterToast(filterName);
       if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
       toastTimerRef.current = setTimeout(() => {
@@ -559,7 +565,7 @@ export default function ShareStoryPage() {
 
     // Mıknatıslı Çöp Kutusu Sürükleme Takibi (Reels NLE modunda fırlatarak silme kapalıdır)
     engine.on("drag-move", (info: { layer: BaseLayer; clientX: number; clientY: number; isDragging: boolean }) => {
-      if (info.layer.type === "media" || shareModeRef.current === "reels") return;
+      if (info.layer.type === "media" || shareModeRef.current !== "post") return;
       setIsDraggingObject(true);
 
       const trashCenterX = window.innerWidth / 2;
@@ -574,7 +580,7 @@ export default function ShareStoryPage() {
     engine.on("drag-end", (info: { layer: BaseLayer; clientX: number; clientY: number }) => {
       setIsDraggingObject(false);
 
-      if (info.layer && info.layer.type !== "media" && shareModeRef.current !== "reels") {
+      if (info.layer && info.layer.type !== "media" && shareModeRef.current === "post") {
         const trashCenterX = window.innerWidth / 2;
         const trashCenterY = window.innerHeight - 68;
         const dist = Math.hypot(info.clientX - trashCenterX, info.clientY - trashCenterY);
@@ -610,7 +616,7 @@ export default function ShareStoryPage() {
     const handleResize = () => {
       if (engineRef.current && canvasRef.current) {
         if (shareModeRef.current === "post") {
-          engineRef.current.updateCanvasResolution(1440, 1080);
+          return; // Post: mantıksal boyutu en-boy seçimi belirler, pencere değil
         } else if (shareModeRef.current === "reels") {
           engineRef.current.updateCanvasResolution(1080, 1920);
         } else {
@@ -664,18 +670,6 @@ export default function ShareStoryPage() {
     },
     [getOrCreateEngine, hasMedia]
   );
-
-  const handleChangePostAdjustments = useCallback((partial: Partial<PostAdjustmentState>) => {
-    if (!engineRef.current) return;
-    engineRef.current.setPostAdjustments(partial);
-    setPostAdjustments(engineRef.current.getPostAdjustments());
-  }, []);
-
-  const handleResetPostAdjustments = useCallback(() => {
-    if (!engineRef.current) return;
-    engineRef.current.resetPostAdjustments();
-    setPostAdjustments(engineRef.current.getPostAdjustments());
-  }, []);
 
   const handleSelectFilterIndex = useCallback((index: number) => {
     const engine = engineRef.current;
@@ -967,7 +961,9 @@ export default function ShareStoryPage() {
     };
     setSelectedMusic(enrichedMeta);
     if (engine) {
-      engine.addMusicSticker(enrichedMeta, 0.5, 0.65);
+      // Reels: tuvalde çıkartma yok, yalnızca meta (B6); diğer modlarda müzik çıkartması
+      if (shareModeRef.current === "reels") engine.setMusic(enrichedMeta);
+      else engine.addMusicSticker(enrichedMeta, 0.5, 0.65);
     }
   };
 
@@ -993,11 +989,6 @@ export default function ShareStoryPage() {
     setSelectedMusic(null);
     setActiveDrawer("none");
   };
-
-  const getMediaPreviewFrame = useCallback(
-    () => captureFramePreview(engineRef.current?.getMedia()?.element, 96, 128),
-    []
-  );
 
   // [START] CREATED BY Bedirhan
   const handleCancelExport = () => {
@@ -1116,7 +1107,7 @@ export default function ShareStoryPage() {
         createdAt: serverTimestamp(),
       };
 
-      // Müzik seçildiyse metaveriyi gönderiye ekle ve R2 commit'i tetikle
+      // Müzik seçildiyse metaveriyi gönderiye ekle (streamUrl: iTunes önizleme adresi)
       if (selectedMusic) {
         postData.audio = {
           id: selectedMusic.id,
@@ -1130,12 +1121,6 @@ export default function ShareStoryPage() {
           totalDuration: selectedMusic.totalDuration,
           lyricsSnippet: selectedMusic.lyricsSnippet || "",
         };
-
-        commitAudioClip({
-          videoId: selectedMusic.id,
-          startTime: selectedMusic.startTime,
-          duration: selectedMusic.duration,
-        }).catch((e) => console.warn("Background commit error:", e));
       }
 
       await addDoc(collection(db, "posts"), postData);
@@ -1201,13 +1186,25 @@ export default function ShareStoryPage() {
           }
         }}
         className={
-          shareMode === "reels" && hasMedia && !isTextEditing
-            ? isReelsCropping
-              ? "fixed inset-x-0 top-16 bottom-28 flex items-center justify-center p-3 overflow-hidden select-none bg-black z-20"
-              : "fixed inset-x-0 top-16 bottom-[390px] flex items-center justify-center p-3 overflow-hidden select-none bg-black z-20"
-            : "fixed inset-0 w-full h-full flex items-center justify-center overflow-hidden select-none"
+          shareMode === "reels" && hasMedia
+            ? "fixed inset-x-0 flex items-center justify-center p-3 overflow-hidden select-none bg-black z-20"
+            : shareMode === "post"
+              ? "fixed inset-x-0 flex items-center justify-center overflow-hidden select-none"
+              : "fixed inset-0 w-full h-full flex items-center justify-center overflow-hidden select-none"
         }
         style={{
+          ...(shareMode === "post"
+            ? {
+                top: "calc(env(safe-area-inset-top, 0px) + 68px)",
+                bottom: hasMedia ? postLayout.bottom : 0,
+                containerType: "size" as const,
+              }
+            : shareMode === "reels" && hasMedia
+              ? {
+                  top: "calc(env(safe-area-inset-top, 0px) + 64px)",
+                  bottom: reelsLayout.bottom,
+                }
+              : {}),
           background:
             shareMode === "reels"
               ? "#000000"
@@ -1219,10 +1216,18 @@ export default function ShareStoryPage() {
         }}
       >
         <div
+          style={
+            shareMode === "post"
+              ? {
+                  aspectRatio: String(postLayout.ratio),
+                  width: `min(100cqw, calc(100cqh * ${postLayout.ratio}))`,
+                }
+              : undefined
+          }
           className={
             shareMode === "post"
-              ? "w-full max-w-md aspect-[4/3] mx-3 mb-40 rounded-2xl overflow-hidden border border-white/15 shadow-2xl bg-black"
-              : shareMode === "reels" && hasMedia && !isTextEditing
+              ? "shrink-0 overflow-hidden bg-black shadow-2xl"
+              : shareMode === "reels" && hasMedia
                 ? "h-full max-h-full max-w-[85vw] aspect-[9/16] rounded-2xl overflow-hidden border border-white/20 shadow-[0_8px_32px_rgba(0,0,0,0.85)] bg-neutral-950 flex items-center justify-center shrink-0"
                 : "w-full h-full"
           }
@@ -1323,15 +1328,16 @@ export default function ShareStoryPage() {
 
       {/* [START] CREATED BY Bedirhan */}
       {/* 6A. HİKAYE MODU (STORY): Video kırpma kapalı, dikey hikaye araçları + Sağ Alt Paylaş */}
-      {!isTextEditing && hasMedia && shareMode === "story" && (
+      {hasMedia && shareMode === "story" && engineRef.current && !isModeSelectorOpen && (
         <>
           <StoryEditor
-            activeDrawer={activeDrawer}
+            engine={engineRef.current}
+            canvas={canvasRef.current}
             selectedMusic={selectedMusic}
-            onOpenTextEditor={() => openTextEditor()}
-            onOpenStickerSheet={() => setActiveDrawer("sticker_sheet")}
-            onOpenMusicPicker={handleStoryMusicButton}
-            onOpenTagSheet={() => setActiveDrawer("tag")}
+            onMusicChange={setSelectedMusic}
+            musicVolume={musicVolume}
+            onMusicVolumeChange={setMusicVolume}
+            suspendAudio={isExportingVideo || isPublishing}
           />
 
           <div className="fixed right-4 bottom-6 z-40 pointer-events-auto animate-in fade-in duration-200">
@@ -1362,7 +1368,7 @@ export default function ShareStoryPage() {
       )}
 
       {/* 6B. REELS MODU (SABİT PPS MERKEZ İBRELİ NLE TIMELINE + DİNAMİK ALT AKSİYON ÇUBUĞU) */}
-      {!isTextEditing && hasMedia && shareMode === "reels" && (
+      {hasMedia && shareMode === "reels" && (
         <ReelsEditor
           engine={engineRef.current}
           selectedCanvasLayer={selectedLayer}
@@ -1374,7 +1380,6 @@ export default function ShareStoryPage() {
           activeReelsEffect={activeReelsEffect}
           effectClips={effectClips}
           isPublishing={isPublishing}
-          getCurrentTime={() => engineRef.current?.getCurrentTime() || 0}
           onChangeTrim={(start, end) => engineRef.current?.setTrim(start, end)}
           onChangeSpeed={(rate) => engineRef.current?.setSpeed(rate)}
           onChangeVolume={(vol, muted) => engineRef.current?.setVolume(vol, muted)}
@@ -1390,7 +1395,7 @@ export default function ShareStoryPage() {
           onOpenPhotoOverlay={() => overlayFileInputRef.current?.click()}
           onSelectFilterIndex={handleSelectFilterIndex}
           onSelectReelsEffect={handleSelectReelsEffect}
-          onPublish={handlePublish}
+          onLayout={setReelsLayout}
         />
       )}
 
@@ -1414,18 +1419,15 @@ export default function ShareStoryPage() {
             </button>
           </div>
 
-          <PostPhotoEditor
-            adjustments={postAdjustments}
-            getPreviewFrame={getMediaPreviewFrame}
-            isPublishing={isPublishing}
-            onChangeAdjustments={handleChangePostAdjustments}
-            onResetAdjustments={handleResetPostAdjustments}
-            onRotate90={() => engineRef.current?.rotateMedia90()}
-            onFlipHorizontal={() => engineRef.current?.flipMediaHorizontal()}
-            onFlipVertical={() => engineRef.current?.flipMediaVertical()}
-            onResetGeometry={() => engineRef.current?.resetMediaGeometry()}
-            onPublish={handlePublish}
-          />
+          {engineRef.current && (
+            <PostEditor
+              engine={engineRef.current}
+              canvas={canvasRef.current}
+              isPublishing={isPublishing}
+              onPublish={handlePublish}
+              onLayout={setPostLayout}
+            />
+          )}
         </>
       )}
 
@@ -1593,26 +1595,6 @@ export default function ShareStoryPage() {
           </button>
         </div>
       )}
-
-      {/* [START] CREATED BY Bedirhan */}
-      <VideoToolsDrawer
-        isOpen={activeDrawer === "video_tools" && videoState.isVideo}
-        onClose={() => setActiveDrawer("none")}
-        videoState={videoState}
-        thumbnails={videoThumbnails}
-        hasMusic={Boolean(selectedMusic)}
-        musicVolume={musicVolume}
-        onChangeTrim={(start, end) => engineRef.current?.setTrim(start, end)}
-        onChangeSpeed={(rate) => engineRef.current?.setSpeed(rate)}
-        onChangeVolume={(vol, muted) => engineRef.current?.setVolume(vol, muted)}
-        onChangeMusicVolume={(vol) => setMusicVolume(vol)}
-        onSeek={(t) => {
-          engineRef.current?.seekVideo(t);
-        }}
-        onTogglePlay={() => {
-          engineRef.current?.toggleVideoPlay();
-        }}
-      />
 
       <ExportProgress
         isOpen={isExportingVideo}

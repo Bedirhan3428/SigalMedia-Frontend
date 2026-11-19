@@ -48,7 +48,7 @@ type TrimPreviewState = {
 const DRAG_THRESHOLD_PX = 8;
 const TILE_SLOT_PX = 74; // 64px (w-16) + 10px (gap-2.5)
 
-export default function TimelineTrackClips({
+function TimelineTrackClips({
   clips,
   maxSourceDuration,
   pps,
@@ -758,3 +758,5 @@ export default function TimelineTrackClips({
   );
 }
 // [END] CREATED BY Bedirhan
+
+export default React.memo(TimelineTrackClips);

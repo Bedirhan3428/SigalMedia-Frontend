@@ -1,5 +1,5 @@
 import { BaseLayer } from './BaseLayer';
-import { LayerTransform, Rect, OverlayShapeMode } from '../types';
+import { LayerTransform, Rect, OverlayShapeMode, LayerStateSnapshot } from '../types';
 import { LayerBitmapCache } from '../utils/layerBitmapCache';
 
 export class OverlayImageLayer extends BaseLayer {
@@ -32,6 +32,15 @@ export class OverlayImageLayer extends BaseLayer {
     if (options.shapeMode) {
       this.shapeMode = options.shapeMode;
     }
+  }
+
+  public override getState(): LayerStateSnapshot {
+    return { ...super.getState(), shapeMode: this.shapeMode };
+  }
+
+  public override applyState(state: LayerStateSnapshot): void {
+    super.applyState(state);
+    if (state.shapeMode) this.shapeMode = state.shapeMode;
   }
 
   /**

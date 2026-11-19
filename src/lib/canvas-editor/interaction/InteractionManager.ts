@@ -1,20 +1,71 @@
 import { BaseLayer } from '../layers/BaseLayer';
-import { Point } from '../types';
+import { DragInfo, Point } from '../types';
+
+/** Taban medya üzerindeki jest kuralları (motor moda göre belirler). */
+export interface MediaGesturePolicy {
+  /** Üst katmana dokunulmadıysa tek parmakla taban medyayı kaydır (Post, Reels). */
+  oneFingerPan: boolean;
+  /** İki parmakla taban medyayı döndürmeye izin ver (Hikaye, Reels video). */
+  allowRotate: boolean;
+  /** Boş alanda yatay kaydırma ile filtre değiştir (yalnızca Hikaye). */
+  filterSwipe: boolean;
+}
+
+const DEFAULT_MEDIA_POLICY: MediaGesturePolicy = {
+  oneFingerPan: false,
+  allowRotate: true,
+  filterSwipe: true,
+};
+
+interface ContentRect {
+  left: number;
+  top: number;
+  width: number;
+  height: number;
+}
+
+export interface InteractionManagerOptions {
+  canvas: HTMLCanvasElement;
+  getLayers: () => BaseLayer[];
+  getContext: () => CanvasRenderingContext2D;
+  /** @deprecated onTransform / onGestureEnd / onRenderRequest kullanın. Verilirse hepsinde çağrılır. */
+  onStateChange?: () => void;
+  /** Jest sırasında her pointermove'da (senkron) çağrılır; motor rAF ile kısar. */
+  onTransform?: (layer: BaseLayer) => void;
+  /** Jest bittiğinde (son parmak kalktığında) çağrılır. changed=false ise hiçbir dönüşüm uygulanmadı. */
+  onGestureEnd?: (layer: BaseLayer | null, changed: boolean) => void;
+  /** Yalnızca yeniden çizim gerektiğinde (seçim değişimi vb.). */
+  onRenderRequest?: () => void;
+  onSelectLayer: (layer: BaseLayer | null) => void;
+  onDoubleTapLayer?: (layer: BaseLayer) => void;
+  onSingleTapLayer?: (layer: BaseLayer) => void;
+  onFilterSwipe?: (direction: 'prev' | 'next') => void;
+  onBringToFront?: (layer: BaseLayer) => void;
+  onSnapGuide?: (snap: { x: boolean; y: boolean }) => void;
+  onDragMove?: (info: DragInfo) => void;
+  onDragEnd?: (info: DragInfo) => void;
+  onPointerDownCapture?: () => void;
+  getMediaGesturePolicy?: () => MediaGesturePolicy;
+}
 
 export class InteractionManager {
   private canvas: HTMLCanvasElement;
   private getLayers: () => BaseLayer[];
   private getContext: () => CanvasRenderingContext2D;
-  private onStateChange: () => void;
+  private onStateChangeLegacy?: () => void;
+  private onTransformCb?: (layer: BaseLayer) => void;
+  private onGestureEndCb?: (layer: BaseLayer | null, changed: boolean) => void;
+  private onRenderRequestCb?: () => void;
   private onSelectLayer: (layer: BaseLayer | null) => void;
   private onDoubleTapLayer?: (layer: BaseLayer) => void;
   private onSingleTapLayer?: (layer: BaseLayer) => void;
   private onFilterSwipe?: (direction: 'prev' | 'next') => void;
   private onBringToFront?: (layer: BaseLayer) => void;
   private onSnapGuide?: (snap: { x: boolean; y: boolean }) => void;
-  private onDragMove?: (info: { layer: BaseLayer; clientX: number; clientY: number; isDragging: boolean }) => void;
-  private onDragEnd?: (info: { layer: BaseLayer; clientX: number; clientY: number }) => void;
+  private onDragMove?: (info: DragInfo) => void;
+  private onDragEnd?: (info: DragInfo) => void;
   private onPointerDownCapture?: () => void;
+  private getMediaGesturePolicy: () => MediaGesturePolicy;
 
   private selectedLayer: BaseLayer | null = null;
   private transformingLayer: BaseLayer | null = null;
@@ -30,6 +81,14 @@ export class InteractionManager {
   private isCornerResizeMode: boolean = false;
   private candidateLayer: BaseLayer | null = null;
 
+  // WP1: jest durumu
+  private isMediaPan = false;
+  private gestureHadMultiTouch = false;
+  private gestureChanged = false;
+  private contentRect: ContentRect | null = null;
+  private wheelCommitTimer: ReturnType<typeof setTimeout> | null = null;
+  private wheelLayer: BaseLayer | null = null;
+
   // İki Parmak (Pan + Pinch + Rotate) Takibi
   private startCenter: Point = { x: 0, y: 0 };
   private startDistance: number = 0;
@@ -43,25 +102,14 @@ export class InteractionManager {
   private pendingTapTimer: ReturnType<typeof setTimeout> | null = null;
   private pendingTapLayer: BaseLayer | null = null;
 
-  constructor(options: {
-    canvas: HTMLCanvasElement;
-    getLayers: () => BaseLayer[];
-    getContext: () => CanvasRenderingContext2D;
-    onStateChange: () => void;
-    onSelectLayer: (layer: BaseLayer | null) => void;
-    onDoubleTapLayer?: (layer: BaseLayer) => void;
-    onSingleTapLayer?: (layer: BaseLayer) => void;
-    onFilterSwipe?: (direction: 'prev' | 'next') => void;
-    onBringToFront?: (layer: BaseLayer) => void;
-    onSnapGuide?: (snap: { x: boolean; y: boolean }) => void;
-    onDragMove?: (info: { layer: BaseLayer; clientX: number; clientY: number; isDragging: boolean }) => void;
-    onDragEnd?: (info: { layer: BaseLayer; clientX: number; clientY: number }) => void;
-    onPointerDownCapture?: () => void;
-  }) {
+  constructor(options: InteractionManagerOptions) {
     this.canvas = options.canvas;
     this.getLayers = options.getLayers;
     this.getContext = options.getContext;
-    this.onStateChange = options.onStateChange;
+    this.onStateChangeLegacy = options.onStateChange;
+    this.onTransformCb = options.onTransform;
+    this.onGestureEndCb = options.onGestureEnd;
+    this.onRenderRequestCb = options.onRenderRequest;
     this.onSelectLayer = options.onSelectLayer;
     this.onDoubleTapLayer = options.onDoubleTapLayer;
     this.onSingleTapLayer = options.onSingleTapLayer;
@@ -71,11 +119,31 @@ export class InteractionManager {
     this.onDragMove = options.onDragMove;
     this.onDragEnd = options.onDragEnd;
     this.onPointerDownCapture = options.onPointerDownCapture;
+    this.getMediaGesturePolicy = options.getMediaGesturePolicy || (() => DEFAULT_MEDIA_POLICY);
 
     // Dokunmatik varsayılan kaydırmaları engelle
     this.canvas.style.touchAction = 'none';
 
     this.bindEvents();
+  }
+
+  // ─────────────────────────────────────────────────────────────
+  // Geri çağrı yardımcıları
+  // ─────────────────────────────────────────────────────────────
+  private notifyTransform(layer: BaseLayer) {
+    this.gestureChanged = true;
+    if (this.onTransformCb) this.onTransformCb(layer);
+    else this.onStateChangeLegacy?.();
+  }
+
+  private notifyRender() {
+    if (this.onRenderRequestCb) this.onRenderRequestCb();
+    else this.onStateChangeLegacy?.();
+  }
+
+  private notifyGestureEnd(layer: BaseLayer | null, changed: boolean) {
+    if (this.onGestureEndCb) this.onGestureEndCb(layer, changed);
+    else this.onStateChangeLegacy?.();
   }
 
   public setSelectedLayer(layer: BaseLayer | null) {
@@ -88,15 +156,57 @@ export class InteractionManager {
       this.selectedLayer.selected = true;
     }
     this.onSelectLayer(this.selectedLayer);
-    this.onStateChange();
+    this.notifyRender();
   }
 
   public getSelectedLayer(): BaseLayer | null {
     return this.selectedLayer;
   }
 
-  private getCanvasPoint(clientX: number, clientY: number): Point {
+  /** Bir jest sürerken true (UI/motor oynatma senkronunu buna göre erteleyebilir). */
+  public isGestureActive(): boolean {
+    return this.activePointers.size > 0;
+  }
+
+  // ─────────────────────────────────────────────────────────────
+  // Koordinat dönüşümü: CSS object-fit (contain/cover) letterbox'ını hesaba katar
+  // ─────────────────────────────────────────────────────────────
+  private computeContentRect(): ContentRect {
     const rect = this.canvas.getBoundingClientRect();
+    const cw = this.canvas.width || 1;
+    const ch = this.canvas.height || 1;
+    let fit = '';
+    try {
+      fit = typeof getComputedStyle === 'function' ? getComputedStyle(this.canvas).objectFit : '';
+    } catch {
+      fit = '';
+    }
+    if ((fit === 'contain' || fit === 'scale-down' || fit === 'cover') && rect.width > 0 && rect.height > 0) {
+      const scale =
+        fit === 'cover'
+          ? Math.max(rect.width / cw, rect.height / ch)
+          : Math.min(rect.width / cw, rect.height / ch, fit === 'scale-down' ? 1 : Infinity);
+      const w = cw * scale;
+      const h = ch * scale;
+      return {
+        left: rect.left + (rect.width - w) / 2,
+        top: rect.top + (rect.height - h) / 2,
+        width: w,
+        height: h,
+      };
+    }
+    return { left: rect.left, top: rect.top, width: rect.width, height: rect.height };
+  }
+
+  private getRect(): ContentRect {
+    if (!this.contentRect || this.activePointers.size === 0) {
+      this.contentRect = this.computeContentRect();
+    }
+    return this.contentRect;
+  }
+
+  private getCanvasPoint(clientX: number, clientY: number): Point {
+    const rect = this.getRect();
     const scaleX = this.canvas.width / (rect.width || 1);
     const scaleY = this.canvas.height / (rect.height || 1);
 
@@ -104,6 +214,24 @@ export class InteractionManager {
       x: (clientX - rect.left) * scaleX,
       y: (clientY - rect.top) * scaleY
     };
+  }
+
+  /** Tuval pikselini client koordinatına çevirir. */
+  public canvasToClient(pt: Point): Point {
+    const rect = this.contentRect || this.computeContentRect();
+    return {
+      x: rect.left + (pt.x * rect.width) / (this.canvas.width || 1),
+      y: rect.top + (pt.y * rect.height) / (this.canvas.height || 1),
+    };
+  }
+
+  private buildDragInfo(layer: BaseLayer, deletable: boolean): DragInfo {
+    if (!deletable) {
+      return { layer, clientX: Number.NaN, clientY: Number.NaN, isDragging: true, deletable: false };
+    }
+    const centerPx = layer.getPixelPosition(this.canvas.width, this.canvas.height);
+    const c = this.canvasToClient(centerPx);
+    return { layer, clientX: c.x, clientY: c.y, isDragging: true, deletable: true };
   }
 
   private findHitLayer(pt: Point): BaseLayer | null {
@@ -118,12 +246,16 @@ export class InteractionManager {
     }
 
     // 2. Taban medya katmanı
-    const mediaLayer = this.getLayers().find((l) => l.type === 'media' && l.visible && !l.locked);
+    const mediaLayer = this.getMediaLayer();
     if (mediaLayer && mediaLayer.containsPoint(pt, ctx, this.canvas.width, this.canvas.height)) {
       return mediaLayer;
     }
 
     return null;
+  }
+
+  private getMediaLayer(): BaseLayer | null {
+    return this.getLayers().find((l) => l.type === 'media' && l.visible && !l.locked) || null;
   }
 
   private cancelTapTimer() {
@@ -150,6 +282,14 @@ export class InteractionManager {
 
   public destroy() {
     this.cancelTapTimer();
+    if (this.wheelCommitTimer) {
+      clearTimeout(this.wheelCommitTimer);
+      this.wheelCommitTimer = null;
+    }
+    this.activePointers.clear();
+    this.transformingLayer = null;
+    this.selectedLayer = null;
+    this.candidateLayer = null;
     this.canvas.removeEventListener('pointerdown', this.onPointerDown);
     this.canvas.removeEventListener('pointermove', this.onPointerMove);
     this.canvas.removeEventListener('pointerup', this.onPointerUp);
@@ -166,6 +306,14 @@ export class InteractionManager {
       this.canvas.setPointerCapture(e.pointerId);
     } catch {
       // pointer capture yoksa devam et
+    }
+
+    if (this.activePointers.size === 0) {
+      // Yeni jest: letterbox dikdörtgenini bir kez hesapla
+      this.contentRect = this.computeContentRect();
+      this.gestureHadMultiTouch = false;
+      this.gestureChanged = false;
+      this.isMediaPan = false;
     }
 
     const pt = this.getCanvasPoint(e.clientX, e.clientY);
@@ -195,7 +343,7 @@ export class InteractionManager {
         this.startDistance = Math.max(12, Math.hypot(pt.x - centerPx.x, pt.y - centerPx.y));
         this.startAngle = Math.atan2(pt.y - centerPx.y, pt.x - centerPx.x) * (180 / Math.PI);
         this.startLayerTransform = { ...this.selectedLayer.transform };
-        this.onStateChange();
+        this.notifyRender();
         return;
       }
 
@@ -214,7 +362,20 @@ export class InteractionManager {
         this.onBringToFront?.(this.candidateLayer);
         this.startLayerTransform = { ...this.candidateLayer.transform };
         this.startCenter = { x: pt.x, y: pt.y };
-        this.onStateChange();
+        this.notifyRender();
+        return;
+      }
+
+      // WP1 (C1): tek parmakla taban medya kaydırma (Post / Reels)
+      if (
+        this.candidateLayer &&
+        this.candidateLayer.type === 'media' &&
+        this.getMediaGesturePolicy().oneFingerPan
+      ) {
+        this.transformingLayer = this.candidateLayer;
+        this.isMediaPan = true;
+        this.startLayerTransform = { ...this.candidateLayer.transform };
+        this.startCenter = { x: pt.x, y: pt.y };
       }
       return;
     }
@@ -225,6 +386,8 @@ export class InteractionManager {
       this.cancelTapTimer();
       this.isSwipeTriggered = true; // Filtre kaydırmayı kilitle
       this.isCornerResizeMode = false;
+      this.gestureHadMultiTouch = true;
+      this.isMediaPan = false;
 
       const pts = Array.from(this.activePointers.values()).map((p) => p.pt);
       const p1 = pts[0];
@@ -234,7 +397,7 @@ export class InteractionManager {
       const hit1 = this.findHitLayer(p1);
       const hit2 = this.findHitLayer(p2);
       const overlayHit = (hit1 && hit1.type !== 'media') ? hit1 : ((hit2 && hit2.type !== 'media') ? hit2 : null);
-      const target = overlayHit || this.transformingLayer || hit1 || hit2 || this.selectedLayer || this.getLayers().find((l) => l.type === 'media' && l.visible && !l.locked) || null;
+      const target = overlayHit || this.transformingLayer || hit1 || hit2 || this.selectedLayer || this.getMediaLayer();
 
       if (target && !target.locked) {
         this.transformingLayer = target;
@@ -254,7 +417,7 @@ export class InteractionManager {
         this.startAngle = Math.atan2(p2.y - p1.y, p2.x - p1.x) * (180 / Math.PI);
         this.startLayerTransform = { ...target.transform };
 
-        this.onStateChange();
+        this.notifyRender();
       }
     }
   };
@@ -272,13 +435,16 @@ export class InteractionManager {
       const pts = Array.from(this.activePointers.values()).map((p) => p.pt);
       const p1 = pts[0];
       const p2 = pts[1];
+      const layer = this.transformingLayer;
+      const isMedia = layer.type === 'media';
+      const policy = this.getMediaGesturePolicy();
 
-      // A. Taşıma (Pan) - Akıcı ve Hızlı Hareket (1.35x Pan Hızı)
+      // A. Taşıma (Pan) - Akıcı ve Hızlı Hareket (1.35x Pan Hızı; medya kaydırmada 1:1)
       const currentCenter = {
         x: (p1.x + p2.x) / 2,
         y: (p1.y + p2.y) / 2
       };
-      const PAN_SPEED = 1.35;
+      const PAN_SPEED = isMedia && policy.oneFingerPan ? 1.0 : 1.35;
       const dx = ((currentCenter.x - this.startCenter.x) / this.canvas.width) * PAN_SPEED;
       const dy = ((currentCenter.y - this.startCenter.y) / this.canvas.height) * PAN_SPEED;
       let newX = Math.max(-2.5, Math.min(3.5, this.startLayerTransform.x + dx));
@@ -288,7 +454,7 @@ export class InteractionManager {
       // KURAL: Yazılar (TextLayer) merkez kılavuzundan/mıknatısından tamamen hariç tutulur.
       let snapX = false;
       let snapY = false;
-      const isText = this.transformingLayer.type === 'text';
+      const isText = layer.type === 'text';
 
       if (!isText) {
         // Yumuşak ve esnek mıknatıs eşiği (0.0065 = ~7px)
@@ -304,24 +470,27 @@ export class InteractionManager {
       }
       this.onSnapGuide?.({ x: snapX, y: snapY });
 
-      this.transformingLayer.transform.x = newX;
-      this.transformingLayer.transform.y = newY;
+      layer.transform.x = newX;
+      layer.transform.y = newY;
 
       // B. Ölçekleme (Pinch / Scale)
       const currentDist = Math.hypot(p2.x - p1.x, p2.y - p1.y);
       if (this.startDistance > 8) {
         const scaleFactor = currentDist / this.startDistance;
         const newScale = Math.max(0.15, Math.min(6.0, this.startLayerTransform.scale * scaleFactor));
-        this.transformingLayer.transform.scale = Math.round(newScale * 100) / 100;
+        layer.transform.scale = Math.round(newScale * 100) / 100;
       }
 
       // C. Döndürme (Rotate) - Fotoğraflar için Kasıtlı Döndürme Eşiği (Deadzone)
       const currentAngle = Math.atan2(p2.y - p1.y, p2.x - p1.x) * (180 / Math.PI);
-      const isPhoto = this.transformingLayer.type === 'media' || this.transformingLayer.type === 'image_overlay';
+      const isPhoto = isMedia || layer.type === 'image_overlay';
 
       let rotationToApply = this.startLayerTransform.rotation;
 
-      if (isPhoto) {
+      if (isMedia && !policy.allowRotate) {
+        // Post / Reels fotoğraf: döndürme yalnızca 90° butonuyla
+        rotationToApply = this.startLayerTransform.rotation;
+      } else if (isPhoto) {
         // Fotoğraflar için Dönme Eşiği: 8.5 Derece
         // Parmaklar kasıtlı olarak döndürülmediği sürece fotoğraf sağa-sola yalpalamaz
         let diff = (currentAngle - this.startAngle) % 360;
@@ -360,23 +529,14 @@ export class InteractionManager {
         rotationToApply = Math.round(newRot);
       }
 
-      this.transformingLayer.transform.rotation = rotationToApply;
+      layer.transform.rotation = rotationToApply;
 
-      // Mıknatıslı Çöp Kutusu Takibi
-      if (this.transformingLayer.type !== 'media') {
-        const clientCenter = {
-          x: (e.clientX + this.touchStartX) / 2,
-          y: (e.clientY + this.touchStartY) / 2,
-        };
-        this.onDragMove?.({
-          layer: this.transformingLayer,
-          clientX: clientCenter.x,
-          clientY: clientCenter.y,
-          isDragging: true
-        });
+      // Çöp kutusu: iki parmak jestinde ASLA silinmez (C2). Kutu görünür ama sıcak olmaz.
+      if (!isMedia) {
+        this.onDragMove?.(this.buildDragInfo(layer, false));
       }
 
-      this.onStateChange();
+      this.notifyTransform(layer);
       return;
     }
 
@@ -384,7 +544,8 @@ export class InteractionManager {
     // 2. TEK PARMAK MODU:
     // A) Köşe tutamacı tutulduysa: Tek parmakla ölçekleme + döndürme
     // B) Üst nesne tutulduysa: Tek elle 1:1 serbest taşıma
-    // C) Boş tuvalde sürükleniyorsa: Yatay Swipe (Filtre Değişimi)
+    // C) Taban medya (Post/Reels): tek parmakla kaydırma
+    // D) Boş tuvalde sürükleniyorsa (Hikaye): Yatay Swipe (Filtre Değişimi)
     // ─────────────────────────────────────────────────────────────
     if (this.activePointers.size === 1) {
       const deltaX = e.clientX - this.touchStartX;
@@ -414,12 +575,13 @@ export class InteractionManager {
         if (Math.abs(newRot - 0) <= 3.0 || Math.abs(newRot - 360) <= 3.0) newRot = 0;
         this.transformingLayer.transform.rotation = Math.round(newRot);
 
-        this.onStateChange();
+        this.notifyTransform(this.transformingLayer);
         return;
       }
 
       // A. Tek elle etiket / çıkartma / metin taşıma (1:1 anlık sürükleme)
       if (this.transformingLayer && this.transformingLayer.type !== 'media' && !this.transformingLayer.locked) {
+        const layer = this.transformingLayer;
         const dx = (pt.x - this.startCenter.x) / this.canvas.width;
         const dy = (pt.y - this.startCenter.y) / this.canvas.height;
         let newX = Math.max(-1.5, Math.min(2.5, this.startLayerTransform.x + dx));
@@ -427,7 +589,7 @@ export class InteractionManager {
 
         let snapX = false;
         let snapY = false;
-        const isText = this.transformingLayer.type === 'text';
+        const isText = layer.type === 'text';
 
         if (!isText) {
           const SNAP_THRESHOLD = 0.0065;
@@ -442,21 +604,49 @@ export class InteractionManager {
         }
         this.onSnapGuide?.({ x: snapX, y: snapY });
 
-        this.transformingLayer.transform.x = newX;
-        this.transformingLayer.transform.y = newY;
+        layer.transform.x = newX;
+        layer.transform.y = newY;
 
-        this.onDragMove?.({
-          layer: this.transformingLayer,
-          clientX: e.clientX,
-          clientY: e.clientY,
-          isDragging: true
-        });
+        // C2: çöp kutusu yalnızca tek parmak sürüklemede ve katman merkezine göre
+        this.onDragMove?.(this.buildDragInfo(layer, !this.gestureHadMultiTouch));
 
-        this.onStateChange();
+        this.notifyTransform(layer);
         return;
       }
 
-      // B. Boş Tuvalde Yatay Swipe Eşiği: 42px ve düşey hareketten belirgin biçimde fazla olmalı
+      // C. Taban medya tek parmak kaydırma (Post / Reels)
+      if (
+        this.isMediaPan &&
+        this.transformingLayer &&
+        this.transformingLayer.type === 'media' &&
+        !this.transformingLayer.locked
+      ) {
+        const layer = this.transformingLayer;
+        layer.isInteracting = true;
+        const dx = (pt.x - this.startCenter.x) / this.canvas.width;
+        const dy = (pt.y - this.startCenter.y) / this.canvas.height;
+        let newX = Math.max(-2.5, Math.min(3.5, this.startLayerTransform.x + dx));
+        let newY = Math.max(-2.5, Math.min(3.5, this.startLayerTransform.y + dy));
+        const SNAP_THRESHOLD = 0.0065;
+        let snapX = false;
+        let snapY = false;
+        if (Math.abs(newX - 0.5) < SNAP_THRESHOLD) {
+          newX = 0.5;
+          snapX = true;
+        }
+        if (Math.abs(newY - 0.5) < SNAP_THRESHOLD) {
+          newY = 0.5;
+          snapY = true;
+        }
+        this.onSnapGuide?.({ x: snapX, y: snapY });
+        layer.transform.x = newX;
+        layer.transform.y = newY;
+        this.notifyTransform(layer);
+        return;
+      }
+
+      // D. Boş Tuvalde Yatay Swipe Eşiği (yalnızca Hikaye, B13)
+      if (!this.getMediaGesturePolicy().filterSwipe) return;
       const SWIPE_THRESHOLD = 42;
       if (!this.isSwipeTriggered && Math.abs(deltaX) > SWIPE_THRESHOLD && Math.abs(deltaX) > Math.abs(deltaY) * 1.25) {
         this.isSwipeTriggered = true;
@@ -468,6 +658,7 @@ export class InteractionManager {
   };
 
   private onPointerUp = (e: PointerEvent) => {
+    if (!this.activePointers.has(e.pointerId)) return;
     this.activePointers.delete(e.pointerId);
     try {
       this.canvas.releasePointerCapture(e.pointerId);
@@ -475,31 +666,41 @@ export class InteractionManager {
       // sessiz geç
     }
 
-    // Sürükleme bittiğinde çöp kutusu bırakma kontrolü
-    if (this.transformingLayer && this.transformingLayer.type !== 'media') {
-      this.onDragEnd?.({
-        layer: this.transformingLayer,
-        clientX: e.clientX,
-        clientY: e.clientY
-      });
-    }
-
-    // İki parmaktan tek parmağa düşüldüyse tek parmak taşımasını sürdür
-    if (this.activePointers.size === 1 && this.transformingLayer && this.transformingLayer.type !== 'media') {
+    // İki parmaktan tek parmağa düşüldüyse tek parmak taşımasını sürdür (silme kapalı kalır)
+    if (this.activePointers.size === 1 && this.transformingLayer) {
       const remainingPt = Array.from(this.activePointers.values())[0].pt;
-      this.startCenter = { x: remainingPt.x, y: remainingPt.y };
-      this.startLayerTransform = { ...this.transformingLayer.transform };
+      if (this.transformingLayer.type !== 'media') {
+        this.startCenter = { x: remainingPt.x, y: remainingPt.y };
+        this.startLayerTransform = { ...this.transformingLayer.transform };
+      } else if (this.getMediaGesturePolicy().oneFingerPan) {
+        this.isMediaPan = true;
+        this.isMoved = true;
+        this.startCenter = { x: remainingPt.x, y: remainingPt.y };
+        this.startLayerTransform = { ...this.transformingLayer.transform };
+      }
     }
 
     // Dokunuş tamamen bittiğinde etkileşimi kaldır ve kılavuz çizgisini kapat
     if (this.activePointers.size === 0) {
+      const layer = this.transformingLayer;
+      // Çöp kutusu bırakma kontrolü: yalnızca jest boyunca tek parmakla gerçekten sürüklendiyse
+      if (layer && layer.type !== 'media') {
+        const deletable =
+          this.isMoved && !this.gestureHadMultiTouch && !this.isCornerResizeMode;
+        const info = this.buildDragInfo(layer, deletable);
+        info.isDragging = false;
+        this.onDragEnd?.(info);
+      }
+
       this.isCornerResizeMode = false;
+      this.isMediaPan = false;
       this.onSnapGuide?.({ x: false, y: false });
-    }
-    if (this.activePointers.size === 0 && this.transformingLayer) {
-      this.transformingLayer.isInteracting = false;
-      this.transformingLayer = null;
-      this.onStateChange();
+      if (layer) {
+        layer.isInteracting = false;
+        this.transformingLayer = null;
+      }
+      this.notifyGestureEnd(layer, this.gestureChanged);
+      this.gestureChanged = false;
     }
 
     // ─────────────────────────────────────────────────────────────
@@ -569,6 +770,7 @@ export class InteractionManager {
       this.isMoved = false;
       this.isSwipeTriggered = false;
       this.candidateLayer = null;
+      this.gestureHadMultiTouch = false;
     }
   };
 
@@ -576,11 +778,12 @@ export class InteractionManager {
   private onWheel = (e: WheelEvent) => {
     e.preventDefault();
     this.onPointerDownCapture?.();
+    if (this.activePointers.size === 0) this.contentRect = this.computeContentRect();
     const pt = this.getCanvasPoint(e.clientX, e.clientY);
     const hit = this.findHitLayer(pt);
     const target = (hit && hit.type !== 'media')
       ? hit
-      : (this.selectedLayer || this.getLayers().find((l) => l.type === 'media' && l.visible && !l.locked));
+      : (this.selectedLayer || this.getMediaLayer());
 
     if (!target || target.locked) return;
 
@@ -588,11 +791,13 @@ export class InteractionManager {
       this.setSelectedLayer(hit);
     }
 
+    const isMedia = target.type === 'media';
     if (e.ctrlKey) {
       // Ctrl + Wheel ➔ Zoom
       const factor = e.deltaY > 0 ? 0.95 : 1.05;
       target.transform.scale = Math.max(0.15, Math.min(6.0, target.transform.scale * factor));
     } else {
+      if (isMedia && !this.getMediaGesturePolicy().allowRotate) return;
       // Normal Wheel ➔ Sağa veya sola serbest döndürme
       const step = e.shiftKey ? 1 : 4;
       const delta = e.deltaY > 0 ? step : -step;
@@ -601,7 +806,17 @@ export class InteractionManager {
       target.transform.rotation = Math.round(newRot);
     }
 
-    this.onStateChange();
+    this.notifyTransform(target);
+    // Tekerlek jesti için 'bitti' sinyali: 300 ms sessizlikten sonra
+    this.wheelLayer = target;
+    if (this.wheelCommitTimer) clearTimeout(this.wheelCommitTimer);
+    this.wheelCommitTimer = setTimeout(() => {
+      this.wheelCommitTimer = null;
+      const l = this.wheelLayer;
+      this.wheelLayer = null;
+      this.gestureChanged = false;
+      this.notifyGestureEnd(l, true);
+    }, 300);
   };
 
   // Klavye ok tuşlarıyla serbest ve hassas döndürme (Left / Right Arrow)
@@ -614,26 +829,33 @@ export class InteractionManager {
 
     const target = this.selectedLayer;
     if (!target || target.locked) return;
+    if (target.type === 'media' && !this.getMediaGesturePolicy().allowRotate) return;
 
+    let changed = false;
     if (e.key === 'ArrowLeft') {
       e.preventDefault();
       const step = e.shiftKey ? 1 : 4;
       let newRot = (target.transform.rotation - step) % 360;
       if (newRot < 0) newRot += 360;
       target.transform.rotation = Math.round(newRot);
-      this.onStateChange();
+      changed = true;
     } else if (e.key === 'ArrowRight') {
       e.preventDefault();
       const step = e.shiftKey ? 1 : 4;
       let newRot = (target.transform.rotation + step) % 360;
       if (newRot < 0) newRot += 360;
       target.transform.rotation = Math.round(newRot);
-      this.onStateChange();
+      changed = true;
     } else if (e.key === '0' || e.key === 'Escape') {
       if (target.transform.rotation !== 0) {
         target.transform.rotation = 0;
-        this.onStateChange();
+        changed = true;
       }
+    }
+    if (changed) {
+      this.notifyTransform(target);
+      this.gestureChanged = false;
+      this.notifyGestureEnd(target, true);
     }
   };
 }

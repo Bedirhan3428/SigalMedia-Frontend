@@ -1,13 +1,14 @@
 // [START] CREATED BY Bedirhan
 // [MODIFIED BY Bedirhan]
 "use client";
+/* Motor/DOM eşitlemesi bilinçli olarak efekt içinde setState ve ref okuması yapar (kararlı geri çağrılar). */
+/* eslint-disable react-hooks/set-state-in-effect, react-hooks/refs */
 
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import {
   Scissors,
   Music,
   Gauge,
-  Palette,
   Volume2,
   VolumeX,
   Plus,
@@ -29,6 +30,8 @@ import { TbPhotoPlus } from "react-icons/tb";
 import { RiColorFilterAiLine } from "react-icons/ri";
 import {
   BaseLayer,
+  EngineSnapshot,
+  MAX_VIDEO_SEC,
   CanvasEngine,
   FILTER_PRESETS,
   OverlayImageLayer,
@@ -42,10 +45,15 @@ import {
   captureFramePreview,
 } from "@/lib/canvas-editor";
 import VideoTimelineNLE from "./VideoTimelineNLE";
-import MusicSettingsPanel from "./MusicSettingsPanel";
-import PreviewThumb from "./PreviewThumb";
+import MusicSettingsPanel from "../MusicSettingsPanel";
+import PreviewThumb from "../PreviewThumb";
 import { NLESelectedType } from "./TimelineOverlayTracks";
 import OnCanvasCropOverlay from "./OnCanvasCropOverlay";
+import {
+  EditorToastProvider,
+  useEditorToast,
+  useBackLayer,
+} from "../common";
 
 export interface ReelsEditorProps {
   engine?: CanvasEngine | null;
@@ -74,23 +82,18 @@ export interface ReelsEditorProps {
   onOpenPhotoOverlay?: () => void;
   onSelectFilterIndex: (index: number) => void;
   onSelectReelsEffect: (effect: ReelsEffectId) => void;
-  onPublish: () => void;
+  /** Önizleme sahnesinin alttan boşluğu (px, safe-area dahil) ölçüldükçe bildirilir. */
+  onLayout?: (layout: { bottom: number }) => void;
 }
 
 type ActiveToolStrip =
   | "none"
   | "effects"
-  | "audio_speed"
+  | "volume"
+  | "speed"
   | "music"
   | "filters"
   | "crop";
-
-type NLEHistorySnapshot = {
-  clips: VideoTrackClip[];
-  effectClips: ReelsEffectClip[];
-  musicClip: StoryAudioMeta | null;
-  overlayTimings: Array<{ layerId: string; start: number; end: number }>;
-};
 
 const SPEED_OPTIONS = [0.5, 1.0, 1.5, 2.0];
 
@@ -101,8 +104,30 @@ const SHEET_OPEN_DELAY_MS = 120;
 const SHEET_ANIM_MS = 280;
 // Yeni efekt klibi varsayılan süresi ve önizleme süresi (sn)
 const EFFECT_CLIP_SPAN_SEC = 2;
+// Geri al yığını sınırı ve iTunes önizleme parça süresi (sn)
+const HISTORY_LIMIT = 40;
+const MUSIC_PREVIEW_SEC = 30;
+// Alt panelin en büyük yüksekliği (ekranın ~%42si): timeline bunun içinde dikey kayar (A5)
+const PANEL_MAX_HEIGHT = "42dvh";
 
-export default function ReelsEditor({
+/** Fotoğraf katmanı dönüşümünü günceller (katman motor nesnesidir, React durumu değil). */
+function patchPhotoTransform(
+  layer: OverlayImageLayer,
+  fn: (t: OverlayImageLayer["transform"]) => OverlayImageLayer["transform"]
+) {
+  layer.transform = fn(layer.transform);
+}
+
+/** Kimliği sabit, her zaman son fonksiyonu çağıran geri çağrı. */
+function useStable<A extends unknown[], R>(fn: (...args: A) => R): (...args: A) => R {
+  const ref = useRef(fn);
+  useEffect(() => {
+    ref.current = fn;
+  });
+  return useCallback((...args: A) => ref.current(...args), []);
+}
+
+function ReelsEditorInner({
   engine,
   selectedCanvasLayer,
   videoState,
@@ -112,29 +137,26 @@ export default function ReelsEditor({
   activeFilterIndex,
   activeReelsEffect,
   effectClips = [],
-  getCurrentTime,
   onChangeSpeed,
   onChangeVolume,
   onChangeMusicVolume,
   onChangeMusicMeta,
   onChangeEffectClips,
   onCropModeChange,
-  onSeek,
-  onTogglePlay,
   onOpenTextEditor,
   onOpenMusicPicker,
   onOpenStickerSheet,
   onOpenPhotoOverlay,
   onSelectFilterIndex,
   onSelectReelsEffect,
+  onLayout,
 }: ReelsEditorProps) {
+  const toast = useEditorToast();
   const [activeStrip, setActiveStrip] = useState<ActiveToolStrip>("none");
   const [selectedItemId, setSelectedItemId] = useState<string | null>(null);
   const [selectedItemType, setSelectedItemType] = useState<NLESelectedType>(null);
   const [clips, setClips] = useState<VideoTrackClip[]>([]);
   const [overlayItems, setOverlayItems] = useState<OverlayTrackItem[]>([]);
-  const [historyStack, setHistoryStack] = useState<NLEHistorySnapshot[]>([]);
-  const [redoStack, setRedoStack] = useState<NLEHistorySnapshot[]>([]);
   const appendClipInputRef = useRef<HTMLInputElement | null>(null);
   const isInternalLayerSyncRef = useRef(false);
 
@@ -203,8 +225,14 @@ export default function ReelsEditor({
   useEffect(() => {
     syncFromEngine();
     if (!engine) return;
+    // 'change' yapısal değişimdir (pointermove'da yayılmaz); aynı karedeki yayınlar birleşir
+    let raf: number | null = null;
     const handleEngineChange = () => {
-      syncFromEngine();
+      if (raf !== null) return;
+      raf = requestAnimationFrame(() => {
+        raf = null;
+        syncFromEngine();
+      });
     };
     const handleCanvasSelect = (layer: BaseLayer | null) => {
       if (isInternalLayerSyncRef.current) return;
@@ -215,12 +243,11 @@ export default function ReelsEditor({
       }
     };
     engine.on("change", handleEngineChange);
-    engine.on("video-time", handleEngineChange);
     engine.on("select", handleCanvasSelect);
     return () => {
       engine.off("change", handleEngineChange);
-      engine.off("video-time", handleEngineChange);
       engine.off("select", handleCanvasSelect);
+      if (raf !== null) cancelAnimationFrame(raf);
     };
   }, [engine, syncFromEngine]);
 
@@ -247,80 +274,217 @@ export default function ReelsEditor({
 
   const maxSourceDuration = Math.max(
     totalDuration,
-    engine?.getMedia()?.duration || videoState.duration || 60
+    engine?.getMedia()?.duration || videoState.duration || MAX_VIDEO_SEC
   );
 
   const getPlayheadTime = () => {
-    const raw = getCurrentTime ? getCurrentTime() : videoState.currentTime;
+    const raw = engine ? engine.getCurrentTime() : videoState.currentTime;
     return Math.max(0, Math.min(totalDuration, raw));
   };
 
-  // Undo / Redo Snapshot Kaydı
-  const commitHistory = useCallback(() => {
-    if (!engine) return;
-    const snap: NLEHistorySnapshot = {
-      clips: engine.getVideoClips(),
-      effectClips: effectClips.map((c) => ({ ...c })),
-      musicClip: selectedMusic ? { ...selectedMusic } : null,
-      overlayTimings: engine.getOverlayTrackItems().map((i) => ({
-        layerId: i.layerId,
-        start: i.timelineStart,
-        end: i.timelineEnd,
-      })),
-    };
-    setHistoryStack((prev) => [...prev.slice(-24), snap]);
-    setRedoStack([]);
-  }, [engine, effectClips, selectedMusic]);
-
-  const applySnapshot = useCallback(
-    (snap: NLEHistorySnapshot) => {
-      if (!engine) return;
-      engine.setVideoClips(snap.clips);
-      onChangeEffectClips?.(snap.effectClips);
-      onChangeMusicMeta?.(snap.musicClip);
-      for (const ov of snap.overlayTimings) {
-        engine.updateOverlayTrackTiming(ov.layerId, ov.start, ov.end);
-      }
-      syncFromEngine();
+  // Kararlı geri çağrılar: timeline satırları bunlara bağlı, gereksiz yeniden çizim olmaz (D1)
+  const readTime = useCallback(() => engine?.getCurrentTime() ?? 0, [engine]);
+  const handleSeek = useCallback(
+    (t: number) => {
+      engine?.seekVideo(t);
     },
-    [engine, onChangeEffectClips, onChangeMusicMeta, syncFromEngine]
+    [engine]
   );
+  const handleTogglePlay = useCallback(() => {
+    engine?.toggleVideoPlay();
+  }, [engine]);
+  const handlePause = useCallback(() => engine?.pauseVideo(), [engine]);
 
-  const handleUndo = () => {
-    if (historyStack.length === 0 || !engine) return;
-    const currentSnap: NLEHistorySnapshot = {
-      clips: engine.getVideoClips(),
-      effectClips: effectClips.map((c) => ({ ...c })),
-      musicClip: selectedMusic ? { ...selectedMusic } : null,
-      overlayTimings: engine.getOverlayTrackItems().map((i) => ({
-        layerId: i.layerId,
-        start: i.timelineStart,
-        end: i.timelineEnd,
-      })),
+  // Kalan süre: MAX_VIDEO_SEC - toplam (B8)
+  const remainingSec = Math.max(0, MAX_VIDEO_SEC - totalDuration);
+
+  // Alt panel ölçümü: ResizeObserver ile yükseklik sayfaya bildirilir (yalnızca değişince)
+  const panelRef = useRef<HTMLDivElement | null>(null);
+  const onLayoutRef = useRef(onLayout);
+  useEffect(() => {
+    onLayoutRef.current = onLayout;
+  }, [onLayout]);
+  const lastBottomRef = useRef<number>(-1);
+  useEffect(() => {
+    const el = panelRef.current;
+    if (!el) return;
+    const report = () => {
+      const h = Math.ceil(el.getBoundingClientRect().height);
+      if (h === lastBottomRef.current) return;
+      lastBottomRef.current = h;
+      onLayoutRef.current?.({ bottom: h });
     };
-    const prevSnap = historyStack[historyStack.length - 1];
-    setHistoryStack((s) => s.slice(0, -1));
-    setRedoStack((r) => [...r, currentSnap]);
-    applySnapshot(prevSnap);
+    report();
+    const ro = new ResizeObserver(report);
+    ro.observe(el);
+    return () => {
+      ro.disconnect();
+      lastBottomRef.current = -1;
+      onLayoutRef.current?.({ bottom: 0 });
+    };
+  }, []);
+
+  // Otomatik oynatma sesi engellendiyse küçük "sesi aç" düğmesi (B5)
+  const [soundBlocked, setSoundBlocked] = useState(() => Boolean(engine?.needsUserGestureForSound()));
+  useEffect(() => {
+    if (!engine) return;
+    setSoundBlocked(engine.needsUserGestureForSound());
+    const onBlocked = (blocked: boolean) => setSoundBlocked(Boolean(blocked));
+    engine.on("sound-blocked", onBlocked);
+    return () => engine.off("sound-blocked", onBlocked);
+  }, [engine]);
+  const handleUnmute = () => {
+    if (!engine) return;
+    // Kullanıcı hareketi içinde eşzamanlı çağrılmalı
+    engine.unlockSound().then((ok) => {
+      if (!ok) toast.error("Ses açılamadı");
+    });
   };
 
-  const handleRedo = () => {
-    if (redoStack.length === 0 || !engine) return;
-    const currentSnap: NLEHistorySnapshot = {
-      clips: engine.getVideoClips(),
-      effectClips: effectClips.map((c) => ({ ...c })),
-      musicClip: selectedMusic ? { ...selectedMusic } : null,
-      overlayTimings: engine.getOverlayTrackItems().map((i) => ({
-        layerId: i.layerId,
-        start: i.timelineStart,
-        end: i.timelineEnd,
-      })),
+  // Alt araç şeritleri geri hareketiyle kapanır
+  useBackLayer(activeStrip !== "none" && activeStrip !== "crop", () => setActiveStrip("none"));
+
+  // Geri al / yinele: engine.snapshot() / restore(). Ardışık 'change' olayları (slider sürüklemesi,
+  // jest sonu vb.) 350 ms içinde tek geçmiş kaydına birleşir; restore'un yaydığı 'change' yok sayılır.
+  const undoRef = useRef<EngineSnapshot[]>([]);
+  const redoRef = useRef<EngineSnapshot[]>([]);
+  const committedRef = useRef<EngineSnapshot | null>(null);
+  const burstRef = useRef(false);
+  const restoringRef = useRef(false);
+  const burstTimerRef = useRef<number | null>(null);
+  const restoreTimerRef = useRef<number | null>(null);
+  const [historyInfo, setHistoryInfo] = useState({ undo: 0, redo: 0 });
+  const bumpHistory = useCallback(() => {
+    setHistoryInfo({ undo: undoRef.current.length, redo: redoRef.current.length });
+  }, []);
+
+  useEffect(() => {
+    if (!engine) return;
+    committedRef.current = engine.snapshot();
+    const onChange = () => {
+      if (restoringRef.current) return;
+      if (!burstRef.current) {
+        burstRef.current = true;
+        if (committedRef.current) {
+          undoRef.current.push(committedRef.current);
+          if (undoRef.current.length > HISTORY_LIMIT) undoRef.current.shift();
+        }
+        redoRef.current = [];
+        bumpHistory();
+      }
+      if (burstTimerRef.current !== null) window.clearTimeout(burstTimerRef.current);
+      burstTimerRef.current = window.setTimeout(() => {
+        burstTimerRef.current = null;
+        burstRef.current = false;
+        committedRef.current = engine.snapshot();
+      }, 350);
     };
-    const nextSnap = redoStack[redoStack.length - 1];
-    setRedoStack((r) => r.slice(0, -1));
-    setHistoryStack((s) => [...s, currentSnap]);
-    applySnapshot(nextSnap);
-  };
+    engine.on("change", onChange);
+    return () => {
+      engine.off("change", onChange);
+      if (burstTimerRef.current !== null) window.clearTimeout(burstTimerRef.current);
+      if (restoreTimerRef.current !== null) window.clearTimeout(restoreTimerRef.current);
+      burstTimerRef.current = null;
+      burstRef.current = false;
+    };
+  }, [engine, bumpHistory]);
+
+  const stepHistory = useCallback(
+    (dir: "undo" | "redo") => {
+      if (!engine) return;
+      engine.pauseVideo();
+      // Bekleyen birleştirme penceresini kapat: mevcut durum "şimdiki" olur
+      if (burstTimerRef.current !== null) {
+        window.clearTimeout(burstTimerRef.current);
+        burstTimerRef.current = null;
+      }
+      burstRef.current = false;
+      const from = dir === "undo" ? undoRef.current : redoRef.current;
+      const to = dir === "undo" ? redoRef.current : undoRef.current;
+      const target = from.pop();
+      if (!target) {
+        bumpHistory();
+        return;
+      }
+      const current = engine.snapshot();
+      restoringRef.current = true;
+      let ok = false;
+      try {
+        ok = engine.restore(target);
+        if (ok) {
+          to.push(current);
+          // Sayfa durumunu motorla eşitle (müzik, efekt klipleri, filtre)
+          onChangeMusicMeta?.(engine.getMusic());
+          onChangeEffectClips?.(engine.getEffectClips());
+          onSelectFilterIndex(engine.getCurrentFilterIndex());
+          setClips(engine.getVideoClips());
+          setOverlayItems(engine.getOverlayTrackItems());
+          setSelectedItemId(null);
+          setSelectedItemType(null);
+          setActiveStrip("none");
+          committedRef.current = engine.snapshot();
+        }
+      } finally {
+        if (restoreTimerRef.current !== null) window.clearTimeout(restoreTimerRef.current);
+        restoreTimerRef.current = window.setTimeout(() => {
+          restoreTimerRef.current = null;
+          restoringRef.current = false;
+          committedRef.current = engine.snapshot();
+        }, 150);
+      }
+      if (!ok) toast.error("Bu adım geri alınamadı");
+      bumpHistory();
+    },
+    [engine, bumpHistory, onChangeMusicMeta, onChangeEffectClips, onSelectFilterIndex, toast]
+  );
+  const handleUndo = useCallback(() => stepHistory("undo"), [stepHistory]);
+  const handleRedo = useCallback(() => stepHistory("redo"), [stepHistory]);
+  // Geçmiş artık 'change' olaylarından otomatik oluşur; eski çağrı noktaları için boş kanca
+  const commitHistory = useCallback(() => {}, []);
+
+  // Sayfadaki müzik durumunu motora yaz (Reels'te tuval çıkartması yok, yalnızca meta)
+  useEffect(() => {
+    if (!engine) return;
+    const cur = engine.getMusic();
+    const a = selectedMusic ? JSON.stringify(selectedMusic) : "";
+    const b = cur ? JSON.stringify(cur) : "";
+    if (a !== b) engine.setMusic(selectedMusic);
+  }, [engine, selectedMusic]);
+
+  // Önizleme parçaları 30 sn: müzik bloğu en fazla 30 sn'de biter (şarkı ofseti düşülür)
+  useEffect(() => {
+    if (!selectedMusic || !onChangeMusicMeta) return;
+    let changed = false;
+    let next: StoryAudioMeta = selectedMusic;
+    if (selectedMusic.segments && selectedMusic.segments.length > 0) {
+      const segs = selectedMusic.segments.map((s) => {
+        const maxEnd = s.timelineStart + Math.max(0.5, MUSIC_PREVIEW_SEC - (s.songOffset || 0));
+        if (s.timelineEnd > maxEnd + 0.01) {
+          changed = true;
+          return { ...s, timelineEnd: Number(maxEnd.toFixed(2)) };
+        }
+        return s;
+      });
+      if (changed) {
+        next = {
+          ...selectedMusic,
+          segments: segs,
+          timelineEnd: segs[segs.length - 1].timelineEnd,
+        };
+      }
+    } else if (
+      typeof selectedMusic.timelineEnd === "number" &&
+      selectedMusic.timelineEnd > (selectedMusic.timelineStart ?? 0)
+    ) {
+      const start = selectedMusic.timelineStart ?? 0;
+      const maxEnd = start + Math.max(0.5, MUSIC_PREVIEW_SEC - (selectedMusic.startTime || 0));
+      if (selectedMusic.timelineEnd > maxEnd + 0.01) {
+        changed = true;
+        next = { ...selectedMusic, timelineEnd: Number(maxEnd.toFixed(2)) };
+      }
+    }
+    if (changed) onChangeMusicMeta(next);
+  }, [selectedMusic, onChangeMusicMeta]);
 
   const handleSelectItem = (id: string | null, type: NLESelectedType) => {
     engine?.pauseVideo();
@@ -608,6 +772,8 @@ export default function ReelsEditor({
       if (cloned) {
         syncFromEngine();
         setSelectedItemId(cloned.id);
+      } else {
+        toast.error(`${MAX_VIDEO_SEC} sn sınırı dolu, klip kopyalanamadı`);
       }
       return;
     }
@@ -907,12 +1073,24 @@ export default function ReelsEditor({
     const file = e.target.files?.[0];
     e.target.value = "";
     if (!file || !engine) return;
-    commitHistory();
-    const added = await engine.appendVideoClip(file);
-    if (added) {
-      syncFromEngine();
-      setSelectedItemId(added.id);
-      setSelectedItemType("video");
+    if (engine.getRemainingTimelineCapacity() < 0.5) {
+      toast.error(`En fazla ${MAX_VIDEO_SEC} sn'lik video eklenebilir`);
+      return;
+    }
+    try {
+      const added = await engine.appendVideoClip(file);
+      if (added) {
+        syncFromEngine();
+        setSelectedItemId(added.id);
+        setSelectedItemType("video");
+        if (engine.getRemainingTimelineCapacity() < 0.5) {
+          toast.info(`${MAX_VIDEO_SEC} sn sınırına ulaşıldı`);
+        }
+      } else {
+        toast.error(`En fazla ${MAX_VIDEO_SEC} sn'lik video eklenebilir`);
+      }
+    } catch {
+      toast.error("Klip eklenemedi. Dosya desteklenmiyor olabilir.");
     }
   };
 
@@ -937,6 +1115,167 @@ export default function ReelsEditor({
   const activeClipFitMode = selectedVideoClip?.fitMode || "cover";
 
 
+  // Timeline'a giden geri çağrılar kararlı kimlikte tutulur (son sürüme yönlenir) → memo'lu satırlar
+  // zaman/oynatma güncellemelerinde yeniden çizilmez.
+  const stableSelectItem = useStable(handleSelectItem);
+  const stableTrim = useStable((clipId: string, newStart: number, newEnd: number) => {
+    engine?.updateClipTrim(clipId, newStart, newEnd);
+    syncFromEngine();
+  });
+  const stableReorderClips = useStable((fromIdx: number, toIdx: number) => {
+    engine?.reorderClips(fromIdx, toIdx);
+    syncFromEngine();
+  });
+  const stableAppendClick = useStable(() => {
+    if (engine && engine.getRemainingTimelineCapacity() < 0.5) {
+      toast.error(`En fazla ${MAX_VIDEO_SEC} sn'lik video eklenebilir`);
+      return;
+    }
+    appendClipInputRef.current?.click();
+  });
+  const stableOverlayTiming = useStable((layerId: string, start: number, end: number) => {
+    engine?.updateOverlayTrackTiming(layerId, start, end);
+    syncFromEngine();
+  });
+  const stableReorderOverlay = useStable((layerId: string, direction: "up" | "down") => {
+    engine?.reorderOverlayLayer(layerId, direction);
+    syncFromEngine();
+  });
+  const stableEffectClips = useStable((next: ReelsEffectClip[]) => onChangeEffectClips?.(next));
+  const stableMusicTimeline = useStable(handleMusicTimelineChange);
+  const stableOpenMusic = useStable(() => onOpenMusicPicker());
+  const stableOpenText = useStable(() => onOpenTextEditor());
+  const stableQuickEffect = useStable(() => {
+    engine?.pauseVideo();
+    setActiveStrip("effects");
+  });
+  // Bağlama duyarlı araç listesi (öğe seçiliyken Kopyala/Sil/Kırp vb. görünür)
+  type ToolItem = {
+    key: string;
+    label: string;
+    icon: React.ReactNode;
+    onClick: () => void;
+    disabled?: boolean;
+    active?: boolean;
+    danger?: boolean;
+  };
+  const hasSel = Boolean(selectedItemId && selectedItemType);
+  const isLayerSel =
+    selectedItemType === "text" || selectedItemType === "sticker" || selectedItemType === "photo";
+  const toggleStrip = (strip: ActiveToolStrip) =>
+    setActiveStrip((p) => (p === strip ? "none" : strip));
+  const toolItems: ToolItem[] = [];
+  toolItems.push({
+    key: "split",
+    label: "Böl",
+    icon: <Scissors className="w-4 h-4" />,
+    onClick: () => runDelayedAction("split", handleSplitSelected),
+    disabled: !canSplitSelected || pendingActionKey !== null,
+  });
+  toolItems.push({ key: "text", label: "Metin", icon: <Type className="w-4 h-4" />, onClick: onOpenTextEditor });
+  if (onOpenStickerSheet) {
+    toolItems.push({
+      key: "sticker",
+      label: "Çıkartma",
+      icon: <PiStickerLight className="w-4 h-4" />,
+      onClick: onOpenStickerSheet,
+    });
+  }
+  if (onOpenPhotoOverlay) {
+    toolItems.push({
+      key: "photo",
+      label: "Fotoğraf",
+      icon: <TbPhotoPlus className="w-4 h-4" />,
+      onClick: onOpenPhotoOverlay,
+    });
+  }
+  toolItems.push({
+    key: "effects",
+    label: "Efekt",
+    icon: <BsStars className="w-4 h-4" />,
+    active: activeStrip === "effects" || activeReelsEffect !== "none" || effectClips.length > 0,
+    onClick: () => {
+      if (selectedEffectClip) {
+        setEffectDraft({
+          id: selectedEffectClip.id,
+          isNew: false,
+          originalEffect: selectedEffectClip.effect,
+        });
+      }
+      toggleStrip("effects");
+    },
+  });
+  toolItems.push({
+    key: "music",
+    label: "Müzik",
+    icon: <Music className="w-4 h-4" />,
+    active: Boolean(selectedMusic),
+    onClick: () => (selectedMusic ? toggleStrip("music") : onOpenMusicPicker()),
+  });
+  if (!hasSel || selectedItemType === "video") {
+    toolItems.push({
+      key: "volume",
+      label: "Ses",
+      icon: <Volume2 className="w-4 h-4" />,
+      active: activeStrip === "volume",
+      onClick: () => toggleStrip("volume"),
+    });
+    toolItems.push({
+      key: "speed",
+      label: "Hız",
+      icon: <Gauge className="w-4 h-4" />,
+      active: activeStrip === "speed",
+      onClick: () => toggleStrip("speed"),
+    });
+  }
+  toolItems.push({
+    key: "filters",
+    label: "Filtre",
+    icon: <RiColorFilterAiLine className="w-4 h-4" />,
+    active: activeStrip === "filters" || activeFilterIndex > 0,
+    onClick: () => toggleStrip("filters"),
+  });
+  if (selectedItemType === "video" || selectedItemType === "photo") {
+    toolItems.push({
+      key: "crop",
+      label: "Kırp",
+      icon: <Crop className="w-4 h-4" />,
+      active: activeStrip === "crop",
+      onClick: () => toggleStrip("crop"),
+    });
+  }
+  if (hasSel && (isLayerSel || selectedItemType === "video" || selectedItemType === "effect" || selectedItemType === "audio")) {
+    toolItems.push({
+      key: "duplicate",
+      label: "Kopyala",
+      icon: <Copy className="w-4 h-4" />,
+      onClick: () => runDelayedAction("duplicate", handleDuplicateSelected),
+      disabled: pendingActionKey !== null,
+    });
+    toolItems.push({
+      key: "delete",
+      label: "Sil",
+      icon: <Trash2 className="w-4 h-4" />,
+      danger: true,
+      onClick: () => runDelayedAction("delete", handleDeleteSelected),
+      disabled: (selectedItemType === "video" && clips.length <= 1) || pendingActionKey !== null,
+    });
+  }
+  toolItems.push({
+    key: "append",
+    label: "+ Klip",
+    icon: <Plus className="w-4 h-4" />,
+    onClick: stableAppendClick,
+  });
+  if (hasSel) {
+    toolItems.push({
+      key: "done",
+      label: "Bitti",
+      icon: <X className="w-4 h-4" />,
+      onClick: () => handleSelectItem(null, null),
+    });
+  }
+
   return (
     <>
       {/* Ana Bar Sonuna Klip Ekleme Gizli Dosya Seçici */}
@@ -948,7 +1287,26 @@ export default function ReelsEditor({
         onChange={handleAppendClipFile}
       />
 
+      {/* Otomatik oynatmada ses engellendiyse: sesi aç */}
+      {soundBlocked && (
+        <button
+          type="button"
+          onClick={handleUnmute}
+          aria-label="Sesi aç"
+          style={{ top: "calc(env(safe-area-inset-top, 0px) + 76px)" }}
+          className="fixed right-4 z-30 h-11 px-4 rounded-full bg-black/70 backdrop-blur text-white text-xs font-semibold flex items-center gap-2 border border-white/20 active:scale-95 transition-transform"
+        >
+          <VolumeX className="w-4 h-4" />
+          <span>Sesi aç</span>
+        </button>
+      )}
+
       {/* TAM EKRAN 8 TUTAMAÇLI KIRPMA MODU (Timeline gizlenir, video büyür, kırpma kutusu en üstte) */}
+      <div
+        ref={panelRef}
+        style={{ maxHeight: PANEL_MAX_HEIGHT }}
+        className="fixed inset-x-0 bottom-0 z-40 flex flex-col pointer-events-none"
+      >
       {isFullScreenCrop && selectedVideoClip && engine ? (
         <>
           <OnCanvasCropOverlay
@@ -966,7 +1324,7 @@ export default function ReelsEditor({
           <div
             onPointerDownCapture={() => engine.pauseVideo()}
             onWheelCapture={() => engine.pauseVideo()}
-            className="fixed inset-x-0 bottom-0 h-28 z-50 bg-black/95 border-t border-white/10 px-4 py-2.5 flex flex-col justify-between pointer-events-auto select-none"
+            className="relative shrink-0 z-50 bg-black/95 pb-safe min-h-28 border-t border-white/10 px-4 py-2.5 flex flex-col justify-between pointer-events-auto select-none"
           >
             {/* Üst Satır: Oran Presetleri + Döndür + Aynala + Sıfırla */}
             <div className="flex items-center gap-1.5 overflow-x-auto no-scrollbar">
@@ -1096,7 +1454,10 @@ export default function ReelsEditor({
           </div>
         </>
       ) : (
-        <div className="fixed inset-x-0 bottom-0 z-40 bg-black pt-1.5 pb-5 flex flex-col gap-2.5 pointer-events-auto select-none">
+        <div
+          style={{ paddingBottom: "calc(env(safe-area-inset-bottom, 0px) + 8px)" }}
+          className="relative min-h-0 bg-black pt-1.5 flex flex-col gap-2 pointer-events-auto select-none"
+        >
           {/* 1. Sabit Merkez İbreli (Fixed Center Playhead) ve 60 FPS Analog Kayar NLE Zaman Çizelgesi */}
           <VideoTimelineNLE
             clips={clips}
@@ -1110,49 +1471,33 @@ export default function ReelsEditor({
             thumbnails={thumbnails}
             selectedItemId={selectedItemId}
             selectedItemType={selectedItemType}
-            canUndo={historyStack.length > 0}
-            canRedo={redoStack.length > 0}
-            getCurrentTime={getCurrentTime}
-            onSelectItem={handleSelectItem}
-            onTrimClip={(clipId, newStart, newEnd) => {
-              engine?.updateClipTrim(clipId, newStart, newEnd);
-              syncFromEngine();
-            }}
-            onReorderClips={(fromIdx, toIdx) => {
-              engine?.reorderClips(fromIdx, toIdx);
-              syncFromEngine();
-            }}
-            onAppendClipClick={() => appendClipInputRef.current?.click()}
-            onChangeOverlayTiming={(layerId, start, end) => {
-              engine?.updateOverlayTrackTiming(layerId, start, end);
-              syncFromEngine();
-            }}
-            onReorderOverlayLayer={(layerId, direction) => {
-              commitHistory();
-              engine?.reorderOverlayLayer(layerId, direction);
-              syncFromEngine();
-            }}
-            onChangeEffectClips={onChangeEffectClips}
-            onChangeMusicTimeline={handleMusicTimelineChange}
-            onSeek={onSeek}
-            onPauseVideo={() => engine?.pauseVideo()}
-            onTogglePlay={onTogglePlay}
+            canUndo={historyInfo.undo > 0}
+            canRedo={historyInfo.redo > 0}
+            getCurrentTime={readTime}
+            remainingSec={remainingSec}
+            onSelectItem={stableSelectItem}
+            onTrimClip={stableTrim}
+            onReorderClips={stableReorderClips}
+            onAppendClipClick={stableAppendClick}
+            onChangeOverlayTiming={stableOverlayTiming}
+            onReorderOverlayLayer={stableReorderOverlay}
+            onChangeEffectClips={onChangeEffectClips ? stableEffectClips : undefined}
+            onChangeMusicTimeline={stableMusicTimeline}
+            onSeek={handleSeek}
+            onPauseVideo={handlePause}
+            onTogglePlay={handleTogglePlay}
             onUndo={handleUndo}
             onRedo={handleRedo}
-            onOpenMusicPicker={() => onOpenMusicPicker()}
-            onOpenTextEditor={onOpenTextEditor}
-            onQuickAddEffect={() => {
-              engine?.pauseVideo();
-              setActiveStrip("effects");
-            }}
-            onCommitHistory={commitHistory}
+            onOpenMusicPicker={stableOpenMusic}
+            onOpenTextEditor={stableOpenText}
+            onQuickAddEffect={stableQuickEffect}
           />
 
           {/* Alt Araç Şeritleri ve Butonlar: Dokunulduğunda veya kaydırıldığında videoyu otomatik durdurur */}
           <div
             onPointerDownCapture={() => engine?.pauseVideo()}
             onWheelCapture={() => engine?.pauseVideo()}
-            className="flex flex-col gap-2.5"
+            className="flex flex-col gap-2 shrink-0"
           >
             {/* 2. Açılır Alt Ayar Şeridi (Fotoğraf Kırp / Efektler / Ses & Hız / Filtreler) */}
             {renderedStrip === "crop" &&
@@ -1179,8 +1524,10 @@ export default function ReelsEditor({
                     <button
                       type="button"
                       onClick={() => {
-                        selectedPhotoLayer.transform.rotation =
-                          (selectedPhotoLayer.transform.rotation + 90) % 360;
+                        patchPhotoTransform(selectedPhotoLayer, (t) => ({
+                          ...t,
+                          rotation: (t.rotation + 90) % 360,
+                        }));
                         engine.requestRender();
                       }}
                       className="px-3 py-1.5 rounded-xl text-xs font-semibold flex items-center gap-1.5 shrink-0 bg-[#1c1c1e] text-zinc-200 border border-white/10 active:scale-95"
@@ -1192,12 +1539,12 @@ export default function ReelsEditor({
                     <button
                       type="button"
                       onClick={() => {
-                        selectedPhotoLayer.transform = {
+                        patchPhotoTransform(selectedPhotoLayer, () => ({
                           x: 0.5,
                           y: 0.5,
                           scale: 1,
                           rotation: 0,
-                        };
+                        }));
                         engine.requestRender();
                       }}
                       className="px-3 py-1.5 rounded-xl text-xs font-semibold flex items-center gap-1.5 shrink-0 bg-[#1c1c1e] text-zinc-300 border border-white/10 active:scale-95"
@@ -1220,7 +1567,7 @@ export default function ReelsEditor({
                         const nextScale = Number(
                           (Number(e.target.value) / 100).toFixed(2)
                         );
-                        selectedPhotoLayer.transform.scale = nextScale;
+                        patchPhotoTransform(selectedPhotoLayer, (t) => ({ ...t, scale: nextScale }));
                         engine.requestRender();
                         syncFromEngine();
                       }}
@@ -1381,26 +1728,28 @@ export default function ReelsEditor({
               </>
             )}
 
-            {renderedStrip === "audio_speed" && (
+            {(renderedStrip === "volume" || renderedStrip === "speed") && (
               <div
                 className={`flex flex-col gap-1.5 px-4 transition-all ease-out ${stripAnimClass}`}
                 style={{ transitionDuration: `${SHEET_ANIM_MS}ms` }}
               >
                 <div className="flex items-center justify-between pb-0.5">
                   <span className="text-[11px] font-bold text-zinc-300">
-                    Hız & Ses
+                    {renderedStrip === "speed" ? "Hız" : "Ses"}
                   </span>
                   <button
                     type="button"
                     onClick={() => setActiveStrip("none")}
-                    className="w-6 h-6 rounded-lg bg-white/10 hover:bg-white/20 text-zinc-300 flex items-center justify-center active:scale-90 transition-all"
+                    aria-label="Kapat"
+                    className="w-11 h-11 -my-2 rounded-lg text-zinc-300 flex items-center justify-center active:scale-90 transition-all"
                   >
-                    <X className="w-3.5 h-3.5" />
+                    <X className="w-4 h-4" />
                   </button>
                 </div>
 
                 <>
                     {/* Klip Hız Seçenekleri (0.5x - 2x) */}
+                    {renderedStrip === "speed" && (
                     <div className="grid grid-cols-4 gap-2">
                       {SPEED_OPTIONS.map((rate) => {
                         const active = Math.abs(activeClipSpeed - rate) < 0.01;
@@ -1420,7 +1769,7 @@ export default function ReelsEditor({
                                 onChangeSpeed(rate);
                               }
                             }}
-                            className={`py-1 rounded-xl text-xs font-bold border transition-all active:scale-95 ${
+                            className={`min-h-11 rounded-xl text-xs font-bold border transition-all active:scale-95 ${
                               active
                                 ? "bg-amber-400 text-black border-amber-400"
                                 : "bg-[#1c1c1e] text-white border-white/5 hover:bg-[#26262a]"
@@ -1432,8 +1781,10 @@ export default function ReelsEditor({
                       })}
                     </div>
 
+                    )}
+
                     {/* Klip Ses Seviyesi (0 - 100) */}
-                    {!videoState.isMotionPhoto && (
+                    {renderedStrip === "volume" && !videoState.isMotionPhoto && (
                       <div className="flex items-center gap-3 bg-[#16171b] rounded-2xl px-3 py-1">
                         <button
                           type="button"
@@ -1544,282 +1895,51 @@ export default function ReelsEditor({
               </div>
             )}
 
-            {/* 3. DİNAMİK ALT ARAÇ ÇUBUĞU (Contextual Action Toolbar) */}
-            {selectedItemId && selectedItemType ? (
-              /* BİR KLİP, KATMAN VEYA ŞARKI PARÇASI SEÇİLİYKEN: [ ✂️ Böl ] [ 🗑️ Sil ] [ 📐 Kırp ] [ 🔊 Hız & Ses | 🎵 Müzik ] [ 📑 Kopyala ] */
-              <div className="flex items-center justify-between gap-2 px-4 pt-0.5">
+            {/* 3. ALT ARAÇ ÇUBUĞU: tek yatay kaydırma, seçime göre değişir */}
+            <div className="flex items-start gap-1 overflow-x-auto no-scrollbar px-3 pt-0.5 pb-0.5 touch-pan-x">
+              {toolItems.map((t) => (
                 <button
+                  key={t.key}
                   type="button"
-                  onClick={() => runDelayedAction("split", handleSplitSelected)}
-                  disabled={!canSplitSelected || pendingActionKey !== null}
-                  className="flex-1 flex flex-col items-center gap-1 disabled:opacity-35 group"
-                >
-                  <div className="w-full h-11 rounded-2xl bg-[#1c1c1e] group-hover:bg-[#26262a] flex items-center justify-center text-white transition-all active:scale-95">
-                    <Scissors className="w-4 h-4" />
-                  </div>
-                  <span className="text-[11px] font-medium text-zinc-200">
-                    Böl
-                  </span>
-                </button>
-
-                <button
-                  type="button"
-                  onClick={() => runDelayedAction("delete", handleDeleteSelected)}
-                  disabled={
-                    (selectedItemType === "video" && clips.length <= 1) ||
-                    pendingActionKey !== null
-                  }
-                  className="flex-1 flex flex-col items-center gap-1 disabled:opacity-35 group"
-                >
-                  <div className="w-full h-11 rounded-2xl bg-red-500/15 hover:bg-red-500/25 border border-red-500/25 flex items-center justify-center text-red-400 transition-all active:scale-95">
-                    <Trash2 className="w-4 h-4" />
-                  </div>
-                  <span className="text-[11px] font-medium text-red-300">
-                    Sil
-                  </span>
-                </button>
-
-                {selectedItemType === "effect" && (
-                  <button
-                    type="button"
-                    onClick={() => {
-                      if (selectedEffectClip) {
-                        setEffectDraft({
-                          id: selectedEffectClip.id,
-                          isNew: false,
-                          originalEffect: selectedEffectClip.effect,
-                        });
-                      }
-                      setActiveStrip("effects");
-                    }}
-                    className="flex-1 flex flex-col items-center gap-1 group"
-                  >
-                    <div className="w-full h-11 rounded-2xl bg-[#1c1c1e] group-hover:bg-[#26262a] flex items-center justify-center text-white transition-all active:scale-95">
-                      <BsStars className="w-4 h-4" />
-                    </div>
-                    <span className="text-[11px] font-medium text-zinc-200">
-                      Efekt
-                    </span>
-                  </button>
-                )}
-
-                {(selectedItemType === "video" ||
-                  selectedItemType === "photo") && (
-                  <button
-                    type="button"
-                    onClick={() =>
-                      setActiveStrip((p) => (p === "crop" ? "none" : "crop"))
-                    }
-                    className="flex-1 flex flex-col items-center gap-1 group"
-                  >
-                    <div
-                      className={`w-full h-11 rounded-2xl flex items-center justify-center transition-all active:scale-95 ${
-                        activeStrip === "crop"
-                          ? "bg-amber-400 text-black"
-                          : "bg-[#1c1c1e] group-hover:bg-[#26262a] text-white"
-                      }`}
-                    >
-                      <Crop className="w-4 h-4" />
-                    </div>
-                    <span className="text-[11px] font-medium text-zinc-200">
-                      Kırp
-                    </span>
-                  </button>
-                )}
-
-                {selectedItemType === "audio" && selectedMusic && (
-                  <button
-                    type="button"
-                    onClick={() =>
-                      setActiveStrip((p) => (p === "music" ? "none" : "music"))
-                    }
-                    className="flex-1 flex flex-col items-center gap-1 group"
-                  >
-                    <div
-                      className={`w-full h-11 rounded-2xl flex items-center justify-center transition-all active:scale-95 ${
-                        activeStrip === "music"
-                          ? "bg-amber-400 text-black"
-                          : "bg-[#1c1c1e] group-hover:bg-[#26262a] text-white"
-                      }`}
-                    >
-                      <Music className="w-4 h-4" />
-                    </div>
-                    <span className="text-[11px] font-medium text-zinc-200">
-                      Müzik
-                    </span>
-                  </button>
-                )}
-
-                {selectedItemType === "video" && (
-                  <button
-                    type="button"
-                    onClick={() =>
-                      setActiveStrip((p) =>
-                        p === "audio_speed" ? "none" : "audio_speed"
-                      )
-                    }
-                    className="flex-1 flex flex-col items-center gap-1 group"
-                  >
-                    <div
-                      className={`w-full h-11 rounded-2xl flex items-center justify-center transition-all active:scale-95 ${
-                        activeStrip === "audio_speed"
-                          ? "bg-amber-400 text-black"
-                          : "bg-[#1c1c1e] group-hover:bg-[#26262a] text-white"
-                      }`}
-                    >
-                      <Gauge className="w-4 h-4" />
-                    </div>
-                    <span className="text-[11px] font-medium text-zinc-200">
-                      Hız & Ses
-                    </span>
-                  </button>
-                )}
-
-                <button
-                  type="button"
-                  onClick={() => runDelayedAction("duplicate", handleDuplicateSelected)}
-                  disabled={pendingActionKey !== null}
-                  className="flex-1 flex flex-col items-center gap-1 group disabled:opacity-60"
-                >
-                  <div className="w-full h-11 rounded-2xl bg-[#1c1c1e] group-hover:bg-[#26262a] flex items-center justify-center text-white transition-all active:scale-95">
-                    <Copy className="w-4 h-4" />
-                  </div>
-                  <span className="text-[11px] font-medium text-zinc-200">
-                    Kopyala
-                  </span>
-                </button>
-
-                <button
-                  type="button"
-                  onClick={() => handleSelectItem(null, null)}
-                  className="flex flex-col items-center gap-1 shrink-0 group"
-                >
-                  <div className="w-11 h-11 rounded-2xl bg-white/10 hover:bg-white/15 flex items-center justify-center text-zinc-300 transition-all active:scale-95">
-                    <X className="w-4 h-4" />
-                  </div>
-                  <span className="text-[11px] font-medium text-zinc-400">
-                    Bitti
-                  </span>
-                </button>
-              </div>
-            ) : (
-              /* HİÇBİR ÖĞE SEÇİLİ DEĞİLKEN: [ 📝 Metin ] [ 🌟 Sticker ] [ 🖼️ Fotoğraf ] [ 🎵 Müzik ] [ ⚡ Efektler ] [ 🎨 Filtre ] */
-              <div className="flex items-start justify-between gap-2 overflow-x-auto no-scrollbar px-4 pt-0.5">
-                <button
-                  type="button"
-                  onClick={onOpenTextEditor}
-                  className="flex flex-col items-center gap-1 shrink-0 group"
-                >
-                  <div className="w-14 h-11 rounded-2xl bg-[#1c1c1e] group-hover:bg-[#26262a] flex items-center justify-center text-white transition-all active:scale-95">
-                    <Type className="w-4 h-4" />
-                  </div>
-                  <span className="text-[11px] font-medium text-zinc-200">
-                    Metin
-                  </span>
-                </button>
-
-                {onOpenStickerSheet && (
-                  <button
-                    type="button"
-                    onClick={onOpenStickerSheet}
-                    className="flex flex-col items-center gap-1 shrink-0 group"
-                  >
-                    <div className="w-14 h-11 rounded-2xl bg-[#1c1c1e] group-hover:bg-[#26262a] flex items-center justify-center text-white transition-all active:scale-95">
-                      <PiStickerLight className="w-4 h-4" />
-                    </div>
-                    <span className="text-[11px] font-medium text-zinc-200">
-                      Sticker
-                    </span>
-                  </button>
-                )}
-
-                {onOpenPhotoOverlay && (
-                  <button
-                    type="button"
-                    onClick={onOpenPhotoOverlay}
-                    className="flex flex-col items-center gap-1 shrink-0 group"
-                  >
-                    <div className="w-14 h-11 rounded-2xl bg-[#1c1c1e] group-hover:bg-[#26262a] flex items-center justify-center text-white transition-all active:scale-95">
-                      <TbPhotoPlus className="w-4 h-4" />
-                    </div>
-                    <span className="text-[11px] font-medium text-zinc-200">
-                      Fotoğraf
-                    </span>
-                  </button>
-                )}
-
-                <button
-                  type="button"
-                  onClick={() =>
-                    selectedMusic
-                      ? setActiveStrip((p) => (p === "music" ? "none" : "music"))
-                      : onOpenMusicPicker()
-                  }
-                  className="flex flex-col items-center gap-1 shrink-0 group"
+                  aria-label={t.label}
+                  onClick={t.onClick}
+                  disabled={t.disabled}
+                  className="flex flex-col items-center gap-1 shrink-0 min-w-[56px] disabled:opacity-35 group"
                 >
                   <div
                     className={`w-14 h-11 rounded-2xl flex items-center justify-center transition-all active:scale-95 ${
-                      selectedMusic
-                        ? "bg-white text-black"
-                        : "bg-[#1c1c1e] group-hover:bg-[#26262a] text-white"
+                      t.danger
+                        ? "bg-red-500/15 border border-red-500/25 text-red-400"
+                        : t.active
+                          ? "bg-white text-black"
+                          : "bg-[#1c1c1e] text-white"
                     }`}
                   >
-                    <Music className="w-4 h-4" />
+                    {t.icon}
                   </div>
-                  <span className="text-[11px] font-medium text-zinc-200">
-                    Müzik
-                  </span>
-                </button>
-
-                <button
-                  type="button"
-                  onClick={() =>
-                    setActiveStrip((p) => (p === "effects" ? "none" : "effects"))
-                  }
-                  className="flex flex-col items-center gap-1 shrink-0 group"
-                >
-                  <div
-                    className={`w-14 h-11 rounded-2xl flex items-center justify-center transition-all active:scale-95 ${
-                      activeStrip === "effects" ||
-                      activeReelsEffect !== "none" ||
-                      effectClips.length > 0
-                        ? "bg-white text-black"
-                        : "bg-[#1c1c1e] group-hover:bg-[#26262a] text-white"
-                    }`}
+                  <span
+                    className={`text-[11px] font-medium ${t.danger ? "text-red-300" : "text-zinc-200"}`}
                   >
-                    <BsStars className="w-4 h-4" />
-                  </div>
-                  <span className="text-[11px] font-medium text-zinc-200">
-                    Efektler
+                    {t.label}
                   </span>
                 </button>
-
-                <button
-                  type="button"
-                  onClick={() =>
-                    setActiveStrip((p) => (p === "filters" ? "none" : "filters"))
-                  }
-                  className="flex flex-col items-center gap-1 shrink-0 group"
-                >
-                  <div
-                    className={`w-14 h-11 rounded-2xl flex items-center justify-center transition-all active:scale-95 ${
-                      activeStrip === "filters" || activeFilterIndex > 0
-                        ? "bg-white text-black"
-                        : "bg-[#1c1c1e] group-hover:bg-[#26262a] text-white"
-                    }`}
-                  >
-                    <RiColorFilterAiLine className="w-4 h-4" />
-                  </div>
-                  <span className="text-[11px] font-medium text-zinc-200">
-                    Filtre
-                  </span>
-                </button>
-              </div>
-            )}
+              ))}
+            </div>
           </div>
         </div>
       )}
+      </div>
     </>
   );
 }
 // [END] CREATED BY Bedirhan
+
+/** Toast sağlayıcısını bu bileşenin içine alır: sayfa sağlayıcı sunmaz. */
+export default function ReelsEditor(props: ReelsEditorProps) {
+
+  return (
+    <EditorToastProvider topOffset={72}>
+      <ReelsEditorInner {...props} />
+    </EditorToastProvider>
+  );
+}

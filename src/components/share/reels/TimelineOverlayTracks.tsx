@@ -83,7 +83,7 @@ type ItemPressState = {
   targetEl: HTMLElement;
 };
 
-export default function TimelineOverlayTracks({
+function TimelineOverlayTracks({
   totalDuration,
   pps,
   overlayItems,
@@ -811,3 +811,5 @@ export default function TimelineOverlayTracks({
   );
 }
 // [END] CREATED BY Bedirhan
+
+export default React.memo(TimelineOverlayTracks);

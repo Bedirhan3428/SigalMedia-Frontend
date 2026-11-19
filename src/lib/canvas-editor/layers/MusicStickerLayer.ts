@@ -1,5 +1,5 @@
 import { BaseLayer } from './BaseLayer';
-import { Rect, StoryAudioMeta } from '../types';
+import { LayerStateSnapshot, Rect, StoryAudioMeta } from '../types';
 import { LayerBitmapCache } from '../utils/layerBitmapCache';
 
 export class MusicStickerLayer extends BaseLayer {
@@ -27,17 +27,43 @@ export class MusicStickerLayer extends BaseLayer {
       },
     });
     this.audioMeta = options.audioMeta;
+    this.onUpdate = options.onUpdate || null;
+    this.loadThumbnail();
+  }
 
-    if (this.audioMeta.thumbnail) {
-      const img = new Image();
-      img.crossOrigin = 'anonymous';
-      img.onload = () => {
-        this.thumbnailImage = img;
-        this.isImageLoaded = true;
-        if (options.onUpdate) options.onUpdate();
-      };
-      img.src = this.audioMeta.thumbnail;
-    }
+  private onUpdate: (() => void) | null = null;
+
+  private loadThumbnail(): void {
+    this.thumbnailImage = null;
+    this.isImageLoaded = false;
+    const url = this.audioMeta.thumbnail;
+    if (!url || typeof Image === 'undefined') return;
+    const img = new Image();
+    img.crossOrigin = 'anonymous';
+    img.onload = () => {
+      // Bu arada şarkı değiştiyse eski kapağı uygulama
+      if (this.audioMeta.thumbnail !== url) return;
+      this.thumbnailImage = img;
+      this.isImageLoaded = true;
+      this.onUpdate?.();
+    };
+    img.src = url;
+  }
+
+  /** Şarkı değiştiğinde konumu koruyarak meta veriyi günceller. */
+  public setAudioMeta(meta: StoryAudioMeta): void {
+    const thumbChanged = meta.thumbnail !== this.audioMeta.thumbnail;
+    this.audioMeta = { ...meta };
+    if (thumbChanged) this.loadThumbnail();
+  }
+
+  public override getState(): LayerStateSnapshot {
+    return { ...super.getState(), audioMeta: { ...this.audioMeta } };
+  }
+
+  public override applyState(state: LayerStateSnapshot): void {
+    super.applyState(state);
+    if (state.audioMeta) this.setAudioMeta(state.audioMeta);
   }
 
   public override getBoundingBox(ctx: CanvasRenderingContext2D, canvasWidth: number): Rect {

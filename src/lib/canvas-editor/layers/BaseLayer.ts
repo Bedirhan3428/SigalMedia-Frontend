@@ -1,4 +1,4 @@
-import { LayerTransform, Point, Rect } from '../types';
+import { LayerStateSnapshot, LayerTransform, MAX_VIDEO_SEC, Point, Rect } from '../types';
 
 export abstract class BaseLayer {
   public id: string;
@@ -7,7 +7,7 @@ export abstract class BaseLayer {
   public visible: boolean = true;
   public temporalVisible: boolean = true;
   public timelineStart: number = 0;
-  public timelineEnd: number = 60;
+  public timelineEnd: number = MAX_VIDEO_SEC;
   public locked: boolean = false;
   public selected: boolean = false;
   public isInteracting: boolean = false; // İki parmakla dokunulduğunda aktifleşen yaylanma durumu
@@ -32,6 +32,27 @@ export abstract class BaseLayer {
     if (typeof options?.timelineEnd === 'number') {
       this.timelineEnd = options.timelineEnd;
     }
+  }
+
+  /** Undo için değiştirilebilir durumun kopyası (alt sınıflar genişletir). */
+  public getState(): LayerStateSnapshot {
+    return {
+      transform: { ...this.transform },
+      visible: this.visible,
+      locked: this.locked,
+      timelineStart: this.timelineStart,
+      timelineEnd: this.timelineEnd,
+    };
+  }
+
+  /** getState() çıktısını geri uygular. */
+  public applyState(state: LayerStateSnapshot): void {
+    this.transform = { ...state.transform };
+    this.visible = state.visible;
+    this.locked = state.locked;
+    this.timelineStart = state.timelineStart;
+    this.timelineEnd = state.timelineEnd;
+    this.isInteracting = false;
   }
 
   public isVisibleAtTime(t: number): boolean {

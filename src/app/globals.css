@@ -105,50 +105,71 @@ html, body {
   --sar: env(safe-area-inset-right, 0px);
 }
 
-.pt-safe {
-  padding-top: env(safe-area-inset-top, 0px);
+/*
+ * Safe-area yardımcıları (@utility: Tailwind varyantlarıyla da çalışır, ör. `md:pb-safe`).
+ * `*-safe-N` biçimi güvenli alanın üstüne N * --spacing ekler (ör. `pb-safe-4` = inset + 1rem).
+ */
+@utility pt-safe {
+  padding-top: var(--sat);
 }
-.pb-safe {
-  padding-bottom: env(safe-area-inset-bottom, 0px);
+@utility pb-safe {
+  padding-bottom: var(--sab);
 }
-.pl-safe {
-  padding-left: env(safe-area-inset-left, 0px);
+@utility pl-safe {
+  padding-left: var(--sal);
 }
-.pr-safe {
-  padding-right: env(safe-area-inset-right, 0px);
+@utility pr-safe {
+  padding-right: var(--sar);
 }
-.px-safe {
-  padding-left: env(safe-area-inset-left, 0px);
-  padding-right: env(safe-area-inset-right, 0px);
+@utility px-safe {
+  padding-left: var(--sal);
+  padding-right: var(--sar);
 }
-.py-safe {
-  padding-top: env(safe-area-inset-top, 0px);
-  padding-bottom: env(safe-area-inset-bottom, 0px);
+@utility py-safe {
+  padding-top: var(--sat);
+  padding-bottom: var(--sab);
 }
-.p-safe {
-  padding-top: env(safe-area-inset-top, 0px);
-  padding-bottom: env(safe-area-inset-bottom, 0px);
-  padding-left: env(safe-area-inset-left, 0px);
-  padding-right: env(safe-area-inset-right, 0px);
+@utility p-safe {
+  padding-top: var(--sat);
+  padding-bottom: var(--sab);
+  padding-left: var(--sal);
+  padding-right: var(--sar);
 }
-.mt-safe {
-  margin-top: env(safe-area-inset-top, 0px);
+@utility mt-safe {
+  margin-top: var(--sat);
 }
-.mb-safe {
-  margin-bottom: env(safe-area-inset-bottom, 0px);
+@utility mb-safe {
+  margin-bottom: var(--sab);
 }
-.top-safe {
-  top: env(safe-area-inset-top, 0px);
+@utility top-safe {
+  top: var(--sat);
 }
-.bottom-safe {
-  bottom: env(safe-area-inset-bottom, 0px);
+@utility bottom-safe {
+  bottom: var(--sab);
 }
-
-.h-safe-top {
-  height: env(safe-area-inset-top, 0px);
+@utility left-safe {
+  left: var(--sal);
 }
-.h-safe-bottom {
-  height: env(safe-area-inset-bottom, 0px);
+@utility right-safe {
+  right: var(--sar);
+}
+@utility h-safe-top {
+  height: var(--sat);
+}
+@utility h-safe-bottom {
+  height: var(--sab);
+}
+@utility pt-safe-* {
+  padding-top: calc(var(--sat) + var(--spacing) * --value(integer));
+}
+@utility pb-safe-* {
+  padding-bottom: calc(var(--sab) + var(--spacing) * --value(integer));
+}
+@utility top-safe-* {
+  top: calc(var(--sat) + var(--spacing) * --value(integer));
+}
+@utility bottom-safe-* {
+  bottom: calc(var(--sab) + var(--spacing) * --value(integer));
 }
 
 /* Mobil Tam Ekran Güvenli Kapsayıcı */
@@ -158,6 +179,244 @@ html, body {
   padding-bottom: env(safe-area-inset-bottom, 0px);
   padding-left: env(safe-area-inset-left, 0px);
   padding-right: env(safe-area-inset-right, 0px);
+}
+
+/*
+ * Editör katman (z-index) ölçeği. Editördeki her overlay yalnızca bunları kullanır.
+ * canvas 0 < chrome 10 < sheet 20 < modal 30 < blocking 40 < toast 50
+ */
+:root {
+  --z-canvas: 0;
+  --z-chrome: 10;
+  --z-sheet: 20;
+  --z-modal: 30;
+  --z-blocking: 40;
+  --z-toast: 50;
+  --editor-ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+  --editor-ease-in: cubic-bezier(0.4, 0, 1, 1);
+}
+@utility z-canvas {
+  z-index: var(--z-canvas);
+}
+@utility z-chrome {
+  z-index: var(--z-chrome);
+}
+@utility z-sheet {
+  z-index: var(--z-sheet);
+}
+@utility z-modal {
+  z-index: var(--z-modal);
+}
+@utility z-blocking {
+  z-index: var(--z-blocking);
+}
+@utility z-toast {
+  z-index: var(--z-toast);
+}
+
+/*
+ * tw-animate-css uyumlu giriş/çıkış animasyonları (C10).
+ * `animate-in fade-in zoom-in-95 slide-in-from-bottom duration-200` gibi mevcut sınıflar çalışır.
+ * Süre Tailwind `duration-*` (--tw-duration) değerinden okunur.
+ */
+@keyframes enter {
+  from {
+    opacity: var(--tw-enter-opacity, 1);
+    transform: translate3d(var(--tw-enter-translate-x, 0), var(--tw-enter-translate-y, 0), 0)
+      scale3d(var(--tw-enter-scale, 1), var(--tw-enter-scale, 1), var(--tw-enter-scale, 1))
+      rotate(var(--tw-enter-rotate, 0));
+  }
+}
+@keyframes exit {
+  to {
+    opacity: var(--tw-exit-opacity, 1);
+    transform: translate3d(var(--tw-exit-translate-x, 0), var(--tw-exit-translate-y, 0), 0)
+      scale3d(var(--tw-exit-scale, 1), var(--tw-exit-scale, 1), var(--tw-exit-scale, 1))
+      rotate(var(--tw-exit-rotate, 0));
+  }
+}
+@utility animate-in {
+  animation: enter var(--tw-duration, 150ms) var(--tw-ease, var(--editor-ease-out)) var(--tw-animation-delay, 0s) both;
+}
+@utility animate-out {
+  animation: exit var(--tw-duration, 150ms) var(--tw-ease, var(--editor-ease-in)) var(--tw-animation-delay, 0s) both;
+}
+@utility fade-in {
+  --tw-enter-opacity: 0;
+}
+@utility fade-out {
+  --tw-exit-opacity: 0;
+}
+@utility zoom-in {
+  --tw-enter-scale: 0;
+}
+@utility zoom-in-* {
+  --tw-enter-scale: calc(--value(integer) * 1%);
+}
+@utility zoom-out {
+  --tw-exit-scale: 0;
+}
+@utility zoom-out-* {
+  --tw-exit-scale: calc(--value(integer) * 1%);
+}
+@utility slide-in-from-bottom {
+  --tw-enter-translate-y: 100%;
+}
+@utility slide-in-from-top {
+  --tw-enter-translate-y: -100%;
+}
+@utility slide-in-from-left {
+  --tw-enter-translate-x: -100%;
+}
+@utility slide-in-from-right {
+  --tw-enter-translate-x: 100%;
+}
+@utility slide-in-from-bottom-* {
+  --tw-enter-translate-y: calc(var(--spacing) * --value(integer));
+}
+@utility slide-in-from-top-* {
+  --tw-enter-translate-y: calc(var(--spacing) * --value(integer) * -1);
+}
+@utility slide-out-to-bottom {
+  --tw-exit-translate-y: 100%;
+}
+@utility slide-out-to-top {
+  --tw-exit-translate-y: -100%;
+}
+
+/* Editör overlay animasyonları (components/share/common) */
+@keyframes editor-fade-in {
+  from {
+    opacity: 0;
+  }
+}
+@keyframes editor-fade-out {
+  to {
+    opacity: 0;
+  }
+}
+@keyframes editor-sheet-in {
+  from {
+    transform: translate3d(0, 100%, 0);
+  }
+}
+@keyframes editor-sheet-out {
+  to {
+    transform: translate3d(0, 100%, 0);
+  }
+}
+@keyframes editor-pop-in {
+  from {
+    opacity: 0;
+    transform: scale(0.94);
+  }
+}
+@keyframes editor-pop-out {
+  to {
+    opacity: 0;
+    transform: scale(0.96);
+  }
+}
+@keyframes editor-push-in {
+  from {
+    opacity: 0;
+    transform: translate3d(24px, 0, 0);
+  }
+}
+@keyframes editor-toast-in {
+  from {
+    opacity: 0;
+    transform: translate3d(0, -10px, 0) scale(0.97);
+  }
+}
+.editor-anim-fade-in {
+  animation: editor-fade-in 200ms var(--editor-ease-out) backwards;
+}
+.editor-anim-fade-out {
+  animation: editor-fade-out 180ms var(--editor-ease-in) forwards;
+}
+.editor-anim-sheet-in {
+  animation: editor-sheet-in 280ms var(--editor-ease-out) backwards;
+}
+.editor-anim-sheet-out {
+  animation: editor-sheet-out 200ms var(--editor-ease-in) forwards;
+}
+.editor-anim-pop-in {
+  animation: editor-pop-in 200ms var(--editor-ease-out) backwards;
+}
+.editor-anim-pop-out {
+  animation: editor-pop-out 150ms var(--editor-ease-in) forwards;
+}
+.editor-anim-push-in {
+  animation: editor-push-in 240ms var(--editor-ease-out) backwards;
+}
+.editor-anim-toast-in {
+  animation: editor-toast-in 220ms var(--editor-ease-out) backwards;
+}
+
+/* Editör kaydırıcısı: büyük başparmak; yatay sürükleme sayfayı kaydırmaz */
+.editor-range {
+  -webkit-appearance: none;
+  appearance: none;
+  height: 28px;
+  background: transparent;
+  touch-action: pan-y;
+  cursor: pointer;
+}
+.editor-range::-webkit-slider-runnable-track {
+  height: 4px;
+  border-radius: 9999px;
+  background: linear-gradient(
+    to right,
+    #fff var(--range-pct, 0%),
+    rgba(255, 255, 255, 0.18) var(--range-pct, 0%)
+  );
+}
+.editor-range::-moz-range-track {
+  height: 4px;
+  border-radius: 9999px;
+  background: rgba(255, 255, 255, 0.18);
+}
+.editor-range::-moz-range-progress {
+  height: 4px;
+  border-radius: 9999px;
+  background: #fff;
+}
+.editor-range::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 22px;
+  height: 22px;
+  margin-top: -9px;
+  border-radius: 9999px;
+  background: #fff;
+  box-shadow: 0 1px 6px rgba(0, 0, 0, 0.45);
+}
+.editor-range::-moz-range-thumb {
+  width: 22px;
+  height: 22px;
+  border: 0;
+  border-radius: 9999px;
+  background: #fff;
+  box-shadow: 0 1px 6px rgba(0, 0, 0, 0.45);
+}
+.editor-range:focus-visible {
+  outline: 2px solid rgba(244, 114, 182, 0.8);
+  outline-offset: 2px;
+  border-radius: 9999px;
+}
+
+/* Hareket azaltma tercihi: giriş/çıkış animasyonları anında tamamlanır */
+@media (prefers-reduced-motion: reduce) {
+  .animate-in,
+  .animate-out,
+  [class*="editor-anim-"] {
+    animation-duration: 1ms !important;
+    animation-delay: 0s !important;
+  }
+  .editor-motion-safe {
+    transition-duration: 1ms !important;
+  }
 }
 
 /* Zarif ve Minimal Sayfa / Kart Geçiş Animasyonları (Neon/Parlama İçermez) */
