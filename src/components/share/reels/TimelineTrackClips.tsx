@@ -720,7 +720,7 @@ function TimelineTrackClips({
                               isMotionPhoto: clip.isMotionPhoto,
                             })
                           }
-                          className="absolute -left-2 top-0 bottom-0 w-5 rounded-l bg-amber-400 flex items-center justify-center cursor-ew-resize z-30 shadow-lg touch-none"
+                          className="absolute left-0 top-0 bottom-0 w-3.5 rounded-l bg-amber-400 before:absolute before:content-[''] before:-inset-x-2.5 before:inset-y-0 flex items-center justify-center cursor-ew-resize z-30 shadow-lg touch-none"
                           style={{ top: 0, bottom: 0, height: "100%" }}
                         >
                           <div className="w-[2px] h-5 rounded-full bg-black/80" />
@@ -741,7 +741,7 @@ function TimelineTrackClips({
                               isMotionPhoto: clip.isMotionPhoto,
                             })
                           }
-                          className="absolute -right-2 top-0 bottom-0 w-5 rounded-r bg-amber-400 flex items-center justify-center cursor-ew-resize z-30 shadow-lg touch-none"
+                          className="absolute right-0 top-0 bottom-0 w-3.5 rounded-r bg-amber-400 before:absolute before:content-[''] before:-inset-x-2.5 before:inset-y-0 flex items-center justify-center cursor-ew-resize z-30 shadow-lg touch-none"
                           style={{ top: 0, bottom: 0, height: "100%" }}
                         >
                           <div className="w-[2px] h-5 rounded-full bg-black/80" />

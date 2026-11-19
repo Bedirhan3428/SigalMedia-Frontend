@@ -494,7 +494,7 @@ function TimelineOverlayTracks({
                             initEnd: item.timelineEnd,
                           })
                         }
-                        className="absolute -left-1.5 w-3.5 rounded-l bg-white flex items-center justify-center cursor-ew-resize z-30 shadow touch-none before:absolute before:content-[''] before:-inset-x-2.5 before:-inset-y-1.5"
+                        className="absolute left-0 w-3.5 rounded-l bg-white flex items-center justify-center cursor-ew-resize z-30 shadow touch-none before:absolute before:content-[''] before:-inset-x-2.5 before:-inset-y-1.5"
                         style={{ top: 0, bottom: 0, height: "100%" }}
                       >
                         <div className="w-[1.5px] h-3.5 rounded-full bg-black" />
@@ -511,7 +511,7 @@ function TimelineOverlayTracks({
                             initEnd: item.timelineEnd,
                           })
                         }
-                        className="absolute -right-1.5 w-3.5 rounded-r bg-white flex items-center justify-center cursor-ew-resize z-30 shadow touch-none before:absolute before:content-[''] before:-inset-x-2.5 before:-inset-y-1.5"
+                        className="absolute right-0 w-3.5 rounded-r bg-white flex items-center justify-center cursor-ew-resize z-30 shadow touch-none before:absolute before:content-[''] before:-inset-x-2.5 before:-inset-y-1.5"
                         style={{ top: 0, bottom: 0, height: "100%" }}
                       >
                         <div className="w-[1.5px] h-3.5 rounded-full bg-black" />
@@ -655,7 +655,7 @@ function TimelineOverlayTracks({
                                 initEnd: fx.endTime,
                               })
                             }
-                            className="absolute -left-1.5 w-4 rounded-l bg-white flex items-center justify-center cursor-ew-resize z-30 shadow touch-none before:absolute before:content-[''] before:-inset-x-2.5 before:-inset-y-1.5"
+                            className="absolute left-0 w-3.5 rounded-l bg-white flex items-center justify-center cursor-ew-resize z-30 shadow touch-none before:absolute before:content-[''] before:-inset-x-2.5 before:-inset-y-1.5"
                             style={{ top: 0, bottom: 0, height: "100%" }}
                           >
                             <div className="w-[1.5px] h-3.5 rounded-full bg-black" />
@@ -672,7 +672,7 @@ function TimelineOverlayTracks({
                                 initEnd: fx.endTime,
                               })
                             }
-                            className="absolute -right-1.5 w-4 rounded-r bg-white flex items-center justify-center cursor-ew-resize z-30 shadow touch-none before:absolute before:content-[''] before:-inset-x-2.5 before:-inset-y-1.5"
+                            className="absolute right-0 w-3.5 rounded-r bg-white flex items-center justify-center cursor-ew-resize z-30 shadow touch-none before:absolute before:content-[''] before:-inset-x-2.5 before:-inset-y-1.5"
                             style={{ top: 0, bottom: 0, height: "100%" }}
                           >
                             <div className="w-[1.5px] h-3.5 rounded-full bg-black" />
@@ -772,7 +772,7 @@ function TimelineOverlayTracks({
                           initEnd: seg.timelineEnd,
                         })
                       }
-                      className="absolute -left-1.5 w-3.5 rounded-l bg-white flex items-center justify-center cursor-ew-resize z-30 shadow touch-none before:absolute before:content-[''] before:-inset-x-2.5 before:-inset-y-1.5"
+                      className="absolute left-0 w-3.5 rounded-l bg-white flex items-center justify-center cursor-ew-resize z-30 shadow touch-none before:absolute before:content-[''] before:-inset-x-2.5 before:-inset-y-1.5"
                       style={{ top: 0, bottom: 0, height: "100%" }}
                     >
                       <div className="w-[1.5px] h-3.5 rounded-full bg-black" />
@@ -789,7 +789,7 @@ function TimelineOverlayTracks({
                           initEnd: seg.timelineEnd,
                         })
                       }
-                      className="absolute -right-1.5 w-3.5 rounded-r bg-white flex items-center justify-center cursor-ew-resize z-30 shadow touch-none before:absolute before:content-[''] before:-inset-x-2.5 before:-inset-y-1.5"
+                      className="absolute right-0 w-3.5 rounded-r bg-white flex items-center justify-center cursor-ew-resize z-30 shadow touch-none before:absolute before:content-[''] before:-inset-x-2.5 before:-inset-y-1.5"
                       style={{ top: 0, bottom: 0, height: "100%" }}
                     >
                       <div className="w-[1.5px] h-3.5 rounded-full bg-black" />

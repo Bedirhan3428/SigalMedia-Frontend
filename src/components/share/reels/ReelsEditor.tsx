@@ -209,8 +209,9 @@ function ReelsEditorInner({
       setSelectedItemId(selectedCanvasLayer.id);
       setSelectedItemType(found?.type || "text");
     } else if (selectedCanvasLayer.type === "image_overlay") {
+      const found = engine?.getOverlayTrackItems().find((i) => i.layerId === selectedCanvasLayer.id);
       setSelectedItemId(selectedCanvasLayer.id);
-      setSelectedItemType("photo");
+      setSelectedItemType(found?.type === "sticker" ? "sticker" : "photo");
     }
   }, [selectedCanvasLayer, engine]);
 
@@ -1389,6 +1390,7 @@ function ReelsEditorInner({
                 }}
                 onAddMention={onAddMention}
                 onActiveToolChange={handleActiveToolChange}
+                onDeselect={() => handleSelectItem(null, null)}
               />
             )}
             <div style={{ height: "calc(env(safe-area-inset-bottom, 0px) + 4px)" }} />

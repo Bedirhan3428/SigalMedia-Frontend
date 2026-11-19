@@ -4,6 +4,10 @@
 
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import {
+  AlignCenter,
+  AlignLeft,
+  AlignRight,
+  ArrowUpToLine,
   AtSign,
   Check,
   ChevronLeft,
@@ -38,6 +42,8 @@ import {
   AudioLoadError,
   CanvasEngine,
   FILTER_PRESETS,
+  OverlayImageLayer,
+  TextLayer,
   MediaLoadError,
   REELS_EFFECT_PRESETS,
   ReelsEffectClip,
@@ -50,7 +56,7 @@ import {
   type ClipAnimationKind,
   type PostAdjustmentState,
 } from "@/lib/canvas-editor";
-import { EMOJI_CATEGORIES, Sheet, useBackLayer, useEditorToast } from "../common";
+import { EMOJI_CATEGORIES, Sheet, TEXT_COLORS, TEXT_FONT_OPTIONS, useBackLayer, useEditorToast } from "../common";
 import MusicSettingsPanel from "../MusicSettingsPanel";
 import type { NLESelectedType } from "./TimelineOverlayTracks";
 import { REELS_STICKERS, stickerPreviewUrl, stickerToPngBlob } from "./stickers";
@@ -73,7 +79,10 @@ type ToolKey =
   | "retouch"
   | "opacity"
   | "reverse"
-  | "photoCrop";
+  | "photoCrop"
+  | "textFont"
+  | "textColor"
+  | "layerOpacity";
 
 interface ActiveTool {
   key: ToolKey;
@@ -114,6 +123,8 @@ export interface ReelsMenuProps {
   onEffectIntensity: (v: number) => void;
   onAddMention?: () => void;
   onActiveToolChange: (key: string | null) => void;
+  /** Geri (‹): seçimi kaldırır ve ana menüye döner. */
+  onDeselect: () => void;
 }
 
 interface MenuItem {
@@ -549,6 +560,7 @@ export default function ReelsMenu(props: ReelsMenuProps) {
     onEffectIntensity,
     onAddMention,
     onActiveToolChange,
+    onDeselect,
     quickEffectSeq,
   } = props;
   const toast = useEditorToast();
@@ -566,6 +578,7 @@ export default function ReelsMenu(props: ReelsMenuProps) {
   const reverseAbortRef = useRef<AbortController | null>(null);
   const replaceInputRef = useRef<HTMLInputElement | null>(null);
   const overlayInputRef = useRef<HTMLInputElement | null>(null);
+  const replaceOverlayInputRef = useRef<HTMLInputElement | null>(null);
   const audioInputRef = useRef<HTMLInputElement | null>(null);
 
   // Seçili klip değişince açık araç kapanır (render sırasında türetilmiş durum)
@@ -616,6 +629,18 @@ export default function ReelsMenu(props: ReelsMenuProps) {
       await engine.addOverlayImage(file, 0.5, 0.5);
     } catch {
       toast.error("Fotoğraf eklenemedi");
+    }
+  };
+
+  const handleReplaceOverlayFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = "";
+    if (!file || !selection) return;
+    try {
+      const ok = await engine.replaceOverlayImage(selection.id, file);
+      if (!ok) toast.error("Görsel değiştirilemedi");
+    } catch {
+      toast.error("Görsel değiştirilemedi");
     }
   };
 
@@ -731,15 +756,59 @@ export default function ReelsMenu(props: ReelsMenuProps) {
       { key: "opacity", label: "Opaklık", icon: <Droplet className={ICON} />, onClick: () => openTool("opacity", "clip") },
     ];
   } else if (selection?.type === "text") {
+    const tl = engine.getLayerById(selection.id);
+    const textLayer = tl instanceof TextLayer ? tl : null;
+    const align = textLayer?.style.textAlign || "center";
+    const AlignIcon = align === "left" ? AlignLeft : align === "right" ? AlignRight : AlignCenter;
     editItems = [
-      { key: "edit-text", label: "Metin", icon: <Type className={ICON} />, onClick: () => onOpenText(selection.id) },
+      { key: "edit-text", label: "Düzenle", icon: <Pencil className={ICON} />, onClick: () => onOpenText(selection.id) },
+      { key: "text-font", label: "Font", icon: <Type className={ICON} />, onClick: () => openTool("textFont") },
+      { key: "text-color", label: "Renk", icon: <Palette className={ICON} />, onClick: () => openTool("textColor") },
+      {
+        key: "text-align",
+        label: "Hizala",
+        icon: <AlignIcon className={ICON} />,
+        onClick: () => {
+          if (!textLayer) return;
+          const next = align === "left" ? "center" : align === "center" ? "right" : "left";
+          engine.updateText(textLayer.id, { style: { textAlign: next } });
+        },
+      },
+      { key: "opacity", label: "Opaklık", icon: <Droplet className={ICON} />, onClick: () => openTool("layerOpacity") },
       split,
       copy,
       del(),
     ];
-  } else if (selection?.type === "photo") {
+  } else if (selection?.type === "photo" || selection?.type === "sticker") {
+    const ol = engine.getLayerById(selection.id);
+    const imgLayer = ol instanceof OverlayImageLayer ? ol : null;
     editItems = [
-      { key: "photo-crop", label: "Kırp", icon: <Crop className={ICON} />, onClick: () => openTool("photoCrop") },
+      { key: "overlay-replace", label: "Değiştir", icon: <RefreshCw className={ICON} />, onClick: () => replaceOverlayInputRef.current?.click() },
+      ...(selection.type === "photo" && imgLayer
+        ? [
+            {
+              key: "overlay-shape",
+              label: "Şekil",
+              icon: <Crop className={ICON} />,
+              onClick: () => {
+                imgLayer.cycleShapeMode();
+                engine.requestRender();
+              },
+            } as MenuItem,
+          ]
+        : []),
+      { key: "opacity", label: "Opaklık", icon: <Droplet className={ICON} />, onClick: () => openTool("layerOpacity") },
+      {
+        key: "bring-front",
+        label: "Öne getir",
+        icon: <ArrowUpToLine className={ICON} />,
+        onClick: () => {
+          if (imgLayer) engine.bringToFront(imgLayer);
+        },
+      },
+      ...(selection.type === "photo" && photo
+        ? [{ key: "photo-crop", label: "Kırp", icon: <Crop className={ICON} />, onClick: () => openTool("photoCrop") } as MenuItem]
+        : []),
       split,
       copy,
       del(),
@@ -753,10 +822,12 @@ export default function ReelsMenu(props: ReelsMenuProps) {
     ];
   } else if (selection?.type === "audio") {
     editItems = [
-      { key: "audio-set", label: "Ses", icon: <Volume2 className={ICON} />, onClick: () => setMusicSheetOpen(true) },
+      { key: "audio-volume", label: "Ses seviyesi", icon: <Volume2 className={ICON} />, onClick: () => openTool("sound") },
+      { key: "audio-set", label: "Ayarlar", icon: <SlidersHorizontal className={ICON} />, onClick: () => setMusicSheetOpen(true), disabled: !selectedMusic },
+      { key: "audio-replace", label: "Değiştir", icon: <RefreshCw className={ICON} />, onClick: () => onOpenMusicPicker("replace") },
+      { key: "audio-remove", label: "Kaldır", icon: <Trash2 className={ICON} />, danger: true, onClick: () => onChangeMusicMeta(null) },
       split,
       copy,
-      del(),
     ];
   } else if (selection) {
     editItems = [split, copy, del()];
@@ -951,6 +1022,48 @@ export default function ReelsMenu(props: ReelsMenuProps) {
             </ToolPanel>
           );
         break;
+      case "textFont": {
+        const tl = selection ? engine.getLayerById(selection.id) : null;
+        if (tl instanceof TextLayer)
+          panel = (
+            <ToolPanel title="Font" onClose={closeTool}>
+              <div className="flex items-center gap-2 overflow-x-auto no-scrollbar">
+                {TEXT_FONT_OPTIONS.map((f) => (
+                  <FontChip key={f.id} id={f.id} label={f.label} layer={tl} engine={engine} />
+                ))}
+              </div>
+            </ToolPanel>
+          );
+        break;
+      }
+      case "textColor": {
+        const tl = selection ? engine.getLayerById(selection.id) : null;
+        if (tl instanceof TextLayer)
+          panel = (
+            <ToolPanel title="Renk" onClose={closeTool}>
+              <ColorRow key={tl.id} engine={engine} layer={tl} />
+            </ToolPanel>
+          );
+        break;
+      }
+      case "layerOpacity": {
+        const ly = selection ? engine.getLayerById(selection.id) : null;
+        if (ly)
+          panel = (
+            <ToolPanel title="Opaklık" onClose={closeTool}>
+              <RangeRow
+                key={ly.id}
+                label="Opaklık"
+                min={5}
+                max={100}
+                suffix="%"
+                value={Math.round(ly.opacity * 100)}
+                onChange={(v) => engine.setLayerOpacity(ly.id, v / 100)}
+              />
+            </ToolPanel>
+          );
+        break;
+      }
       case "reverse":
         panel = (
           <ToolPanel title="Ters" onClose={() => reverseAbortRef.current?.abort()}>
@@ -1005,6 +1118,7 @@ export default function ReelsMenu(props: ReelsMenuProps) {
     <>
       <input ref={replaceInputRef} type="file" accept="image/*,video/*" className="hidden" onChange={handleReplaceFile} />
       <input ref={overlayInputRef} type="file" accept="image/*" className="hidden" onChange={handleOverlayFile} />
+      <input ref={replaceOverlayInputRef} type="file" accept="image/*" className="hidden" onChange={handleReplaceOverlayFile} />
       <input ref={audioInputRef} type="file" accept="audio/*" className="hidden" onChange={handleAudioFile} />
 
       {/* Menüler tek satır (yatay kaydırma); yalnızca bir araç paneli açıkken alan büyür */}
@@ -1027,7 +1141,11 @@ export default function ReelsMenu(props: ReelsMenuProps) {
             <button
               type="button"
               aria-label="Geri"
-              onClick={() => setBackedOutFor(selection?.id ?? null)}
+              onClick={() => {
+                setTool(null);
+                setBackedOutFor(null);
+                onDeselect();
+              }}
               className="w-11 shrink-0 flex items-center justify-center text-white bg-white/5 active:bg-white/10"
             >
               <ChevronLeft className="w-6 h-6" />
@@ -1159,6 +1277,44 @@ function VolumePanel({ engine, clip }: { engine: CanvasEngine; clip: VideoTrackC
           }}
         />
       </div>
+    </div>
+  );
+}
+
+function FontChip({ id, label, layer, engine }: { id: string; label: string; layer: TextLayer; engine: CanvasEngine }) {
+  const [, force] = useState(0);
+  return (
+    <Chip
+      active={layer.fontPreset === id}
+      onClick={() => {
+        engine.updateText(layer.id, { fontPreset: id as TextLayer["fontPreset"] });
+        force((n) => n + 1);
+      }}
+    >
+      {label}
+    </Chip>
+  );
+}
+
+function ColorRow({ engine, layer }: { engine: CanvasEngine; layer: TextLayer }) {
+  const [color, setColor] = useState((layer.style.color || "#FFFFFF").toUpperCase());
+  return (
+    <div className="flex items-center gap-2 overflow-x-auto no-scrollbar py-1">
+      {TEXT_COLORS.map((c) => (
+        <button
+          key={c}
+          type="button"
+          aria-label={c}
+          onClick={() => {
+            setColor(c.toUpperCase());
+            engine.updateText(layer.id, { style: { color: c } });
+          }}
+          style={{ backgroundColor: c }}
+          className={`w-9 h-9 rounded-full shrink-0 border-2 active:scale-90 transition-transform ${
+            color === c.toUpperCase() ? "border-amber-400" : "border-white/25"
+          }`}
+        />
+      ))}
     </div>
   );
 }

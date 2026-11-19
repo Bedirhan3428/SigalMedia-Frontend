@@ -484,6 +484,7 @@ export interface LayerStateSnapshot {
   transform: LayerTransform;
   visible: boolean;
   locked: boolean;
+  opacity?: number;
   timelineStart: number;
   timelineEnd: number;
   // TextLayer

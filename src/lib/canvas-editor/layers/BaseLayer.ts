@@ -9,6 +9,8 @@ export abstract class BaseLayer {
   public timelineStart: number = 0;
   public timelineEnd: number = MAX_VIDEO_SEC;
   public locked: boolean = false;
+  /** 0..1: katman çizilirken (önizleme ve export) globalAlpha ile uygulanır. */
+  public opacity: number = 1;
   public selected: boolean = false;
   public isInteracting: boolean = false; // İki parmakla dokunulduğunda aktifleşen yaylanma durumu
 
@@ -40,6 +42,7 @@ export abstract class BaseLayer {
       transform: { ...this.transform },
       visible: this.visible,
       locked: this.locked,
+      opacity: this.opacity,
       timelineStart: this.timelineStart,
       timelineEnd: this.timelineEnd,
     };
@@ -50,6 +53,7 @@ export abstract class BaseLayer {
     this.transform = { ...state.transform };
     this.visible = state.visible;
     this.locked = state.locked;
+    this.opacity = typeof state.opacity === "number" ? state.opacity : 1;
     this.timelineStart = state.timelineStart;
     this.timelineEnd = state.timelineEnd;
     this.isInteracting = false;

@@ -26,6 +26,7 @@ export class LayerBitmapCache {
     if (typeof document === 'undefined') return null;
     // Fontlar yüklenirken önbelleğe alınırsa yedek fontla kalıcı çizim oluşur
     if (document.fonts && document.fonts.status === 'loading') return null;
+    if (!Number.isFinite(width) || !Number.isFinite(height)) return null;
     const w = Math.ceil(width);
     const h = Math.ceil(height);
     if (w <= 0 || h <= 0 || w > MAX_SIDE_PX || h > MAX_SIDE_PX) return null;

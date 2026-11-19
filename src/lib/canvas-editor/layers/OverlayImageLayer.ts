@@ -34,6 +34,14 @@ export class OverlayImageLayer extends BaseLayer {
     }
   }
 
+  /** Görseli değiştirir (önbelleği sıfırlar). */
+  public setImage(image: HTMLImageElement): void {
+    this.image = image;
+    this.naturalWidth = image.naturalWidth || image.width || 300;
+    this.naturalHeight = image.naturalHeight || image.height || 300;
+    this.bitmapCache.clear();
+  }
+
   public override getState(): LayerStateSnapshot {
     return { ...super.getState(), shapeMode: this.shapeMode };
   }

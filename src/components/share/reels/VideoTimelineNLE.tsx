@@ -84,7 +84,6 @@ function VideoTimelineNLE({
   selectedItemType,
   canUndo,
   canRedo,
-  remainingSec,
   getCurrentTime,
   onSelectItem,
   onTrimClip,
@@ -400,13 +399,6 @@ function VideoTimelineNLE({
             </span>
             <span className="text-zinc-600">/</span>
             <span className="text-zinc-400">{formatNLEClock(safeTotal)}</span>
-            {typeof remainingSec === "number" && (
-              <span
-                className={`ml-1.5 text-[10px] font-medium ${remainingSec < 5 ? "text-amber-400" : "text-zinc-500"}`}
-              >
-                Kalan {Math.floor(remainingSec)} sn
-              </span>
-            )}
           </div>
         </div>
 

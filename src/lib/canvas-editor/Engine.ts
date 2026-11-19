@@ -1499,6 +1499,34 @@ export class CanvasEngine {
     return [...this.overlayLayers];
   }
 
+  /** Üst katmanın opaklığını (0..1) ayarlar; önizleme ve export'ta uygulanır. */
+  public setLayerOpacity(layerId: string, value: number): void {
+    const layer = this.overlayLayers.find((l) => l.id === layerId);
+    if (!layer) return;
+    layer.opacity = Math.max(0, Math.min(1, value));
+    this.invalidateStaticCache();
+    this.requestRender();
+    this.emit('change');
+  }
+
+  /** Fotoğraf/çıkartma katmanının görselini değiştirir; konum, ölçek ve süre korunur. */
+  public async replaceOverlayImage(layerId: string, source: Blob | File | string): Promise<boolean> {
+    const layer = this.overlayLayers.find((l) => l.id === layerId);
+    if (!(layer instanceof OverlayImageLayer) || this.destroyed) return false;
+    const media = await MediaSourceManager.load(source, 'image');
+    if (this.destroyed) {
+      MediaSourceManager.release(media);
+      return false;
+    }
+    this.registerMedia(media);
+    this.overlayMedia.set(layer, media);
+    layer.setImage(media.element as HTMLImageElement);
+    this.invalidateStaticCache();
+    this.requestRender();
+    this.emit('change');
+    return true;
+  }
+
   public getLayerById(layerId: string): BaseLayer | null {
     return this.overlayLayers.find((l) => l.id === layerId) || null;
   }
@@ -1723,12 +1751,12 @@ export class CanvasEngine {
       cCtx.clearRect(0, 0, width, height);
       this.renderAmbientBackground(cCtx, width, height);
       if (this.mediaLayer && this.mediaLayer.visible) {
-        this.mediaLayer.render(cCtx, width, height);
+        this.safeRenderLayer(this.mediaLayer, cCtx, width, height);
       }
       for (let i = 0; i < this.overlayLayers.length; i++) {
         const layer = this.overlayLayers[i];
         if (layer.visible && layer.temporalVisible) {
-          layer.render(cCtx, width, height);
+          this.safeRenderLayer(layer, cCtx, width, height);
         }
       }
       this.staticSceneCacheDirty = false;
@@ -1757,7 +1785,7 @@ export class CanvasEngine {
       for (let i = 0; i < this.overlayLayers.length; i++) {
         const layer = this.overlayLayers[i];
         if (layer.visible && layer.temporalVisible) {
-          layer.render(oCtx, width, height);
+          this.safeRenderLayer(layer, oCtx, width, height);
         }
       }
       this.overlayCacheDirty = false;
@@ -1768,7 +1796,7 @@ export class CanvasEngine {
   /**
    * Video karesi hazır değilken (seek sürüyor / veri yok) tuvali silip siyah kare basmayı önler:
    * son çizilen kare korunur, kare hazır olunca yeniden çizilir. Sonsuz beklemeyi önlemek için
-   * en fazla ~0.5 sn (30 kare) ertelenir.
+   * en fazla ~1.5 sn (90 kare) ertelenir.
    */
   private shouldHoldLastFrame(): boolean {
     if (this.isExportingVideo || !this.hasDrawnVideoFrame) return false;
@@ -1777,7 +1805,7 @@ export class CanvasEngine {
     const v = ml.getVideoElement();
     if (!v || v.error) return false;
     if (v.readyState >= 2 && !v.seeking) return false;
-    if (this.holdFrameCount >= 30) return false;
+    if (this.holdFrameCount >= 90) return false;
     this.holdFrameCount++;
     if (!this.holdRetryScheduled && typeof requestAnimationFrame !== 'undefined') {
       this.holdRetryScheduled = true;
@@ -1787,6 +1815,29 @@ export class CanvasEngine {
       });
     }
     return true;
+  }
+
+  /**
+   * Tek bir katmanı güvenle çizer: çizim sırasında oluşan hata (örn. çözülememiş görsel,
+   * sıfır boyutlu önbellek) karenin geri kalanını ve tuvalin durumunu bozmaz. Aksi halde
+   * clearRect sonrası fırlatılan hata tuvali boş (siyah) bırakıp titreme yapardı.
+   */
+  private safeRenderLayer(
+    layer: { render(ctx: CanvasRenderingContext2D, w: number, h: number): void },
+    ctx: CanvasRenderingContext2D,
+    width: number,
+    height: number
+  ): void {
+    ctx.save();
+    try {
+      const op = (layer as { opacity?: number }).opacity;
+      if (typeof op === 'number' && op < 1) ctx.globalAlpha *= Math.max(0, op);
+      layer.render(ctx, width, height);
+    } catch (err) {
+      if (typeof console !== 'undefined') console.warn('[CanvasEngine] layer render failed', err);
+    } finally {
+      ctx.restore();
+    }
   }
 
   private hasDrawnVideoFrame = false;
@@ -1824,7 +1875,7 @@ export class CanvasEngine {
 
       // 2. Katmanlar (Görsel / Metin / Çıkartmalar - Zamansal Görünürlük Kontrollü)
       if (ml && ml.visible) {
-        ml.render(this.ctx, this.width, this.height);
+        this.safeRenderLayer(ml, this.ctx, this.width, this.height);
       }
       if (this.overlayLayers.length > 0) {
         if (!this.hasDynamicOverlay()) {
@@ -1836,7 +1887,7 @@ export class CanvasEngine {
           for (let i = 0; i < this.overlayLayers.length; i++) {
             const layer = this.overlayLayers[i];
             if (layer.visible && layer.temporalVisible) {
-              layer.render(this.ctx, this.width, this.height);
+              this.safeRenderLayer(layer, this.ctx, this.width, this.height);
             }
           }
         }
@@ -1899,7 +1950,7 @@ export class CanvasEngine {
         for (let i = 0; i < this.overlayLayers.length; i++) {
           const layer = this.overlayLayers[i];
           if (layer.visible && layer.temporalVisible) {
-            layer.render(targetCtx, width, height);
+            this.safeRenderLayer(layer, targetCtx, width, height);
           }
         }
       }
@@ -1949,7 +2000,7 @@ export class CanvasEngine {
       for (let i = 0; i < this.overlayLayers.length; i++) {
         const layer = this.overlayLayers[i];
         if (layer.visible && layer.temporalVisible) {
-          layer.render(targetCtx, width, height);
+          this.safeRenderLayer(layer, targetCtx, width, height);
         }
       }
     }
