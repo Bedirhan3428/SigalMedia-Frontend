@@ -65,6 +65,8 @@ export interface StoryAudioMeta {
   // Giriş / çıkış ses yumuşatma süresi (sn)
   fadeIn?: number;
   fadeOut?: number;
+  /** 'device' = yerel dosya (streamUrl bir blob URL'si, motor serbest bırakır). Varsayılan 'itunes'. */
+  source?: 'itunes' | 'device';
 }
 
 export interface MusicSegment {
@@ -387,6 +389,25 @@ export interface VideoTrackClip {
   media?: EditorMedia;
   thumbnailUrl?: string;
   thumbnails?: string[];
+  /** 0..1 (varsayılan 1) */
+  opacity?: number;
+  /** Giriş / çıkış animasyonu */
+  animation?: ClipAnimation;
+  /** Klibe özel ayarlar (genel ayarların üzerine eklenir) */
+  adjustments?: Partial<PostAdjustmentState>;
+  /** Klibe özel filtre (FILTER_PRESETS indeksi); undefined = genel filtre */
+  filterIndex?: number;
+  /** 0..1 rötuş yoğunluğu */
+  retouch?: number;
+}
+
+export type ClipAnimationKind = 'none' | 'fade' | 'slide-up' | 'slide-left' | 'zoom-in';
+
+export interface ClipAnimation {
+  in?: ClipAnimationKind;
+  out?: ClipAnimationKind;
+  /** Her bir animasyonun süresi (sn) */
+  durationSec?: number;
 }
 
 export type OverlayTrackType = 'text' | 'sticker' | 'photo';

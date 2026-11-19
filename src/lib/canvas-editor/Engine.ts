@@ -7,6 +7,7 @@ import { MediaSourceManager, MediaLoadError } from './MediaSource';
 import { InteractionManager, MediaGesturePolicy } from './interaction/InteractionManager';
 import { ImageExporter, ExportImageOptions } from './exporter/ImageExporter';
 import { generateVideoThumbnails } from './utils/videoThumbs';
+import { reverseVideoRange, ReverseClipError } from './exporter/ClipReverser';
 import {
   EngineOptions,
   EditorMedia,
@@ -25,6 +26,8 @@ import {
   ReelsEffectClip,
   ReelsEffectId,
   VideoTrackClip,
+  ClipAnimation,
+  ClipAnimationKind,
   OverlayTrackItem,
   LayerTransform,
   DragInfo,
@@ -73,6 +76,18 @@ export type EngineEvent = keyof EngineEventMap;
 export type EventListener<K extends EngineEvent = EngineEvent> = (...args: EngineEventMap[K]) => void;
 
 let mediaKeyCounter = 0;
+
+/** Yerel ses dosyası yüklenemedi: 'unsupported' (ses değil / codec) | 'decode' (zaman aşımı). */
+export class AudioLoadError extends Error {
+  public readonly code: 'unsupported' | 'decode';
+  constructor(code: 'unsupported' | 'decode') {
+    super(`audio-load:${code}`);
+    this.name = 'AudioLoadError';
+    this.code = code;
+  }
+}
+
+export type ClipAdjustmentKey = 'brightness' | 'contrast' | 'saturation' | 'warmth' | 'vignette' | 'sharpness';
 
 export class CanvasEngine {
   private canvas: HTMLCanvasElement;
@@ -142,6 +157,10 @@ export class CanvasEngine {
   /** Sayfa gizlenirken oynuyordu ve kimse açıkça durdurmadı: görünür olunca devam et. */
   private resumeOnVisible = false;
   private musicMeta: StoryAudioMeta | null = null;
+  /** Motorun sahip olduğu yerel müzik blob URL'leri (en yeni sonda). Undo için son 3'ü tutulur. */
+  private ownedMusicUrls: string[] = [];
+  private appliedClipFilter = false;
+  private lastClipFilterIdx = -1;
   /** Motorun yüklediği tüm medya (taban, klip, overlay). destroy/loadMedia'da serbest bırakılır. */
   private mediaRegistry = new Set<EditorMedia>();
   private overlayMedia = new Map<BaseLayer, EditorMedia>();
@@ -1241,6 +1260,7 @@ export class CanvasEngine {
       this.overlayLayers = this.overlayLayers.filter((l) => !(l instanceof MusicStickerLayer));
     }
     this.musicMeta = null;
+    this.gcDeviceMusicUrls();
     if (hadMusic) this.emit('music-change', null);
     if (hadSticker) {
       this.invalidateStaticCache();
@@ -1262,7 +1282,11 @@ export class CanvasEngine {
       this.removeMusicSticker();
       return;
     }
+    if (meta.source === 'device' && meta.streamUrl.startsWith('blob:') && !this.ownedMusicUrls.includes(meta.streamUrl)) {
+      this.ownedMusicUrls.push(meta.streamUrl);
+    }
     this.musicMeta = { ...meta };
+    this.gcDeviceMusicUrls();
     if (this.shareMode === 'reels') {
       if (this.overlayLayers.some((l) => l instanceof MusicStickerLayer)) {
         this.overlayLayers = this.overlayLayers.filter((l) => !(l instanceof MusicStickerLayer));
@@ -1282,6 +1306,84 @@ export class CanvasEngine {
       }
     }
     this.emit('music-change', { ...meta });
+  }
+
+  /** Yerel müzik blob URL'lerini serbest bırakır: aktif olan ve undo için son 3'ü korunur (force: hepsi). */
+  private gcDeviceMusicUrls(force = false): void {
+    const cur = this.musicMeta?.streamUrl;
+    while (this.ownedMusicUrls.length > (force ? 0 : 3)) {
+      const i = this.ownedMusicUrls.findIndex((u) => force || u !== cur);
+      if (i === -1) break;
+      const [url] = this.ownedMusicUrls.splice(i, 1);
+      try {
+        URL.revokeObjectURL(url);
+      } catch {}
+    }
+  }
+
+  private probeAudioDuration(url: string): Promise<number> {
+    return new Promise<number>((resolve, reject) => {
+      const a = new Audio();
+      a.preload = 'metadata';
+      const done = (fn: () => void) => {
+        clearTimeout(timer);
+        a.onloadedmetadata = null;
+        a.onerror = null;
+        try {
+          a.removeAttribute('src');
+          a.load();
+        } catch {}
+        fn();
+      };
+      const timer = setTimeout(() => done(() => reject(new AudioLoadError('decode'))), 10000);
+      a.onloadedmetadata = () => done(() => resolve(Number.isFinite(a.duration) ? a.duration : 0));
+      a.onerror = () => done(() => reject(new AudioLoadError('unsupported')));
+      a.src = url;
+    });
+  }
+
+  /**
+   * Cihazdan seçilen ses dosyasını müzik olarak ayarlar (source: 'device'). 30 sn sınırı yoktur;
+   * Reels'te süre videonun toplam süresiyle sınırlanır. Hata: AudioLoadError.
+   */
+  public async setMusicFromFile(file: File | Blob, info?: { title?: string; artist?: string }): Promise<StoryAudioMeta> {
+    if (this.destroyed) throw new DOMException('Engine destroyed', 'AbortError');
+    const name = file instanceof File ? file.name : '';
+    const looksAudio = (file.type || '').startsWith('audio/') || /\.(mp3|m4a|aac|wav|ogg|oga|opus|flac|weba|webm|mp4)$/i.test(name);
+    if (!looksAudio) throw new AudioLoadError('unsupported');
+    const url = URL.createObjectURL(file);
+    let total = 0;
+    try {
+      total = await this.probeAudioDuration(url);
+    } catch (err) {
+      try {
+        URL.revokeObjectURL(url);
+      } catch {}
+      throw err;
+    }
+    if (this.destroyed) {
+      try {
+        URL.revokeObjectURL(url);
+      } catch {}
+      throw new DOMException('Engine destroyed', 'AbortError');
+    }
+    const timelineTotal = this.shareMode === 'reels' ? this.getTotalTimelineDuration() : 0;
+    const totalDuration = total > 0 ? total : timelineTotal || 30;
+    const duration = timelineTotal > 0 ? Math.min(totalDuration, timelineTotal) : totalDuration;
+    const meta: StoryAudioMeta = {
+      id: `device_${Date.now().toString(36)}`,
+      title: info?.title || name.replace(/\.[^.]+$/, '') || 'Ses',
+      artist: info?.artist || '',
+      streamUrl: url,
+      startTime: 0,
+      duration,
+      totalDuration,
+      source: 'device',
+      timelineStart: 0,
+      timelineEnd: Number(duration.toFixed(2)),
+    };
+    this.setMusic(meta);
+    return { ...meta };
   }
 
   public getMusic(): StoryAudioMeta | null {
@@ -1830,6 +1932,10 @@ export class CanvasEngine {
     const totalDur = this.getTotalTimelineDuration();
 
     if (ml.isActiveEffectTimeDependentAt(0)) return false;
+    for (let i = 0; i < this.videoClips.length; i++) {
+      const a = this.videoClips[i].animation;
+      if (a && ((a.in && a.in !== 'none') || (a.out && a.out !== 'none'))) return false;
+    }
 
     for (let i = 0; i < ml.effectClips.length; i++) {
       const c = ml.effectClips[i];
@@ -1974,9 +2080,21 @@ export class CanvasEngine {
       ml.trimStart = 0;
       ml.trimEnd = totalDur;
     }
+    // Klip süreleri değişmiş olabilir: aktif klibin aralığını / görsel durumunu tazele
+    const act = this.getActiveClipAtTime(this.nleTimelineTime);
+    if (act) this.applyClipVisuals(ml, act.clip);
   }
 
   public splitActiveClipAt(t?: number, targetClipId?: string): VideoTrackClip | null {
+    const clipB = this.splitClipInternal(t, targetClipId);
+    if (!clipB) return null;
+    this.emit('video-time', this.getVideoState());
+    this.emit('change');
+    return clipB;
+  }
+
+  /** Bölme işlemi; olay YAYMAZ (çağıran tek 'change' yayar). */
+  private splitClipInternal(t?: number, targetClipId?: string): VideoTrackClip | null {
     const splitTime = typeof t === 'number' ? t : this.getCurrentTime();
     const active = this.getActiveClipAtTime(splitTime);
     if (!active) return null;
@@ -1998,6 +2116,7 @@ export class CanvasEngine {
       sourceEnd: splitSource,
       duration: durA,
       transform: active.clip.transform ? { ...active.clip.transform } : undefined,
+      animation: active.clip.animation ? { ...active.clip.animation, out: 'none' } : undefined,
     };
 
     const clipB: VideoTrackClip = {
@@ -2006,12 +2125,11 @@ export class CanvasEngine {
       sourceStart: splitSource,
       duration: durB,
       transform: active.clip.transform ? { ...active.clip.transform } : undefined,
+      animation: active.clip.animation ? { ...active.clip.animation, in: 'none' } : undefined,
     };
 
     this.videoClips.splice(active.index, 1, clipA, clipB);
     this.syncMediaLayerWithClips();
-    this.emit('video-time', this.getVideoState());
-    this.emit('change');
     return clipB;
   }
 
@@ -2199,8 +2317,64 @@ export class CanvasEngine {
         changed = true;
       }
     }
+    if (this.applyClipVisuals(ml, clip)) changed = true;
     if (changed) {
       this.invalidateStaticCache();
+    }
+    return changed;
+  }
+
+  /** Klibe özel opaklık / animasyon / ayar / filtre / rötuş durumunu taban katmana yazar (çizim yolu ortak). */
+  private applyClipVisuals(ml: MediaLayer, clip: VideoTrackClip): boolean {
+    let changed = false;
+    const op = typeof clip.opacity === 'number' ? clip.opacity : 1;
+    if (ml.clipOpacity !== op) {
+      ml.clipOpacity = op;
+      changed = true;
+    }
+    if (ml.clipAnimation !== clip.animation) {
+      ml.clipAnimation = clip.animation;
+      changed = true;
+    }
+    if (ml.clipAdjustments !== clip.adjustments) {
+      ml.clipAdjustments = clip.adjustments;
+      changed = true;
+    }
+    const rt = typeof clip.retouch === 'number' ? clip.retouch : 0;
+    if (ml.clipRetouch !== rt) {
+      ml.clipRetouch = rt;
+      changed = true;
+    }
+    let start = 0;
+    for (let i = 0; i < this.videoClips.length; i++) {
+      const c = this.videoClips[i];
+      if (c.id === clip.id) break;
+      start += Math.max(0.2, c.duration);
+    }
+    const end = start + Math.max(0.2, clip.duration);
+    if (Math.abs(ml.clipRange.start - start) > 0.0005 || Math.abs(ml.clipRange.end - end) > 0.0005) {
+      ml.clipRange = { start, end };
+      changed = true;
+    }
+    // Klibe özel filtre (animasyonsuz); yoksa genel filtreye dön
+    if (typeof clip.filterIndex === 'number') {
+      const total = FILTER_PRESETS.length;
+      const idx = ((clip.filterIndex % total) + total) % total;
+      const preset = FILTER_PRESETS[idx];
+      ml.targetValues = { ...preset.values };
+      ml.currentValues = { ...preset.values };
+      ml.activeEffect = preset.overlayEffect || null;
+      if (!this.appliedClipFilter || this.lastClipFilterIdx !== idx) changed = true;
+      this.appliedClipFilter = true;
+      this.lastClipFilterIdx = idx;
+    } else if (this.appliedClipFilter) {
+      const preset = FILTER_PRESETS[this.activeFilterIndex];
+      ml.targetValues = { ...preset.values };
+      ml.currentValues = { ...preset.values };
+      ml.activeEffect = preset.overlayEffect || null;
+      this.appliedClipFilter = false;
+      this.lastClipFilterIdx = -1;
+      changed = true;
     }
     return changed;
   }
@@ -2387,6 +2561,365 @@ export class CanvasEngine {
     }
     this.emit('video-time', this.getVideoState());
     this.emit('change');
+  }
+
+  // ─────────────────────────────────────────────────────────────
+  // Reels: klip başına düzenleme araçları (hepsi tek 'change' yayar)
+  // ─────────────────────────────────────────────────────────────
+  private patchClip(id: string, patch: Partial<VideoTrackClip>): VideoTrackClip | null {
+    const idx = this.videoClips.findIndex((c) => c.id === id);
+    if (idx === -1) return null;
+    this.videoClips[idx] = { ...this.videoClips[idx], ...patch };
+    const clip = this.videoClips[idx];
+    const active = this.getActiveClipAtTime(this.nleTimelineTime);
+    if (this.mediaLayer && active && active.clip.id === id) {
+      this.applyClipTransformToMediaLayer(clip);
+    }
+    this.invalidateStaticCache();
+    this.requestRender();
+    this.emit('video-time', this.getVideoState());
+    this.emit('change');
+    return clip;
+  }
+
+  /** Klip opaklığı 0..1. */
+  public updateClipOpacity(id: string, opacity: number): void {
+    this.patchClip(id, { opacity: Math.max(0, Math.min(1, Number.isFinite(opacity) ? opacity : 1)) });
+  }
+
+  /**
+   * Klip giriş/çıkış animasyonu. Verilmeyen alanlar mevcut değeri korur. durationSec 0.1–2 (varsayılan 0.5),
+   * klip süresinin yarısını geçemez. Önizleme ve dışa aktarımda aynı çizim yolundan geçer.
+   */
+  public updateClipAnimation(
+    id: string,
+    anim: { in?: ClipAnimationKind; out?: ClipAnimationKind; durationSec?: number }
+  ): void {
+    const clip = this.videoClips.find((c) => c.id === id);
+    if (!clip) return;
+    const prev: ClipAnimation = clip.animation || {};
+    const next: ClipAnimation = {
+      in: anim.in ?? prev.in ?? 'none',
+      out: anim.out ?? prev.out ?? 'none',
+      durationSec: Math.max(0.1, Math.min(2, anim.durationSec ?? prev.durationSec ?? 0.5)),
+    };
+    const none = next.in === 'none' && next.out === 'none';
+    this.patchClip(id, { animation: none ? undefined : next });
+  }
+
+  /** Klibi 90° saat yönünde döndürür (kare her zaman kaplanır). */
+  public rotateClip90(id: string): void {
+    const clip = this.videoClips.find((c) => c.id === id);
+    if (!clip) return;
+    const cur: LayerTransform = clip.transform || { x: 0.5, y: 0.5, scale: 1, rotation: 0, flipH: false, flipV: false };
+    const rotation = (((Math.round((cur.rotation || 0) / 90) * 90 + 90) % 360) + 360) % 360;
+    const media = clip.media || this.mediaLayer?.media;
+    const fit: FitMode = clip.fitMode || 'cover';
+    const next = media
+      ? CanvasEngine.clampTransformToCover({ ...cur, rotation }, media, fit, this.width, this.height)
+      : { ...cur, rotation };
+    this.updateClipTransform(id, next, fit);
+  }
+
+  /** Klibi yatay ('h') veya dikey ('v') çevirir. */
+  public flipClip(id: string, axis: 'h' | 'v'): void {
+    const clip = this.videoClips.find((c) => c.id === id);
+    if (!clip) return;
+    const cur: LayerTransform = clip.transform || { x: 0.5, y: 0.5, scale: 1, rotation: 0, flipH: false, flipV: false };
+    this.updateClipTransform(id, axis === 'h' ? { flipH: !cur.flipH } : { flipV: !cur.flipV });
+  }
+
+  /**
+   * Klibe özel ayarlar (genel ayarlara EKLENİR). Anahtarlar: brightness/contrast/saturation/warmth -100..100,
+   * vignette/sharpness 0..100. Hepsi 0 olursa klip ayarı kaldırılır. Genel ayar için setPostAdjustments().
+   */
+  public updateClipAdjustments(id: string, partial: Partial<Record<ClipAdjustmentKey, number>>): void {
+    const clip = this.videoClips.find((c) => c.id === id);
+    if (!clip) return;
+    const merged: Partial<PostAdjustmentState> = { ...(clip.adjustments || {}) };
+    (Object.keys(partial) as ClipAdjustmentKey[]).forEach((k) => {
+      const v = partial[k];
+      if (typeof v !== 'number' || !Number.isFinite(v)) return;
+      const lo = k === 'vignette' || k === 'sharpness' ? 0 : -100;
+      merged[k] = Math.max(lo, Math.min(100, Math.round(v)));
+    });
+    const allZero = (Object.keys(merged) as ClipAdjustmentKey[]).every((k) => !merged[k]);
+    this.patchClip(id, { adjustments: allZero ? undefined : merged });
+  }
+
+  /** Klibe özel filtre (FILTER_PRESETS indeksi). null = klip filtresini kaldır (genel filtre geçerli). */
+  public setClipFilter(id: string, index: number | null): void {
+    if (index === null) {
+      this.patchClip(id, { filterIndex: undefined });
+      return;
+    }
+    const total = FILTER_PRESETS.length;
+    this.patchClip(id, { filterIndex: ((Math.round(index) % total) + total) % total });
+  }
+
+  /** Rötuş 0..1: yumuşatılmış kopya orijinalle harmanlanır + hafif parlaklık. 0 = kapalı. */
+  public updateClipRetouch(id: string, amount: number): void {
+    const v = Math.max(0, Math.min(1, Number.isFinite(amount) ? amount : 0));
+    this.patchClip(id, { retouch: v > 0.005 ? v : undefined });
+  }
+
+  private makeClipThumb(media: EditorMedia): string | undefined {
+    try {
+      if (typeof document === 'undefined') return undefined;
+      const c = document.createElement('canvas');
+      c.width = 160;
+      c.height = 160;
+      const x = c.getContext('2d');
+      if (!x) return undefined;
+      x.drawImage(media.element, 0, 0, 160, 160);
+      return c.toDataURL('image/jpeg', 0.72);
+    } catch {
+      return undefined;
+    }
+  }
+
+  /**
+   * Zaman çizelgesindeki t anında klibin karesini dondurur: klibi t'de böler ve araya
+   * durationSec (varsayılan 3) saniyelik fotoğraf klibi koyar. Süre kalan kapasiteye (MAX_VIDEO_SEC)
+   * kırpılır; kapasite < 0.5 sn, klip video değil veya t klibin içinde değilse null döner.
+   * Yeni (dondurulmuş) klibi döndürür; zaman çizelgesi onun başına gider.
+   */
+  public async freezeFrameAt(id: string, t: number, durationSec = 3): Promise<VideoTrackClip | null> {
+    if (this.destroyed || this.shareMode !== 'reels' || !this.mediaLayer) return null;
+    const first = this.getActiveClipAtTime(t);
+    if (!first || first.clip.id !== id) return null;
+    if (first.clip.isMotionPhoto || first.clip.media?.type !== 'video') return null;
+    if (this.getRemainingTimelineCapacity() < 0.5) return null;
+    this.pauseVideo();
+    const token = this.loadToken;
+    const ml = this.mediaLayer;
+    const srcMedia = first.clip.media as EditorMedia;
+    const video = srcMedia.element as HTMLVideoElement;
+    this.applyClipTransformToMediaLayer(first.clip);
+    await ml.seek(first.localSourceTime);
+    if (this.destroyed || token !== this.loadToken) return null;
+
+    const vw = video.videoWidth || srcMedia.width;
+    const vh = video.videoHeight || srcMedia.height;
+    if (!vw || !vh) return null;
+    const k = Math.min(1, 1920 / Math.max(vw, vh));
+    const canvas = document.createElement('canvas');
+    canvas.width = Math.max(2, Math.round(vw * k));
+    canvas.height = Math.max(2, Math.round(vh * k));
+    const cctx = canvas.getContext('2d');
+    if (!cctx) return null;
+    cctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+    const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob((b) => resolve(b), 'image/jpeg', 0.92));
+    canvas.width = 1;
+    canvas.height = 1;
+    if (!blob || this.destroyed || token !== this.loadToken) return null;
+
+    const imgMedia = await MediaSourceManager.load(blob, 'image');
+    const again = this.getActiveClipAtTime(t);
+    const cap = this.getRemainingTimelineCapacity();
+    if (this.destroyed || token !== this.loadToken || !again || again.clip.id !== id || cap < 0.5) {
+      MediaSourceManager.release(imgMedia);
+      return null;
+    }
+    this.registerMedia(imgMedia);
+    const dur = Number(Math.min(Math.max(0.5, durationSec), cap).toFixed(2));
+    const thumb = this.makeClipThumb(imgMedia);
+
+    // Bölme: uçlara çok yakınsa bölmeden başına/sonuna ekle
+    const offsetInClip = t - again.clipTimelineStart;
+    const remaining = again.clipTimelineEnd - t;
+    let insertIdx: number;
+    if (offsetInClip < 0.25) insertIdx = again.index;
+    else if (remaining < 0.25) insertIdx = again.index + 1;
+    else {
+      const clipB = this.splitClipInternal(t, id);
+      if (!clipB) {
+        this.releaseMediaNow(imgMedia);
+        return null;
+      }
+      insertIdx = this.videoClips.findIndex((c) => c.id === clipB.id);
+    }
+    const src = again.clip;
+    const freeze: VideoTrackClip = {
+      id: `clip_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 5)}`,
+      sourceMediaId: imgMedia.objectUrl || `media_${Date.now()}`,
+      sourceStart: 0,
+      sourceEnd: dur,
+      duration: dur,
+      playbackRate: 1,
+      volume: 1,
+      muted: true,
+      isMotionPhoto: true,
+      transform: src.transform ? { ...src.transform } : { x: 0.5, y: 0.5, scale: 1, rotation: 0, flipH: false, flipV: false },
+      fitMode: src.fitMode || 'cover',
+      cropRect: src.cropRect ? { ...src.cropRect } : { x: 0, y: 0, width: 1, height: 1 },
+      media: imgMedia,
+      thumbnailUrl: thumb,
+      thumbnails: thumb ? [thumb] : undefined,
+      opacity: src.opacity,
+      adjustments: src.adjustments ? { ...src.adjustments } : undefined,
+      filterIndex: src.filterIndex,
+      retouch: src.retouch,
+    };
+    this.videoClips.splice(insertIdx, 0, freeze);
+    let start = 0;
+    for (let i = 0; i < insertIdx; i++) start += Math.max(0.2, this.videoClips[i].duration);
+    this.nleTimelineTime = start;
+    this.activePlayingClipId = null;
+    this.syncMediaLayerWithClips();
+    this.applyClipTransformToMediaLayer(freeze);
+    this.collectUnusedClipMedia();
+    this.invalidateStaticCache();
+    this.requestRender();
+    this.seekVideo(start).catch(() => {});
+    this.emit('video-time', this.getVideoState());
+    this.emit('change');
+    return freeze;
+  }
+
+  /**
+   * Klibin medyasını yeni dosyayla değiştirir (aynı zaman çizelgesi yuvası). Süre korunur; yeni kaynaktan
+   * kısaysa kısaltılır. Dönüşüm/kırpma sıfırlanır, opaklık/animasyon/ayar/filtre/rötuş korunur. Eski medya,
+   * undo için tutulan son 3 medyanın dışına çıkınca serbest bırakılır. Hata: MediaLoadError. Klip yoksa null.
+   */
+  public async replaceClipMedia(id: string, source: File | Blob | string): Promise<VideoTrackClip | null> {
+    if (this.destroyed || this.shareMode !== 'reels' || !this.mediaLayer) return null;
+    if (!this.videoClips.some((c) => c.id === id)) return null;
+    this.pauseVideo();
+    const token = this.loadToken;
+    const newMedia = await MediaSourceManager.load(source);
+    const idx = this.videoClips.findIndex((c) => c.id === id);
+    if (this.destroyed || token !== this.loadToken || idx === -1) {
+      MediaSourceManager.release(newMedia);
+      return null;
+    }
+    this.registerMedia(newMedia);
+    const old = this.videoClips[idx];
+    const isPhoto = newMedia.type === 'image';
+    const rate = isPhoto ? 1 : Math.max(0.25, old.playbackRate || 1);
+    let sourceEnd: number;
+    if (isPhoto) {
+      sourceEnd = Math.max(0.5, old.duration);
+    } else {
+      const nd = Number.isFinite(newMedia.duration) && (newMedia.duration || 0) > 0 ? (newMedia.duration as number) : 5;
+      sourceEnd = Math.max(0.5, Math.min(nd, MAX_VIDEO_SEC, old.duration * rate));
+    }
+    sourceEnd = Number(sourceEnd.toFixed(2));
+    const thumb = this.makeClipThumb(newMedia);
+    const next: VideoTrackClip = {
+      ...old,
+      sourceMediaId: newMedia.objectUrl || `media_${Date.now()}`,
+      sourceStart: 0,
+      sourceEnd,
+      playbackRate: rate,
+      duration: Number(Math.max(0.2, sourceEnd / rate).toFixed(2)),
+      isMotionPhoto: isPhoto,
+      muted: isPhoto ? true : old.isMotionPhoto ? false : old.muted,
+            transform: { x: 0.5, y: 0.5, scale: 1, rotation: 0, flipH: false, flipV: false },
+      fitMode: 'cover',
+      cropRect: { x: 0, y: 0, width: 1, height: 1 },
+      media: newMedia,
+      thumbnailUrl: thumb,
+      thumbnails: thumb ? [thumb] : undefined,
+    };
+    this.videoClips[idx] = next;
+    this.activePlayingClipId = null;
+    this.syncMediaLayerWithClips();
+    const active = this.getActiveClipAtTime(this.nleTimelineTime);
+    if (active && active.clip.id === id) this.applyClipTransformToMediaLayer(next);
+    this.collectUnusedClipMedia();
+    this.invalidateStaticCache();
+    this.requestRender();
+    this.seekVideo(this.nleTimelineTime).catch(() => {});
+    this.emit('video-time', this.getVideoState());
+    this.emit('change');
+
+    if (!isPhoto) {
+      generateVideoThumbnails(source, {
+        count: 8,
+        onThumbnail: (thumbs) => {
+          if (this.destroyed || thumbs.length === 0) return;
+          const i2 = this.videoClips.findIndex((c) => c.id === id && c.media === newMedia);
+          if (i2 !== -1) {
+            this.videoClips[i2] = { ...this.videoClips[i2], thumbnailUrl: thumbs[0], thumbnails: thumbs };
+            this.emit('video-time', this.getVideoState());
+          }
+        },
+      }).catch(() => {});
+    }
+    return next;
+  }
+
+  /**
+   * Klibi gerçekten ters çevirir: aralığı WebCodecs ile çözer, kareleri tersten H.264/MP4'e kodlar ve
+   * klibin medyasını sonuçla değiştirir (klip sessiz olur; hız/dönüşüm/görsel ayarlar korunur).
+   * onProgress 0..1. signal iptal ederse DOMException('AbortError') fırlatır ve hiçbir şey değişmez.
+   * Hatalar: ReverseClipError (code: 'unsupported' | 'not-video' | 'decode' | 'encode').
+   * Klip bu sırada silindiyse null.
+   */
+  public async reverseClip(
+    id: string,
+    onProgress?: (fraction: number) => void,
+    signal?: AbortSignal
+  ): Promise<VideoTrackClip | null> {
+    if (this.destroyed || this.shareMode !== 'reels') return null;
+    const clip = this.videoClips.find((c) => c.id === id);
+    if (!clip) return null;
+    if (clip.isMotionPhoto || !clip.media || clip.media.type !== 'video') {
+      throw new ReverseClipError('not-video');
+    }
+    this.pauseVideo();
+    const token = this.loadToken;
+    const oldMedia = clip.media;
+    const blob = await reverseVideoRange(
+      oldMedia,
+      clip.sourceStart,
+      Math.min(clip.sourceEnd, clip.sourceStart + MAX_VIDEO_SEC),
+      onProgress,
+      signal
+    );
+    if (this.destroyed || token !== this.loadToken) throw new DOMException('Reverse cancelled', 'AbortError');
+    if (signal?.aborted) throw new DOMException('Reverse cancelled', 'AbortError');
+    let newMedia: EditorMedia;
+    try {
+      newMedia = await MediaSourceManager.load(blob, 'video');
+    } catch {
+      throw new ReverseClipError('decode', 'reversed clip could not be loaded');
+    }
+    const idx = this.videoClips.findIndex((c) => c.id === id && c.media === oldMedia);
+    if (this.destroyed || token !== this.loadToken || idx === -1) {
+      MediaSourceManager.release(newMedia);
+      return null;
+    }
+    this.registerMedia(newMedia);
+    const cur = this.videoClips[idx];
+    const rate = Math.max(0.25, cur.playbackRate || 1);
+    const span = Math.min(cur.sourceEnd - cur.sourceStart, MAX_VIDEO_SEC);
+    const nd = Number.isFinite(newMedia.duration) && (newMedia.duration || 0) > 0 ? (newMedia.duration as number) : span;
+    const sourceEnd = Number(Math.max(0.3, Math.min(nd, span + 0.05)).toFixed(2));
+    const next: VideoTrackClip = {
+      ...cur,
+      sourceMediaId: newMedia.objectUrl || `media_${Date.now()}`,
+      sourceStart: 0,
+      sourceEnd,
+      duration: Number(Math.max(0.2, sourceEnd / rate).toFixed(2)),
+      muted: true,
+      media: newMedia,
+      thumbnails: cur.thumbnails ? [...cur.thumbnails].reverse() : undefined,
+      thumbnailUrl: cur.thumbnails && cur.thumbnails.length > 0 ? cur.thumbnails[cur.thumbnails.length - 1] : cur.thumbnailUrl,
+    };
+    this.videoClips[idx] = next;
+    this.activePlayingClipId = null;
+    this.syncMediaLayerWithClips();
+    const active = this.getActiveClipAtTime(this.nleTimelineTime);
+    if (active && active.clip.id === id) this.applyClipTransformToMediaLayer(next);
+    this.collectUnusedClipMedia();
+    this.invalidateStaticCache();
+    this.requestRender();
+    this.seekVideo(this.nleTimelineTime).catch(() => {});
+    this.emit('video-time', this.getVideoState());
+    this.emit('change');
+    return next;
   }
 
   public getOverlayTrackItems(): OverlayTrackItem[] {
@@ -3206,6 +3739,8 @@ export class CanvasEngine {
       transform: c.transform ? { ...c.transform } : undefined,
       cropRect: c.cropRect ? { ...c.cropRect } : undefined,
       thumbnails: c.thumbnails ? [...c.thumbnails] : undefined,
+      animation: c.animation ? { ...c.animation } : undefined,
+      adjustments: c.adjustments ? { ...c.adjustments } : undefined,
     };
   }
 
@@ -3357,8 +3892,72 @@ export class CanvasEngine {
     this.listeners.get(event)?.delete(fn as unknown as (args: unknown) => void);
   }
 
+  /**
+   * Reels: hiçbir zamanlı öğe (metin/çıkartma/fotoğraf katmanı, efekt klibi) videonun toplam
+   * süresini geçemez. Her 'change' öncesi çalışır; böylece sürükleme, klip kırpma/silme,
+   * hız değişimi ve undo sonrası taşan öğeler otomatik olarak video sonuna kırpılır.
+   * Bir şey değiştiyse true döner.
+   */
+  private clampTimedItemsToTimeline(): boolean {
+    if (this.shareMode !== 'reels' || this.videoClips.length === 0) return false;
+    const total = this.getTotalTimelineDuration();
+    if (!(total > 0)) return false;
+    const MIN_SPAN = Math.min(0.3, total);
+    const clampRange = (start: number, end: number): [number, number] => {
+      let e = Math.min(end, total);
+      let s = Math.max(0, Math.min(start, total - MIN_SPAN));
+      if (e < s + MIN_SPAN) e = Math.min(total, s + MIN_SPAN);
+      s = Number(s.toFixed(2));
+      e = Number(e.toFixed(2));
+      return [s, e];
+    };
+
+    let changed = false;
+    for (const layer of this.overlayLayers) {
+      if (layer instanceof MusicStickerLayer) continue;
+      if (layer.timelineEnd <= total + 0.005 && layer.timelineStart <= total - MIN_SPAN + 0.005) continue;
+      const [s, e] = clampRange(layer.timelineStart, layer.timelineEnd);
+      if (s !== layer.timelineStart || e !== layer.timelineEnd) {
+        layer.timelineStart = s;
+        layer.timelineEnd = e;
+        changed = true;
+      }
+    }
+
+    const ml = this.mediaLayer;
+    if (ml) {
+      const effects = ml.getEffectClips();
+      let effectsChanged = false;
+      const nextEffects: ReelsEffectClip[] = [];
+      for (const c of effects) {
+        // Video sonunun ötesinde başlayan efekt anlamsız: kaldır
+        if (c.startTime >= total - 0.05) {
+          effectsChanged = true;
+          continue;
+        }
+        if (c.endTime > total + 0.005) {
+          nextEffects.push({ ...c, endTime: Number(total.toFixed(2)) });
+          effectsChanged = true;
+        } else {
+          nextEffects.push(c);
+        }
+      }
+      if (effectsChanged) {
+        ml.setEffectClips(nextEffects);
+        changed = true;
+      }
+    }
+
+    if (changed) {
+      this.syncTemporalVisibility();
+      this.requestRender();
+    }
+    return changed;
+  }
+
   public emit<K extends EngineEvent>(event: K, ...args: EngineEventMap[K]) {
     if (event === 'change') {
+      this.clampTimedItemsToTimeline();
       this.invalidateStaticCache();
     }
     const set = this.listeners.get(event);
@@ -3424,6 +4023,7 @@ export class CanvasEngine {
     this.cachedAllLayers = [];
     this.videoClips = [];
     this.musicMeta = null;
+    this.gcDeviceMusicUrls(true);
     this.pendingTransformLayer = null;
     this.hasPendingTransform = false;
     this.pendingDragMove = null;

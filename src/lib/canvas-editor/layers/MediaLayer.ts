@@ -1,6 +1,8 @@
 import { BaseLayer } from './BaseLayer';
 // [MODIFIED BY Bedirhan]
 import {
+  ClipAnimation,
+  ClipAnimationKind,
   DEFAULT_FILTER_VALUES,
   DEFAULT_POST_ADJUSTMENTS,
   EditorMedia,
@@ -63,6 +65,14 @@ export class MediaLayer extends BaseLayer {
   public springOnInteract: boolean = true;
   public roundCornersWhenDetached: boolean = true;
 
+  // ── Klip başına görsel durum (Engine.applyClipTransformToMediaLayer doldurur) ──
+  public clipOpacity = 1;
+  public clipAnimation?: ClipAnimation;
+  public clipRetouch = 0;
+  public clipAdjustments?: Partial<PostAdjustmentState>;
+  /** Aktif klibin zaman çizelgesindeki aralığı (sn) */
+  public clipRange: { start: number; end: number } = { start: 0, end: 0 };
+
   private animFrameId: number | null = null;
   private onRenderCallback: (() => void) | null = null;
   private pixelCanvas: HTMLCanvasElement | null = null;
@@ -78,7 +88,83 @@ export class MediaLayer extends BaseLayer {
     );
   }
 
+  /** Aktif klibin giriş/çıkış animasyonu bu anda bir şeyi değiştiriyor mu? */
+  public hasClipAnimationAt(timeSec: number): boolean {
+    const a = this.clipAnimation;
+    if (!a) return false;
+    const inK = a.in || 'none';
+    const outK = a.out || 'none';
+    if (inK === 'none' && outK === 'none') return false;
+    const d = this.getAnimDuration();
+    if (d <= 0) return false;
+    const local = timeSec - this.clipRange.start;
+    const remaining = this.clipRange.end - timeSec;
+    return (inK !== 'none' && local < d) || (outK !== 'none' && remaining < d);
+  }
+
+  private getAnimDuration(): number {
+    const a = this.clipAnimation;
+    if (!a) return 0;
+    const span = Math.max(0, this.clipRange.end - this.clipRange.start);
+    const want = typeof a.durationSec === 'number' ? a.durationSec : 0.5;
+    // iki animasyon üst üste binmesin
+    return Math.max(0, Math.min(want, span / 2));
+  }
+
+  private getClipAnimState(timeSec: number): { alpha: number; dx: number; dy: number; scale: number } {
+    const st = { alpha: 1, dx: 0, dy: 0, scale: 1 };
+    const a = this.clipAnimation;
+    if (!a) return st;
+    const d = this.getAnimDuration();
+    if (d <= 0) return st;
+    const ease = (x: number) => 1 - Math.pow(1 - Math.min(1, Math.max(0, x)), 3);
+    const apply = (kind: ClipAnimationKind, p: number, dir: 1 | -1) => {
+      // p: 0 = tamamen gizli/uzak, 1 = normal; dir: 1 giriş, -1 çıkış
+      const e = ease(p);
+      const rem = 1 - e;
+      if (kind === 'fade') st.alpha *= e;
+      else if (kind === 'slide-up') {
+        st.dy += dir * rem * 0.2 * this.lastCanvasH;
+        st.alpha *= e;
+      } else if (kind === 'slide-left') {
+        st.dx += dir * rem * 0.25 * this.lastCanvasW;
+        st.alpha *= e;
+      } else if (kind === 'zoom-in') {
+        st.scale *= dir === 1 ? 0.7 + 0.3 * e : 1 + 0.3 * rem;
+        st.alpha *= e;
+      }
+    };
+    const local = timeSec - this.clipRange.start;
+    const remaining = this.clipRange.end - timeSec;
+    const inK = a.in || 'none';
+    const outK = a.out || 'none';
+    if (inK !== 'none' && local < d) apply(inK, local / d, 1);
+    if (outK !== 'none' && remaining < d) apply(outK, remaining / d, -1);
+    return st;
+  }
+
+  private lastCanvasW = 1080;
+  private lastCanvasH = 1920;
+
+  /** Genel ayar + klip ayarı (toplanır, sınırlanır). */
+  private getEffectiveAdjustments(): PostAdjustmentState {
+    const base = this.postAdjustments;
+    const c = this.clipAdjustments;
+    if (!c) return base;
+    const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v));
+    return {
+      ...base,
+      brightness: clamp(base.brightness + (c.brightness ?? 0), -100, 100),
+      contrast: clamp(base.contrast + (c.contrast ?? 0), -100, 100),
+      saturation: clamp(base.saturation + (c.saturation ?? 0), -100, 100),
+      warmth: clamp(base.warmth + (c.warmth ?? 0), -100, 100),
+      vignette: clamp(base.vignette + (c.vignette ?? 0), 0, 100),
+      sharpness: clamp(base.sharpness + (c.sharpness ?? 0), 0, 100),
+    };
+  }
+
   public isActiveEffectTimeDependentAt(timeSec: number): boolean {
+    if (this.hasClipAnimationAt(timeSec)) return true;
     const active = ImageAdjustmentsEngine.resolveActiveEffects(
       this.reelsEffect,
       this.effectClips,
@@ -264,7 +350,13 @@ export class MediaLayer extends BaseLayer {
     const cornerRadius =
       isFullScreenTouching || !this.roundCornersWhenDetached ? 0 : Math.round(24 * (canvasWidth / 414));
 
+    this.lastCanvasW = canvasWidth;
+    this.lastCanvasH = canvasHeight;
+    const anim = this.getClipAnimState(this.timelineTime);
+    const effAdj = this.getEffectiveAdjustments();
+
     ctx.save();
+    ctx.globalAlpha *= Math.max(0, Math.min(1, this.clipOpacity)) * anim.alpha;
     if (
       !this.isCropOverlayOpen &&
       this.cropRect &&
@@ -283,11 +375,11 @@ export class MediaLayer extends BaseLayer {
       ctx.clip();
     }
     // 1. Serbest pozisyon (sağa / sola / yukarı / aşağı taşıma)
-    ctx.translate(center.x, center.y);
+    ctx.translate(center.x + anim.dx, center.y + anim.dy);
     // 2. Serbest açı (döndürme)
     ctx.rotate((this.transform.rotation * Math.PI) / 180);
     // 3. Serbest ölçekleme (büyütme / küçültme), ayna (flip) ve etkileşim yaylanması
-    const interactionScale = this.isInteracting && this.springOnInteract ? 1.03 : 1.0;
+    const interactionScale = (this.isInteracting && this.springOnInteract ? 1.03 : 1.0) * anim.scale;
     const scaleX = this.transform.scale * (this.transform.flipH ? -1 : 1) * interactionScale;
     const scaleY = this.transform.scale * (this.transform.flipV ? -1 : 1) * interactionScale;
     ctx.scale(scaleX, scaleY);
@@ -344,7 +436,7 @@ export class MediaLayer extends BaseLayer {
 
     // [MODIFIED BY Bedirhan]
     const hasCustomAdjustments =
-      !ImageAdjustmentsEngine.isDefaultAdjustments(this.postAdjustments) ||
+      !ImageAdjustmentsEngine.isDefaultAdjustments(effAdj) ||
       this.reelsEffect !== 'none' ||
       this.effectClips.length > 0;
 
@@ -358,7 +450,7 @@ export class MediaLayer extends BaseLayer {
           width: dims.width,
           height: dims.height,
         },
-        this.postAdjustments,
+        effAdj,
         this.reelsEffect,
         this.timelineTime,
         filterStr,
@@ -379,6 +471,21 @@ export class MediaLayer extends BaseLayer {
 
     if (usePixelated) {
       ctx.imageSmoothingEnabled = prevSmooth;
+    }
+
+    // Rötuş: yumuşatılmış kopya + hafif parlaklık, orijinalle harmanlanır
+    if (this.clipRetouch > 0.01) {
+      const r = Math.min(1, this.clipRetouch);
+      const baseCss = ImageAdjustmentsEngine.isDefaultAdjustments(effAdj)
+        ? filterStr
+        : ImageAdjustmentsEngine.buildCssFilter(effAdj, filterStr, []);
+      const prefix = baseCss && baseCss !== 'none' ? baseCss + ' ' : '';
+      ctx.save();
+      ctx.globalAlpha *= Math.min(1, r * 0.65);
+      ctx.filter = `${prefix}blur(${(2 + r * 6).toFixed(1)}px) brightness(${(1 + 0.08 * r).toFixed(3)}) saturate(1.04)`;
+      ctx.drawImage(drawSource, -dims.width / 2, -dims.height / 2, dims.width, dims.height);
+      ctx.filter = 'none';
+      ctx.restore();
     }
 
     // B. Zoom Blur (%102 ve %104 oranında merkez sabit kalarak hafif opaklıkla üst üste bindirilir)

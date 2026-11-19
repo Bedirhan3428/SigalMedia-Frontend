@@ -2,58 +2,37 @@
 // [MODIFIED BY Bedirhan]
 "use client";
 /* Motor/DOM eşitlemesi bilinçli olarak efekt içinde setState ve ref okuması yapar (kararlı geri çağrılar). */
-/* eslint-disable react-hooks/set-state-in-effect, react-hooks/refs */
+/* eslint-disable react-hooks/set-state-in-effect */
 
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import {
-  Scissors,
-  Music,
-  Gauge,
-  Volume2,
   VolumeX,
-  Plus,
-  Trash2,
-  Copy,
-  Type,
-  Crop,
+  Maximize2,
+  Minimize2,
   RotateCw,
   FlipHorizontal2,
   RotateCcw,
-  Maximize2,
-  Minimize2,
   Check,
-  X,
 } from "lucide-react";
-import { BsStars } from "react-icons/bs";
-import { PiStickerLight } from "react-icons/pi";
-import { TbPhotoPlus } from "react-icons/tb";
-import { RiColorFilterAiLine } from "react-icons/ri";
 import {
   BaseLayer,
   EngineSnapshot,
   MAX_VIDEO_SEC,
   CanvasEngine,
-  FILTER_PRESETS,
   OverlayImageLayer,
   OverlayTrackItem,
-  REELS_EFFECT_PRESETS,
   ReelsEffectClip,
   ReelsEffectId,
   StoryAudioMeta,
   VideoState,
   VideoTrackClip,
-  captureFramePreview,
 } from "@/lib/canvas-editor";
 import VideoTimelineNLE from "./VideoTimelineNLE";
-import MusicSettingsPanel from "../MusicSettingsPanel";
-import PreviewThumb from "../PreviewThumb";
+import ReelsMenu from "./ReelsMenu";
+import TextComposer from "./TextComposer";
 import { NLESelectedType } from "./TimelineOverlayTracks";
 import OnCanvasCropOverlay from "./OnCanvasCropOverlay";
-import {
-  EditorToastProvider,
-  useEditorToast,
-  useBackLayer,
-} from "../common";
+import { EditorToastProvider, useEditorToast } from "../common";
 
 export interface ReelsEditorProps {
   engine?: CanvasEngine | null;
@@ -76,39 +55,30 @@ export interface ReelsEditorProps {
   onCropModeChange?: (isCropping: boolean) => void;
   onSeek: (time: number) => void;
   onTogglePlay: () => void;
-  onOpenTextEditor: () => void;
   onOpenMusicPicker: (intent?: "replace" | "trim") => void;
-  onOpenStickerSheet?: () => void;
-  onOpenPhotoOverlay?: () => void;
+  /** Sayfa, tuvalde metne çift dokunulduğunda metin düzenleyiciyi açtırmak için sayacı artırır. */
+  textEditRequest?: { layerId: string | null; seq: number } | null;
+  /** @Bahset çıkartması ekler. */
+  onAddMention?: () => void;
   onSelectFilterIndex: (index: number) => void;
   onSelectReelsEffect: (effect: ReelsEffectId) => void;
   /** Önizleme sahnesinin alttan boşluğu (px, safe-area dahil) ölçüldükçe bildirilir. */
   onLayout?: (layout: { bottom: number }) => void;
 }
 
-type ActiveToolStrip =
-  | "none"
-  | "effects"
-  | "volume"
-  | "speed"
-  | "music"
-  | "filters"
-  | "crop";
-
-const SPEED_OPTIONS = [0.5, 1.0, 1.5, 2.0];
+// Tam ekran kırpma dışındaki tüm araçlar ReelsMenu içinde yaşar
+type ActiveToolStrip = "none" | "crop";
 
 // İşlemlerin anında tetiklenip birbirine karışmaması için kısa gecikme
 const ACTION_DELAY_MS = 180;
-// Menülerin açılmadan önceki bekleme ve animasyon süreleri
-const SHEET_OPEN_DELAY_MS = 120;
-const SHEET_ANIM_MS = 280;
 // Yeni efekt klibi varsayılan süresi ve önizleme süresi (sn)
 const EFFECT_CLIP_SPAN_SEC = 2;
 // Geri al yığını sınırı ve iTunes önizleme parça süresi (sn)
 const HISTORY_LIMIT = 40;
 const MUSIC_PREVIEW_SEC = 30;
 // Alt panelin en büyük yüksekliği (ekranın ~%42si): timeline bunun içinde dikey kayar (A5)
-const PANEL_MAX_HEIGHT = "42dvh";
+// Menü (136 px) + timeline için en az ~200 px veya ekranın %32'si; menü timeline'ın üstüne binmez
+const PANEL_MAX_HEIGHT = "calc(136px + max(200px, 32dvh))";
 
 /** Fotoğraf katmanı dönüşümünü günceller (katman motor nesnesidir, React durumu değil). */
 function patchPhotoTransform(
@@ -135,24 +105,35 @@ function ReelsEditorInner({
   selectedMusic,
   musicVolume,
   activeFilterIndex,
-  activeReelsEffect,
   effectClips = [],
-  onChangeSpeed,
-  onChangeVolume,
   onChangeMusicVolume,
   onChangeMusicMeta,
   onChangeEffectClips,
   onCropModeChange,
-  onOpenTextEditor,
   onOpenMusicPicker,
-  onOpenStickerSheet,
-  onOpenPhotoOverlay,
+  textEditRequest,
+  onAddMention,
   onSelectFilterIndex,
   onSelectReelsEffect,
   onLayout,
 }: ReelsEditorProps) {
   const toast = useEditorToast();
   const [activeStrip, setActiveStrip] = useState<ActiveToolStrip>("none");
+  const [quickEffectSeq, setQuickEffectSeq] = useState(0);
+  // Metin düzenleyici (klavyeli): düzenleyiciyi unmount etmez, geçmiş korunur
+  const [composer, setComposer] = useState<{ layerId: string | null } | null>(null);
+  const openComposer = useCallback(
+    (layerId: string | null) => {
+      engine?.pauseVideo();
+      setComposer({ layerId });
+    },
+    [engine]
+  );
+  const [seenTextRequest, setSeenTextRequest] = useState(0);
+  if (textEditRequest && textEditRequest.seq !== seenTextRequest) {
+    setSeenTextRequest(textEditRequest.seq);
+    openComposer(textEditRequest.layerId);
+  }
   const [selectedItemId, setSelectedItemId] = useState<string | null>(null);
   const [selectedItemType, setSelectedItemType] = useState<NLESelectedType>(null);
   const [clips, setClips] = useState<VideoTrackClip[]>([]);
@@ -184,38 +165,6 @@ function ReelsEditorInner({
   }, []);
 
   // Menü animasyonu: açılırken kısa gecikme + kayarak giriş, kapanırken çıkış animasyonu sonrası unmount
-  const [renderedStrip, setRenderedStrip] = useState<ActiveToolStrip>("none");
-  const [stripVisible, setStripVisible] = useState(false);
-  const renderedStripRef = useRef<ActiveToolStrip>("none");
-  useEffect(() => {
-    const timers: number[] = [];
-    setStripVisible(false);
-    const closeDelay = renderedStripRef.current !== "none" ? SHEET_ANIM_MS : 0;
-    timers.push(
-      window.setTimeout(() => {
-        renderedStripRef.current = activeStrip;
-        setRenderedStrip(activeStrip);
-        if (activeStrip !== "none") {
-          timers.push(
-            window.setTimeout(() => setStripVisible(true), SHEET_OPEN_DELAY_MS)
-          );
-        }
-      }, closeDelay)
-    );
-    return () => timers.forEach((t) => window.clearTimeout(t));
-  }, [activeStrip]);
-
-  // Filtre / efekt küçük resimleri için panel açılırken tek seferlik kare
-  const [previewFrame, setPreviewFrame] = useState<string | null>(null);
-  useEffect(() => {
-    if (renderedStrip !== "filters" && renderedStrip !== "effects") return;
-    setPreviewFrame(captureFramePreview(engine?.getMedia()?.element));
-  }, [renderedStrip, engine]);
-
-  const stripAnimClass = stripVisible
-    ? "opacity-100 translate-y-0"
-    : "opacity-0 translate-y-3 pointer-events-none";
-
   const syncFromEngine = useCallback(() => {
     if (!engine) return;
     setClips(engine.getVideoClips());
@@ -341,8 +290,6 @@ function ReelsEditorInner({
     });
   };
 
-  // Alt araç şeritleri geri hareketiyle kapanır
-  useBackLayer(activeStrip !== "none" && activeStrip !== "crop", () => setActiveStrip("none"));
 
   // Geri al / yinele: engine.snapshot() / restore(). Ardışık 'change' olayları (slider sürüklemesi,
   // jest sonu vb.) 350 ms içinde tek geçmiş kaydına birleşir; restore'un yaydığı 'change' yok sayılır.
@@ -452,20 +399,42 @@ function ReelsEditorInner({
   }, [engine, selectedMusic]);
 
   // Önizleme parçaları 30 sn: müzik bloğu en fazla 30 sn'de biter (şarkı ofseti düşülür)
+  // ve hiçbir zaman videonun toplam süresini geçmez (klip kısalınca da kırpılır)
   useEffect(() => {
     if (!selectedMusic || !onChangeMusicMeta) return;
+    const videoEnd = Math.max(0.5, totalDuration);
+    // Cihaz müziği 30 sn ile sınırlı değildir; yalnızca video sonuyla kırpılır
+    const isDevice = selectedMusic.source === "device";
     let changed = false;
     let next: StoryAudioMeta = selectedMusic;
     if (selectedMusic.segments && selectedMusic.segments.length > 0) {
-      const segs = selectedMusic.segments.map((s) => {
-        const maxEnd = s.timelineStart + Math.max(0.5, MUSIC_PREVIEW_SEC - (s.songOffset || 0));
+      const kept = selectedMusic.segments.filter((s) => s.timelineStart < videoEnd - 0.25);
+      if (kept.length !== selectedMusic.segments.length) changed = true;
+      const segs = kept.map((s) => {
+        const previewEnd = isDevice
+          ? Infinity
+          : s.timelineStart + Math.max(0.5, MUSIC_PREVIEW_SEC - (s.songOffset || 0));
+        const maxEnd = Math.min(previewEnd, videoEnd);
         if (s.timelineEnd > maxEnd + 0.01) {
           changed = true;
           return { ...s, timelineEnd: Number(maxEnd.toFixed(2)) };
         }
         return s;
       });
-      if (changed) {
+      if (changed && segs.length === 0) {
+        // Bütün parçalar video sonunun ötesindeydi: müzik tek blok olarak baştan başlar
+        next = {
+          ...selectedMusic,
+          segments: undefined,
+          timelineStart: 0,
+          timelineEnd: Number(
+            Math.min(
+              videoEnd,
+              isDevice ? videoEnd : Math.max(0.5, MUSIC_PREVIEW_SEC - (selectedMusic.startTime || 0))
+            ).toFixed(2)
+          ),
+        };
+      } else if (changed) {
         next = {
           ...selectedMusic,
           segments: segs,
@@ -476,15 +445,47 @@ function ReelsEditorInner({
       typeof selectedMusic.timelineEnd === "number" &&
       selectedMusic.timelineEnd > (selectedMusic.timelineStart ?? 0)
     ) {
-      const start = selectedMusic.timelineStart ?? 0;
-      const maxEnd = start + Math.max(0.5, MUSIC_PREVIEW_SEC - (selectedMusic.startTime || 0));
-      if (selectedMusic.timelineEnd > maxEnd + 0.01) {
+      let start = selectedMusic.timelineStart ?? 0;
+      if (start > videoEnd - 0.5) {
+        start = Math.max(0, Number((videoEnd - 0.5).toFixed(2)));
         changed = true;
-        next = { ...selectedMusic, timelineEnd: Number(maxEnd.toFixed(2)) };
+      }
+      const previewEnd = isDevice
+        ? Infinity
+        : start + Math.max(0.5, MUSIC_PREVIEW_SEC - (selectedMusic.startTime || 0));
+      const maxEnd = Math.min(previewEnd, videoEnd);
+      if (changed || selectedMusic.timelineEnd > maxEnd + 0.01) {
+        changed = true;
+        next = {
+          ...selectedMusic,
+          timelineStart: start,
+          timelineEnd: Number(Math.min(selectedMusic.timelineEnd, maxEnd).toFixed(2)),
+        };
       }
     }
     if (changed) onChangeMusicMeta(next);
-  }, [selectedMusic, onChangeMusicMeta]);
+  }, [selectedMusic, onChangeMusicMeta, totalDuration]);
+
+  // Efekt klipleri de video sonunu geçemez (klip kısalınca/silinince sayfa durumu kırpılır)
+  useEffect(() => {
+    if (!onChangeEffectClips || effectClips.length === 0) return;
+    const videoEnd = Math.max(0.5, totalDuration);
+    let changed = false;
+    const next: ReelsEffectClip[] = [];
+    for (const c of effectClips) {
+      if (c.startTime >= videoEnd - 0.05) {
+        changed = true;
+        continue;
+      }
+      if (c.endTime > videoEnd + 0.005) {
+        changed = true;
+        next.push({ ...c, endTime: Number(videoEnd.toFixed(2)) });
+      } else {
+        next.push(c);
+      }
+    }
+    if (changed) onChangeEffectClips(next);
+  }, [effectClips, totalDuration, onChangeEffectClips]);
 
   const handleSelectItem = (id: string | null, type: NLESelectedType) => {
     engine?.pauseVideo();
@@ -536,10 +537,6 @@ function ReelsEditorInner({
       ? effectClips.find((c) => c.id === selectedItemId) || null
       : null;
 
-  const [effectCategory, setEffectCategory] = useState<"cinema" | "dynamic">(
-    "cinema"
-  );
-
   const selectedPhotoLayer =
     selectedItemType === "photo" && engine
       ? (engine.getSelectedLayer() as OverlayImageLayer | null)
@@ -557,8 +554,8 @@ function ReelsEditorInner({
     const mEnd =
       typeof selectedMusic.timelineEnd === "number" &&
       selectedMusic.timelineEnd > mStart
-        ? selectedMusic.timelineEnd
-        : Math.max(mStart + 1, totalDuration);
+        ? Math.min(selectedMusic.timelineEnd, totalDuration)
+        : totalDuration;
     return [
       {
         id: selectedMusic.id || "audio_main",
@@ -813,7 +810,7 @@ function ReelsEditorInner({
       if (seg) {
         const span = Math.max(0.4, seg.timelineEnd - seg.timelineStart);
         const nextStart = Math.min(totalDuration - 0.4, seg.timelineEnd);
-        const nextEnd = Math.min(totalDuration + 10, nextStart + span);
+        const nextEnd = Math.min(totalDuration, nextStart + span);
         const cloneSeg = {
           id: `aud_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 5)}`,
           timelineStart: Number(nextStart.toFixed(2)),
@@ -914,39 +911,6 @@ function ReelsEditorInner({
 
   useEffect(() => stopEffectPreview, [stopEffectPreview]);
 
-  // Panel effects dışına çıktığında taslak sonlandırılır (mevcut hali korunur)
-  useEffect(() => {
-    if (activeStrip !== "effects") setEffectDraft(null);
-  }, [activeStrip]);
-
-  // Tamam: taslak efekt kalıcı olur, panel kapanır
-  const confirmEffectDraft = () => {
-    setEffectDraft(null);
-    setActiveStrip("none");
-  };
-
-  // İptal (✕ / dış alan): yeni eklenen taslak silinir, mevcut klip ise eski efektine döner
-  const cancelEffectDraft = () => {
-    stopEffectPreview();
-    engine?.pauseVideo();
-    if (effectDraft && onChangeEffectClips) {
-      if (effectDraft.isNew) {
-        onChangeEffectClips(effectClips.filter((c) => c.id !== effectDraft.id));
-        if (selectedItemId === effectDraft.id) {
-          setSelectedItemId(null);
-          setSelectedItemType(null);
-        }
-      } else {
-        onChangeEffectClips(
-          effectClips.map((c) =>
-            c.id === effectDraft.id ? { ...c, effect: effectDraft.originalEffect } : c
-          )
-        );
-      }
-    }
-    setEffectDraft(null);
-    setActiveStrip("none");
-  };
 
   const handleSelectEffectPreset = (effectId: ReelsEffectId) => {
     engine?.pauseVideo();
@@ -1094,18 +1058,6 @@ function ReelsEditorInner({
     }
   };
 
-  const activeClipVolume = selectedVideoClip
-    ? selectedVideoClip.muted
-      ? 0
-      : Math.round(selectedVideoClip.volume * 100)
-    : videoState.muted
-      ? 0
-      : Math.round(videoState.volume * 100);
-
-  const activeClipSpeed = selectedVideoClip
-    ? selectedVideoClip.playbackRate
-    : videoState.playbackRate;
-
   const activeClipScale = selectedVideoClip
     ? selectedVideoClip.transform?.scale ?? 1
     : selectedPhotoLayer
@@ -1144,137 +1096,20 @@ function ReelsEditorInner({
   const stableEffectClips = useStable((next: ReelsEffectClip[]) => onChangeEffectClips?.(next));
   const stableMusicTimeline = useStable(handleMusicTimelineChange);
   const stableOpenMusic = useStable(() => onOpenMusicPicker());
-  const stableOpenText = useStable(() => onOpenTextEditor());
+  const stableOpenText = useStable(() => openComposer(null));
   const stableQuickEffect = useStable(() => {
     engine?.pauseVideo();
-    setActiveStrip("effects");
+    setQuickEffectSeq((n) => n + 1);
   });
-  // Bağlama duyarlı araç listesi (öğe seçiliyken Kopyala/Sil/Kırp vb. görünür)
-  type ToolItem = {
-    key: string;
-    label: string;
-    icon: React.ReactNode;
-    onClick: () => void;
-    disabled?: boolean;
-    active?: boolean;
-    danger?: boolean;
+  const handleSelectClipAtPlayhead = () => {
+    if (!engine) return;
+    const active = engine.getActiveClipAtTime(getPlayheadTime());
+    if (active) handleSelectItem(active.clip.id, "video");
   };
-  const hasSel = Boolean(selectedItemId && selectedItemType);
-  const isLayerSel =
-    selectedItemType === "text" || selectedItemType === "sticker" || selectedItemType === "photo";
-  const toggleStrip = (strip: ActiveToolStrip) =>
-    setActiveStrip((p) => (p === strip ? "none" : strip));
-  const toolItems: ToolItem[] = [];
-  toolItems.push({
-    key: "split",
-    label: "Böl",
-    icon: <Scissors className="w-4 h-4" />,
-    onClick: () => runDelayedAction("split", handleSplitSelected),
-    disabled: !canSplitSelected || pendingActionKey !== null,
+  // Düzenle alt menüsündeki araç panelleri: efekt paneli kapanınca taslak sonlanır
+  const handleActiveToolChange = useStable((key: string | null) => {
+    if (key !== "effects") setEffectDraft(null);
   });
-  toolItems.push({ key: "text", label: "Metin", icon: <Type className="w-4 h-4" />, onClick: onOpenTextEditor });
-  if (onOpenStickerSheet) {
-    toolItems.push({
-      key: "sticker",
-      label: "Çıkartma",
-      icon: <PiStickerLight className="w-4 h-4" />,
-      onClick: onOpenStickerSheet,
-    });
-  }
-  if (onOpenPhotoOverlay) {
-    toolItems.push({
-      key: "photo",
-      label: "Fotoğraf",
-      icon: <TbPhotoPlus className="w-4 h-4" />,
-      onClick: onOpenPhotoOverlay,
-    });
-  }
-  toolItems.push({
-    key: "effects",
-    label: "Efekt",
-    icon: <BsStars className="w-4 h-4" />,
-    active: activeStrip === "effects" || activeReelsEffect !== "none" || effectClips.length > 0,
-    onClick: () => {
-      if (selectedEffectClip) {
-        setEffectDraft({
-          id: selectedEffectClip.id,
-          isNew: false,
-          originalEffect: selectedEffectClip.effect,
-        });
-      }
-      toggleStrip("effects");
-    },
-  });
-  toolItems.push({
-    key: "music",
-    label: "Müzik",
-    icon: <Music className="w-4 h-4" />,
-    active: Boolean(selectedMusic),
-    onClick: () => (selectedMusic ? toggleStrip("music") : onOpenMusicPicker()),
-  });
-  if (!hasSel || selectedItemType === "video") {
-    toolItems.push({
-      key: "volume",
-      label: "Ses",
-      icon: <Volume2 className="w-4 h-4" />,
-      active: activeStrip === "volume",
-      onClick: () => toggleStrip("volume"),
-    });
-    toolItems.push({
-      key: "speed",
-      label: "Hız",
-      icon: <Gauge className="w-4 h-4" />,
-      active: activeStrip === "speed",
-      onClick: () => toggleStrip("speed"),
-    });
-  }
-  toolItems.push({
-    key: "filters",
-    label: "Filtre",
-    icon: <RiColorFilterAiLine className="w-4 h-4" />,
-    active: activeStrip === "filters" || activeFilterIndex > 0,
-    onClick: () => toggleStrip("filters"),
-  });
-  if (selectedItemType === "video" || selectedItemType === "photo") {
-    toolItems.push({
-      key: "crop",
-      label: "Kırp",
-      icon: <Crop className="w-4 h-4" />,
-      active: activeStrip === "crop",
-      onClick: () => toggleStrip("crop"),
-    });
-  }
-  if (hasSel && (isLayerSel || selectedItemType === "video" || selectedItemType === "effect" || selectedItemType === "audio")) {
-    toolItems.push({
-      key: "duplicate",
-      label: "Kopyala",
-      icon: <Copy className="w-4 h-4" />,
-      onClick: () => runDelayedAction("duplicate", handleDuplicateSelected),
-      disabled: pendingActionKey !== null,
-    });
-    toolItems.push({
-      key: "delete",
-      label: "Sil",
-      icon: <Trash2 className="w-4 h-4" />,
-      danger: true,
-      onClick: () => runDelayedAction("delete", handleDeleteSelected),
-      disabled: (selectedItemType === "video" && clips.length <= 1) || pendingActionKey !== null,
-    });
-  }
-  toolItems.push({
-    key: "append",
-    label: "+ Klip",
-    icon: <Plus className="w-4 h-4" />,
-    onClick: stableAppendClick,
-  });
-  if (hasSel) {
-    toolItems.push({
-      key: "done",
-      label: "Bitti",
-      icon: <X className="w-4 h-4" />,
-      onClick: () => handleSelectItem(null, null),
-    });
-  }
 
   return (
     <>
@@ -1493,442 +1328,78 @@ function ReelsEditorInner({
             onQuickAddEffect={stableQuickEffect}
           />
 
-          {/* Alt Araç Şeritleri ve Butonlar: Dokunulduğunda veya kaydırıldığında videoyu otomatik durdurur */}
+          {/* Alt menü: ana menü / Düzenle / araç paneli aynı sabit yükseklikte; dokunulduğunda video durur */}
           <div
             onPointerDownCapture={() => engine?.pauseVideo()}
             onWheelCapture={() => engine?.pauseVideo()}
-            className="flex flex-col gap-2 shrink-0"
+            className="shrink-0"
           >
-            {/* 2. Açılır Alt Ayar Şeridi (Fotoğraf Kırp / Efektler / Ses & Hız / Filtreler) */}
-            {renderedStrip === "crop" &&
-              selectedItemType === "photo" &&
-              selectedPhotoLayer &&
-              engine && (
-                <div
-                  className={`flex flex-col gap-2 px-4 transition-all ease-out ${stripAnimClass}`}
-                  style={{ transitionDuration: `${SHEET_ANIM_MS}ms` }}
-                >
-                  <div className="flex items-center gap-2 overflow-x-auto no-scrollbar">
-                    <button
-                      type="button"
-                      onClick={() => {
-                        selectedPhotoLayer.cycleShapeMode();
-                        engine.requestRender();
-                      }}
-                      className="px-3 py-1.5 rounded-xl text-xs font-semibold flex items-center gap-1.5 shrink-0 bg-[#1c1c1e] text-zinc-200 border border-white/10 active:scale-95"
-                    >
-                      <Crop className="w-3.5 h-3.5 text-amber-400" />
-                      <span>Çerçeve Şekli</span>
-                    </button>
-
-                    <button
-                      type="button"
-                      onClick={() => {
-                        patchPhotoTransform(selectedPhotoLayer, (t) => ({
-                          ...t,
-                          rotation: (t.rotation + 90) % 360,
-                        }));
-                        engine.requestRender();
-                      }}
-                      className="px-3 py-1.5 rounded-xl text-xs font-semibold flex items-center gap-1.5 shrink-0 bg-[#1c1c1e] text-zinc-200 border border-white/10 active:scale-95"
-                    >
-                      <RotateCw className="w-3.5 h-3.5" />
-                      <span>90° Döndür</span>
-                    </button>
-
-                    <button
-                      type="button"
-                      onClick={() => {
-                        patchPhotoTransform(selectedPhotoLayer, () => ({
-                          x: 0.5,
-                          y: 0.5,
-                          scale: 1,
-                          rotation: 0,
-                        }));
-                        engine.requestRender();
-                      }}
-                      className="px-3 py-1.5 rounded-xl text-xs font-semibold flex items-center gap-1.5 shrink-0 bg-[#1c1c1e] text-zinc-300 border border-white/10 active:scale-95"
-                    >
-                      <RotateCcw className="w-3.5 h-3.5" />
-                      <span>Sıfırla</span>
-                    </button>
-                  </div>
-
-                  <div className="flex items-center gap-3 bg-[#16171b] rounded-2xl px-3.5 py-2 border border-white/5">
-                    <span className="text-xs font-medium text-zinc-400 shrink-0">
-                      Yakınlaştır
-                    </span>
-                    <input
-                      type="range"
-                      min={50}
-                      max={300}
-                      value={Math.round(activeClipScale * 100)}
-                      onChange={(e) => {
-                        const nextScale = Number(
-                          (Number(e.target.value) / 100).toFixed(2)
-                        );
-                        patchPhotoTransform(selectedPhotoLayer, (t) => ({ ...t, scale: nextScale }));
-                        engine.requestRender();
-                        syncFromEngine();
-                      }}
-                      className="flex-1 h-1.5 bg-white/15 rounded-lg appearance-none cursor-pointer accent-amber-400"
-                    />
-                    <span className="text-xs font-semibold text-white w-10 text-right tabular-nums">
-                      {activeClipScale.toFixed(1)}x
-                    </span>
-                  </div>
-                </div>
-              )}
-
-            {renderedStrip === "effects" && (
-              <>
-                {/* Yarım ekran efekt paneli: üst yarıya dokununca kapanır */}
-                <button
-                  type="button"
-                  aria-label="Kapat"
-                  onClick={cancelEffectDraft}
-                  className={`fixed inset-0 z-[45] bg-black/25 transition-opacity ease-out ${
-                    stripVisible ? "opacity-100" : "opacity-0 pointer-events-none"
-                  }`}
-                  style={{ transitionDuration: `${SHEET_ANIM_MS}ms` }}
-                />
-                <div
-                  className={`fixed inset-x-0 bottom-0 z-50 h-[50vh] flex flex-col bg-[#0c0c0f] border-t border-white/10 rounded-t-3xl shadow-[0_-12px_40px_rgba(0,0,0,0.6)] transition-transform ease-out ${
-                    stripVisible ? "translate-y-0" : "translate-y-full"
-                  }`}
-                  style={{ transitionDuration: `${SHEET_ANIM_MS}ms` }}
-                >
-                  <div className="flex justify-center pt-2.5 pb-1">
-                    <div className="w-10 h-1 rounded-full bg-white/20" />
-                  </div>
-
-                  <div className="flex items-center justify-between px-5 pt-1 pb-3">
-                    <span className="text-sm font-bold text-white">Efektler</span>
-                    <div className="flex items-center gap-2">
-                      {effectClips.length > 0 && (
-                        <button
-                          type="button"
-                          onClick={() =>
-                            runDelayedAction("fx_clear", () =>
-                              handleSelectEffectPreset("none")
-                            )
-                          }
-                          className="px-3 py-1.5 rounded-xl bg-red-500/15 hover:bg-red-500/25 border border-red-500/25 text-xs font-semibold text-red-300 active:scale-95 transition-all"
-                        >
-                          Temizle
-                        </button>
-                      )}
-                      <button
-                        type="button"
-                        onClick={cancelEffectDraft}
-                        className="w-8 h-8 rounded-xl bg-white/10 hover:bg-white/20 text-zinc-300 flex items-center justify-center active:scale-90 transition-all"
-                      >
-                        <X className="w-4 h-4" />
-                      </button>
-                      <button
-                        type="button"
-                        onClick={confirmEffectDraft}
-                        disabled={pendingActionKey !== null}
-                        className="h-8 px-3.5 rounded-xl bg-amber-400 hover:bg-amber-300 text-black text-xs font-bold flex items-center gap-1.5 active:scale-95 transition-all disabled:opacity-60"
-                      >
-                        <Check className="w-4 h-4 stroke-[2.5]" />
-                        <span>Tamam</span>
-                      </button>
-                    </div>
-                  </div>
-
-                  <div className="px-5 pb-3">
-                    <div className="grid grid-cols-2 gap-1 bg-[#16171b] p-1 rounded-2xl border border-white/5">
-                      {([
-                        ["cinema", "Sinema"],
-                        ["dynamic", "Dinamik"],
-                      ] as const).map(([key, label]) => (
-                        <button
-                          key={key}
-                          type="button"
-                          onClick={() => setEffectCategory(key)}
-                          className={`py-2 rounded-xl text-xs font-bold transition-all duration-200 ${
-                            effectCategory === key
-                              ? "bg-amber-400 text-black shadow-sm"
-                              : "text-zinc-400 hover:text-white"
-                          }`}
-                        >
-                          {label}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-
-                  {selectedEffectClip && onChangeEffectClips ? (
-                    <div className="mx-5 mb-3 flex items-center gap-3 bg-[#16171b] rounded-2xl px-3.5 py-2 border border-white/5">
-                      <span className="text-xs font-medium text-zinc-400 shrink-0">
-                        Yoğunluk
-                      </span>
-                      <input
-                        type="range"
-                        min={15}
-                        max={100}
-                        value={selectedEffectClip.intensity ?? 80}
-                        onChange={(e) => {
-                          const val = Number(e.target.value);
-                          onChangeEffectClips(
-                            effectClips.map((c) =>
-                              c.id === selectedEffectClip.id
-                                ? { ...c, intensity: val }
-                                : c
-                            )
-                          );
-                        }}
-                        className="flex-1 h-1.5 bg-white/15 rounded-lg appearance-none cursor-pointer accent-amber-400"
-                      />
-                      <span className="text-xs font-semibold text-white w-9 text-right tabular-nums">
-                        {selectedEffectClip.intensity ?? 80}%
-                      </span>
-                    </div>
-                  ) : null}
-
-                  <div className="flex-1 overflow-y-auto no-scrollbar px-5 pb-6">
-                    <div className="grid grid-cols-4 gap-2">
-                      {REELS_EFFECT_PRESETS.filter((eff) =>
-                        effectCategory === "cinema"
-                          ? ["cinema_warm", "vhs_grain", "rgb_shift", "glitch"].includes(
-                              eff.id
-                            )
-                          : ["zoom_pulse", "flash", "shake", "cyber_neon"].includes(
-                              eff.id
-                            )
-                      ).map((eff) => {
-                        const active = selectedEffectClip?.effect === eff.id;
-                        const pending = pendingActionKey === `fx_${eff.id}`;
-                        return (
-                          <PreviewThumb
-                            key={eff.id}
-                            src={previewFrame}
-                            label={eff.name}
-                            active={active || pending}
-                            tint={eff.color}
-                            className="w-full"
-                            disabled={pendingActionKey !== null}
-                            icon={
-                              <BsStars
-                                className={`w-4 h-4 ${pending ? "animate-pulse" : ""}`}
-                              />
-                            }
-                            onClick={() =>
-                              runDelayedAction(`fx_${eff.id}`, () =>
-                                handleSelectEffectPreset(eff.id)
-                              )
-                            }
-                          />
-                        );
-                      })}
-                    </div>
-                  </div>
-                </div>
-              </>
+            {engine && (
+              <ReelsMenu
+                engine={engine}
+                selection={
+                  selectedItemId && selectedItemType
+                    ? { id: selectedItemId, type: selectedItemType }
+                    : null
+                }
+                clip={selectedVideoClip}
+                clipCount={clips.length}
+                canSplit={canSplitSelected}
+                busy={pendingActionKey !== null}
+                selectedMusic={selectedMusic}
+                musicVolume={musicVolume}
+                activeFilterIndex={activeFilterIndex}
+                selectedEffectClip={selectedEffectClip}
+                quickEffectSeq={quickEffectSeq}
+                photo={
+                  selectedPhotoLayer
+                    ? {
+                        scale: selectedPhotoLayer.transform.scale,
+                        patch: (fn) => {
+                          patchPhotoTransform(selectedPhotoLayer, fn);
+                          engine.requestRender();
+                          syncFromEngine();
+                        },
+                        cycleShape: () => {
+                          selectedPhotoLayer.cycleShapeMode();
+                          engine.requestRender();
+                        },
+                      }
+                    : null
+                }
+                onSplit={() => runDelayedAction("split", handleSplitSelected)}
+                onDelete={() => runDelayedAction("delete", handleDeleteSelected)}
+                onDuplicate={() => runDelayedAction("duplicate", handleDuplicateSelected)}
+                onCrop={() => setActiveStrip("crop")}
+                onSelectClipAtPlayhead={handleSelectClipAtPlayhead}
+                onSelectVideoClip={(id) => handleSelectItem(id, "video")}
+                onOpenText={openComposer}
+                onOpenMusicPicker={onOpenMusicPicker}
+                onChangeMusicVolume={onChangeMusicVolume}
+                onChangeMusicMeta={(m) => onChangeMusicMeta?.(m)}
+                onSelectFilterIndex={onSelectFilterIndex}
+                onPickEffect={(id) => runDelayedAction(`fx_${id}`, () => handleSelectEffectPreset(id))}
+                onEffectIntensity={(v) => {
+                  if (!selectedEffectClip || !onChangeEffectClips) return;
+                  onChangeEffectClips(
+                    effectClips.map((c) =>
+                      c.id === selectedEffectClip.id ? { ...c, intensity: v } : c
+                    )
+                  );
+                }}
+                onAddMention={onAddMention}
+                onActiveToolChange={handleActiveToolChange}
+              />
             )}
-
-            {(renderedStrip === "volume" || renderedStrip === "speed") && (
-              <div
-                className={`flex flex-col gap-1.5 px-4 transition-all ease-out ${stripAnimClass}`}
-                style={{ transitionDuration: `${SHEET_ANIM_MS}ms` }}
-              >
-                <div className="flex items-center justify-between pb-0.5">
-                  <span className="text-[11px] font-bold text-zinc-300">
-                    {renderedStrip === "speed" ? "Hız" : "Ses"}
-                  </span>
-                  <button
-                    type="button"
-                    onClick={() => setActiveStrip("none")}
-                    aria-label="Kapat"
-                    className="w-11 h-11 -my-2 rounded-lg text-zinc-300 flex items-center justify-center active:scale-90 transition-all"
-                  >
-                    <X className="w-4 h-4" />
-                  </button>
-                </div>
-
-                <>
-                    {/* Klip Hız Seçenekleri (0.5x - 2x) */}
-                    {renderedStrip === "speed" && (
-                    <div className="grid grid-cols-4 gap-2">
-                      {SPEED_OPTIONS.map((rate) => {
-                        const active = Math.abs(activeClipSpeed - rate) < 0.01;
-                        return (
-                          <button
-                            key={rate}
-                            type="button"
-                            onClick={() => {
-                              commitHistory();
-                              if (selectedVideoClip && engine) {
-                                engine.updateClipSpeed(
-                                  selectedVideoClip.id,
-                                  rate
-                                );
-                                syncFromEngine();
-                              } else {
-                                onChangeSpeed(rate);
-                              }
-                            }}
-                            className={`min-h-11 rounded-xl text-xs font-bold border transition-all active:scale-95 ${
-                              active
-                                ? "bg-amber-400 text-black border-amber-400"
-                                : "bg-[#1c1c1e] text-white border-white/5 hover:bg-[#26262a]"
-                            }`}
-                          >
-                            {rate}x
-                          </button>
-                        );
-                      })}
-                    </div>
-
-                    )}
-
-                    {/* Klip Ses Seviyesi (0 - 100) */}
-                    {renderedStrip === "volume" && !videoState.isMotionPhoto && (
-                      <div className="flex items-center gap-3 bg-[#16171b] rounded-2xl px-3 py-1">
-                        <button
-                          type="button"
-                          onClick={() => {
-                            commitHistory();
-                            const nextMuted = activeClipVolume > 0;
-                            const nextVol = nextMuted ? 0 : 1;
-                            if (selectedVideoClip && engine) {
-                              engine.updateClipVolume(
-                                selectedVideoClip.id,
-                                nextVol,
-                                nextMuted
-                              );
-                              syncFromEngine();
-                            } else {
-                              onChangeVolume(nextVol, nextMuted);
-                            }
-                          }}
-                          className="text-white shrink-0"
-                        >
-                          {activeClipVolume === 0 ? (
-                            <VolumeX className="w-3.5 h-3.5 text-red-400" />
-                          ) : (
-                            <Volume2 className="w-3.5 h-3.5 text-zinc-300" />
-                          )}
-                        </button>
-                        <span className="text-[11px] font-medium text-zinc-400 w-12 shrink-0">
-                          Ses
-                        </span>
-                        <input
-                          type="range"
-                          min={0}
-                          max={100}
-                          value={activeClipVolume}
-                          onChange={(e) => {
-                            const val = Number(e.target.value) / 100;
-                            if (selectedVideoClip && engine) {
-                              engine.updateClipVolume(
-                                selectedVideoClip.id,
-                                val,
-                                val === 0
-                              );
-                              syncFromEngine();
-                            } else {
-                              onChangeVolume(val, val === 0);
-                            }
-                          }}
-                          className="flex-1 h-1 bg-white/15 rounded-lg appearance-none cursor-pointer accent-white"
-                        />
-                        <span className="text-[11px] font-semibold text-white w-8 text-right tabular-nums">
-                          {activeClipVolume}%
-                        </span>
-                      </div>
-                    )}
-                </>
-              </div>
-            )}
-
-            {renderedStrip === "music" && selectedMusic && (
-              <div
-                className={`px-4 transition-all ease-out ${stripAnimClass}`}
-                style={{ transitionDuration: `${SHEET_ANIM_MS}ms` }}
-              >
-                <MusicSettingsPanel
-                  music={selectedMusic}
-                  volume={musicVolume}
-                  onChangeVolume={onChangeMusicVolume}
-                  onChangeMusic={(next) => onChangeMusicMeta?.(next)}
-                  onBeforeChange={commitHistory}
-                  onReplace={() => onOpenMusicPicker("replace")}
-                  onTrim={() => onOpenMusicPicker("trim")}
-                  onRemove={() => {
-                    commitHistory();
-                    onChangeMusicMeta?.(null);
-                    setSelectedItemId(null);
-                    setSelectedItemType(null);
-                    setActiveStrip("none");
-                  }}
-                  onClose={() => setActiveStrip("none")}
-                />
-              </div>
-            )}
-
-            {renderedStrip === "filters" && (
-              <div
-                className={`flex items-center gap-2 px-4 transition-all ease-out ${stripAnimClass}`}
-                style={{ transitionDuration: `${SHEET_ANIM_MS}ms` }}
-              >
-                <div className="flex-1 flex items-start gap-2 overflow-x-auto no-scrollbar py-0.5">
-                  {FILTER_PRESETS.map((preset, idx) => (
-                    <PreviewThumb
-                      key={preset.id}
-                      src={previewFrame}
-                      label={preset.name}
-                      active={activeFilterIndex === idx}
-                      cssFilter={preset.cssFilter}
-                      onClick={() => onSelectFilterIndex(idx)}
-                    />
-                  ))}
-                </div>
-                <button
-                  type="button"
-                  onClick={() => setActiveStrip("none")}
-                  className="w-7 h-7 self-start rounded-xl bg-white/10 hover:bg-white/20 text-zinc-300 flex items-center justify-center shrink-0 active:scale-90 transition-all"
-                >
-                  <X className="w-3.5 h-3.5" />
-                </button>
-              </div>
-            )}
-
-            {/* 3. ALT ARAÇ ÇUBUĞU: tek yatay kaydırma, seçime göre değişir */}
-            <div className="flex items-start gap-1 overflow-x-auto no-scrollbar px-3 pt-0.5 pb-0.5 touch-pan-x">
-              {toolItems.map((t) => (
-                <button
-                  key={t.key}
-                  type="button"
-                  aria-label={t.label}
-                  onClick={t.onClick}
-                  disabled={t.disabled}
-                  className="flex flex-col items-center gap-1 shrink-0 min-w-[56px] disabled:opacity-35 group"
-                >
-                  <div
-                    className={`w-14 h-11 rounded-2xl flex items-center justify-center transition-all active:scale-95 ${
-                      t.danger
-                        ? "bg-red-500/15 border border-red-500/25 text-red-400"
-                        : t.active
-                          ? "bg-white text-black"
-                          : "bg-[#1c1c1e] text-white"
-                    }`}
-                  >
-                    {t.icon}
-                  </div>
-                  <span
-                    className={`text-[11px] font-medium ${t.danger ? "text-red-300" : "text-zinc-200"}`}
-                  >
-                    {t.label}
-                  </span>
-                </button>
-              ))}
-            </div>
+            <div style={{ height: "calc(env(safe-area-inset-bottom, 0px) + 4px)" }} />
           </div>
         </div>
       )}
       </div>
+
+      {composer && engine && (
+        <TextComposer engine={engine} layerId={composer.layerId} onClose={() => setComposer(null)} />
+      )}
     </>
   );
 }

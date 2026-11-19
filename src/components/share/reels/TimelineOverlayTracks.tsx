@@ -274,7 +274,8 @@ function TimelineOverlayTracks({
     const effectiveDx =
       dxPx > 0 ? dxPx - DRAG_THRESHOLD_PX : dxPx + DRAG_THRESHOLD_PX;
     const dtSec = effectiveDx / Math.max(20, pps);
-    const maxSec = Math.max(totalDuration + 15, 60);
+    // Hiçbir öğe videonun toplam süresini geçemez
+    const maxSec = Math.max(0.3, totalDuration);
 
     let nextStart = st.initStart;
     let nextEnd = st.initEnd;
@@ -304,6 +305,11 @@ function TimelineOverlayTracks({
     } else if (st.mode === "move") {
       nextStart = Math.max(minBound, Math.min(st.initStart + dtSec, maxBound - span));
       nextEnd = nextStart + span;
+    }
+    // Videodan uzun bir öğe taşınırken bile sonu video sonunu geçmez
+    if (nextEnd > maxBound) {
+      nextEnd = maxBound;
+      nextStart = Math.min(nextStart, Math.max(0, nextEnd - 0.3));
     }
 
     const sRounded = Number(nextStart.toFixed(2));
@@ -369,8 +375,8 @@ function TimelineOverlayTracks({
     musicClip &&
     typeof musicClip.timelineEnd === "number" &&
     musicClip.timelineEnd > musicStart
-      ? musicClip.timelineEnd
-      : Math.max(musicStart + 1, totalDuration);
+      ? Math.min(musicClip.timelineEnd, totalDuration)
+      : totalDuration;
 
   const audioSegments =
     musicClip?.segments && musicClip.segments.length > 0

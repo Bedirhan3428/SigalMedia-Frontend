@@ -373,7 +373,7 @@ export default function VideoTimelineNLE({
 
   return (
     <div
-      className="w-full flex flex-col gap-1.5 select-none pointer-events-auto min-h-0 flex-1"
+      className="w-full flex flex-col gap-1.5 select-none pointer-events-auto min-h-[168px] flex-1"
       onClick={() => onSelectItem(null, null)}
     >
       {/* 1. Üst Oynatma, Zaman Sayacı, Geri Al / İleri Al ve Ölçek (PPS Zoom) Satırı */}
@@ -394,7 +394,7 @@ export default function VideoTimelineNLE({
             )}
           </button>
 
-          <div className="flex items-center gap-1 text-xs font-semibold tabular-nums">
+          <div className="flex items-center gap-1 text-xs font-semibold tabular-nums whitespace-nowrap">
             <span ref={timeLabelRef} className="text-white">
               {formatNLEClock(currentTime)}
             </span>
@@ -465,8 +465,7 @@ export default function VideoTimelineNLE({
         {/* SABİT MERKEZ PLAYHEAD (left: 50%, üstte yuvarlak başlık + dikey beyaz ibre) */}
         {!isClipReordering && (
           <div className="pointer-events-none absolute top-0 bottom-0 left-1/2 -translate-x-1/2 z-40 flex flex-col items-center">
-            <div className="w-2.5 h-2.5 rounded-full bg-white shadow-[0_0_8px_rgba(255,255,255,0.95)]" />
-            <div className="w-[2px] flex-1 bg-white shadow-[0_0_10px_rgba(255,255,255,0.95)]" />
+            <div className="w-[2px] flex-1 bg-white" />
           </div>
         )}
 

@@ -143,6 +143,8 @@ export default function ShareStoryPage() {
 
   // Canlı Metin Düzenleme Modu (Instagram Story Focus Overlay)
   const [isTextEditing, setIsTextEditing] = useState(false);
+  // Reels: metin düzenleyici ReelsEditor içinde açılır; bu sayaç ona istek iletir
+  const [reelsTextRequest, setReelsTextRequest] = useState<{ layerId: string | null; seq: number } | null>(null);
   const [editingText, setEditingText] = useState("");
   const [activeFontPreset, setActiveFontPreset] = useState<FontPreset>("modern");
   const [activeBgPreset, setActiveBgPreset] = useState<TextBgPreset>("solid");
@@ -693,7 +695,8 @@ export default function ShareStoryPage() {
     const engine = engineRef.current;
     if (!engine) return;
     engine.setEffectClips(clips);
-    setEffectClips(clips);
+    // Motor video sonunu geçen efektleri kırpar; ekrandaki durum motorla aynı olmalı
+    setEffectClips(engine.getEffectClips());
   }, []);
   // [END] CREATED BY Bedirhan
 
@@ -801,6 +804,10 @@ export default function ShareStoryPage() {
   // 3. TİPOGRAFİ VE CANLI METİN DÜZENLEME AKIŞI (ODAK MODU)
   // ─────────────────────────────────────────────────────────────
   const openTextEditor = (layer?: TextLayer) => {
+    if (shareModeRef.current === "reels") {
+      setReelsTextRequest((p) => ({ layerId: layer?.id ?? null, seq: (p?.seq ?? 0) + 1 }));
+      return;
+    }
     const engine = getOrCreateEngine();
     if (!engine) return;
 
@@ -1389,10 +1396,9 @@ export default function ShareStoryPage() {
           onCropModeChange={setIsReelsCropping}
           onSeek={(t) => engineRef.current?.seekVideo(t)}
           onTogglePlay={() => engineRef.current?.toggleVideoPlay()}
-          onOpenTextEditor={() => openTextEditor()}
+          textEditRequest={reelsTextRequest}
           onOpenMusicPicker={openMusicPicker}
-          onOpenStickerSheet={() => setActiveDrawer("sticker_sheet")}
-          onOpenPhotoOverlay={() => overlayFileInputRef.current?.click()}
+          onAddMention={() => handleAddTagSticker()}
           onSelectFilterIndex={handleSelectFilterIndex}
           onSelectReelsEffect={handleSelectReelsEffect}
           onLayout={setReelsLayout}

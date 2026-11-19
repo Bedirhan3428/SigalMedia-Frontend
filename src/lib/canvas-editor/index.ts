@@ -106,6 +106,43 @@
  *  setReelsEffect(id) / getReelsEffect() / setEffectClips(clips) / getEffectClips()
  *  setFilterByIndex(i) (no swipe in Reels)
  *
+ *  ── REELS: PER-CLIP EDIT TOOLS (all render through drawBaseMedia/renderFrameAt => in exports;
+ *     all state lives in VideoTrackClip and is covered by snapshot()/restore(); each call emits
+ *     exactly ONE 'change'; unknown clip id = silent no-op) ──────────────────
+ *  updateClipOpacity(id, opacity 0..1): void
+ *  updateClipAnimation(id, { in?, out?, durationSec? }): void   in/out: 'none' | 'fade' | 'slide-up' |
+ *                                  'slide-left' | 'zoom-in'. Omitted fields keep their value; durationSec
+ *                                  0.1–2 (default 0.5), at most half the clip. Both 'none' removes it.
+ *                                  Splitting a clip keeps 'in' on the first half and 'out' on the second.
+ *  rotateClip90(id): void          +90° clockwise, re-clamped so the frame stays covered.
+ *  flipClip(id, 'h' | 'v'): void
+ *  updateClipAdjustments(id, partial): void   keys brightness/contrast/saturation/warmth (-100..100),
+ *                                  vignette/sharpness (0..100). ADDED to the global adjustments; all 0 clears.
+ *  setClipFilter(id, index | null): void      FILTER_PRESETS index; null = use the global filter.
+ *  updateClipRetouch(id, amount 0..1): void   Soft blur blended with the original + slight brightness lift.
+ *  Global "Ayarla" for Reels: setPostAdjustments(partial) / resetPostAdjustments() / getPostAdjustments()
+ *                                  work in Reels (applies to every clip; per-clip values add on top).
+ *  freezeFrameAt(id, t, durationSec = 3): Promise<VideoTrackClip | null>   t = timeline seconds inside clip
+ *                                  `id`. Splits the clip at t and inserts a still (photo) clip; the duration is
+ *                                  capped by the remaining capacity. null if capacity < 0.5 s, the clip is not
+ *                                  a video, or t is outside it. Timeline moves to the new clip.
+ *  replaceClipMedia(id, source: File | Blob | string): Promise<VideoTrackClip | null>   Same slot and
+ *                                  duration (clamped to the new source); transform/crop reset; opacity,
+ *                                  animation, adjustments, filter, retouch kept. Rejects MediaLoadError.
+ *  reverseClip(id, onProgress?(0..1), signal?: AbortSignal): Promise<VideoTrackClip | null>   Real reverse:
+ *                                  WebCodecs decode -> reversed H.264 MP4 (video only, long side <= 1080,
+ *                                  max MAX_VIDEO_SEC); the clip is swapped to the result and muted. Rejects
+ *                                  ReverseClipError { code: 'unsupported' | 'not-video' | 'decode' | 'encode' }
+ *                                  (isReverseClipError(err); isReverseSupported() to pre-check) or
+ *                                  DOMException 'AbortError' on cancel (nothing changes). null if the clip was
+ *                                  removed meanwhile. All frames/decoders/encoders are freed on every path.
+ *  setMusicFromFile(file, { title?, artist? }?): Promise<StoryAudioMeta>   Local audio as music
+ *                                  (meta.source = 'device', streamUrl = blob URL owned by the engine; no
+ *                                  30 s limit, Reels duration capped to the timeline). Rejects AudioLoadError
+ *                                  { code: 'unsupported' | 'decode' }. Old blob URLs are revoked on replace
+ *                                  (the 3 newest are kept for undo) and all on destroy().
+ *  Overlay VIDEO ("Bindirme") is NOT supported: addOverlayImage is photo only.
+ *
  *  ── POST ───────────────────────────────────────────────────────────────────
  *  setPostAspect('1:1' | '4:5' | '3:4' | '4:3'): void   default '4:5'; emits 'resize' + 'change'.
  *      Sizes (POST_ASPECT_SIZES): 1:1 1440×1440, 4:5 1152×1440, 3:4 1080×1440, 4:3 1440×1080.
@@ -151,7 +188,7 @@
  *  MAX_VIDEO_SEC = 60, VERTICAL_LOGICAL_SIZE, POST_ASPECT_SIZES, DEFAULT_POST_ASPECT,
  *  MAX_IMAGE_DECODE_PX = 4096, MEDIA_LOAD_TIMEOUT_MS = 15000,
  *  ShareMode, PostAspect, MediaLoadErrorCode, MediaLoadError, DragInfo, EngineSnapshot,
- *  VideoState, VideoTrackClip, OverlayTrackItem, StoryAudioMeta, MusicSegment, TextStyle,
+ *  VideoState, VideoTrackClip, ClipAnimation, ClipAnimationKind, OverlayTrackItem, StoryAudioMeta, MusicSegment, TextStyle,
  *  FontPreset, TextBgPreset, LayerTransform, FitMode, PostAdjustmentState,
  *  DEFAULT_POST_ADJUSTMENTS, ReelsEffectId, ReelsEffectClip, FILTER_PRESETS, FilterPreset.
  *  Utilities: generateVideoThumbnails, generatePhotoThumbnails, captureFramePreview,
@@ -183,6 +220,7 @@ export * from './interaction/InteractionManager';
 export * from './exporter/ImageExporter';
 // [START] CREATED BY Bedirhan
 export * from './exporter/FastDemuxer';
+export * from './exporter/ClipReverser';
 export * from './exporter/VideoExporter';
 export * from './exporter/MediaRecorderFallback';
 export * from './utils/videoThumbs';
