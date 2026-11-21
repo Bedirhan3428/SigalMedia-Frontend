@@ -71,6 +71,56 @@ export const DEFAULT_TEXT_STYLE: TextStyle = {
   shadowBlur: 0,
 };
 
+/** Mantıksal tuval genişliği (1080) ve metin için güvenli alan oranı. */
+const LOGICAL_CANVAS_WIDTH = 1080;
+const SAFE_WIDTH_RATIO = 0.9;
+
+type GraphemeSegmenter = { segment(s: string): Iterable<{ segment: string }> };
+const graphemeSegmenter: GraphemeSegmenter | null =
+  typeof Intl !== 'undefined' && 'Segmenter' in Intl
+    ? new (Intl as unknown as { Segmenter: new (l?: string, o?: object) => GraphemeSegmenter }).Segmenter(undefined, { granularity: 'grapheme' })
+    : null;
+
+function splitGraphemes(word: string): string[] {
+  if (graphemeSegmenter) return Array.from(graphemeSegmenter.segment(word), (x) => x.segment);
+  return Array.from(word);
+}
+
+/**
+ * Tek satır yerleşim fonksiyonu: ölçüm, çizim, hit-test ve export aynı satırları kullanır.
+ * Kelime bazlı sarar; maxWidth'ten uzun tek kelime grafem (emoji/Türkçe güvenli) bazında kırılır.
+ * ctx.font çağırandan önce ayarlanmış olmalıdır.
+ */
+export function layoutTextLines(ctx: CanvasRenderingContext2D, text: string, maxWidth: number): string[] {
+  const out: string[] = [];
+  const w = (t: string) => ctx.measureText(t).width;
+  for (const para of text.split('\n')) {
+    if (para === '' || w(para) <= maxWidth) {
+      out.push(para);
+      continue;
+    }
+    let cur = '';
+    const flush = () => {
+      if (cur) out.push(cur.replace(/\s+$/, ''));
+      cur = '';
+    };
+    for (const word of para.split(/(?<=\s)/)) {
+      const trimmed = word.replace(/\s+$/, '');
+      if (cur && w(cur + trimmed) > maxWidth) flush();
+      if (w(trimmed) > maxWidth) {
+        for (const g of splitGraphemes(word)) {
+          if (cur && w(cur + g) > maxWidth) flush();
+          cur += g;
+        }
+      } else {
+        cur += word;
+      }
+    }
+    flush();
+  }
+  return out.length ? out : [''];
+}
+
 export class TextLayer extends BaseLayer {
   public override type = 'text';
   public style: TextStyle;
@@ -239,13 +289,28 @@ export class TextLayer extends BaseLayer {
   }
 
   private cachedBounds: Rect | null = null;
+  private cachedLines: string[] = [''];
+  private get layoutPadding(): number {
+    const hasBg = this.bgPreset === 'solid' || this.bgPreset === 'translucent';
+    return hasBg ? (this.style.backgroundPadding ?? 24) : 16;
+  }
   private cachedBoundsKey = '';
 
   private getFontString(): string {
     return `${this.style.fontStyle} ${this.style.fontWeight} ${this.style.fontSize}px ${this.style.fontFamily}`;
   }
 
-  public override getBoundingBox(ctx: CanvasRenderingContext2D, _canvasWidth: number, _canvasHeight: number): Rect {
+  /**
+   * Piksel uzayında sınırlar (BaseLayer seçim çerçevesi/hit-test bunu transform.scale ile çarpar).
+   * Çizim mantıksal 1080 genişliğinde yapılıp canvasWidth/1080 ile ölçeklendiği için sınırlar da aynı oranla ölçeklenir.
+   */
+  public override getBoundingBox(ctx: CanvasRenderingContext2D, canvasWidth: number, _canvasHeight: number): Rect {
+    const b = this.getLogicalBounds(ctx);
+    const k = canvasWidth > 0 ? canvasWidth / LOGICAL_CANVAS_WIDTH : 1;
+    return { x: b.x * k, y: b.y * k, width: b.width * k, height: b.height * k };
+  }
+
+  private getLogicalBounds(ctx: CanvasRenderingContext2D): Rect {
     const fontStr = this.getFontString();
     const hasBg = this.bgPreset === 'solid' || this.bgPreset === 'translucent';
     const padding = hasBg ? (this.style.backgroundPadding ?? 24) : 16;
@@ -258,7 +323,12 @@ export class TextLayer extends BaseLayer {
     ctx.save();
     ctx.font = fontStr;
 
-    const lines = this.style.text.split('\n');
+    const maxContentWidth = Math.max(
+      this.style.fontSize,
+      LOGICAL_CANVAS_WIDTH * SAFE_WIDTH_RATIO - padding * 2
+    );
+    const lines = layoutTextLines(ctx, this.style.text, maxContentWidth);
+    this.cachedLines = lines;
     let maxLineWidth = 0;
     const lineHeight = this.style.fontSize * 1.25;
 
@@ -289,7 +359,7 @@ export class TextLayer extends BaseLayer {
     if (!this.visible || !this.style.text) return;
 
     const center = this.getPixelPosition(canvasWidth, canvasHeight);
-    const bounds = this.getBoundingBox(ctx, canvasWidth, canvasHeight);
+    const bounds = this.getLogicalBounds(ctx);
     const resScale = canvasWidth / 1080;
     const interactionScale = this.isInteracting ? 1.015 : 1.0;
     const finalScale = this.transform.scale * interactionScale * this.pulseScale * resScale;
@@ -337,10 +407,10 @@ export class TextLayer extends BaseLayer {
 
   // Yerel koordinatlarda (merkez 0,0) arka plan + metin çizimi
   private drawContent(ctx: CanvasRenderingContext2D, bounds: Rect): void {
-    const lines = this.style.text.split('\n');
+    const lines = this.cachedLines;
     const lineHeight = this.style.fontSize * 1.25;
     const hasBg = this.bgPreset === 'solid' || this.bgPreset === 'translucent';
-    const padding = hasBg ? (this.style.backgroundPadding ?? 18) : 8;
+    const padding = this.layoutPadding;
 
     // 1. Arka Plan Kutusu (Solid veya Translucent)
     if (hasBg && this.style.backgroundColor && this.style.backgroundColor !== 'transparent') {

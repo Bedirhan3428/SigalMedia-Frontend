@@ -142,6 +142,34 @@ export class OverlayImageLayer extends BaseLayer {
   }
 
   private bitmapCache = new LayerBitmapCache();
+  private alphaCache: { src: string; value: boolean } | null = null;
+
+  /** Görselde (neredeyse) şeffaf piksel var mı? Küçültülmüş kopya üzerinde bir kez ölçülür. */
+  private hasTransparency(): boolean {
+    const src = this.image.currentSrc || this.image.src;
+    if (this.alphaCache && this.alphaCache.src === src) return this.alphaCache.value;
+    let value = false;
+    if (this.image.complete && this.image.naturalWidth > 0) {
+      try {
+        const n = 64;
+        const c = document.createElement('canvas');
+        c.width = n;
+        c.height = n;
+        const cx = c.getContext('2d', { willReadFrequently: true });
+        if (cx) {
+          cx.drawImage(this.image, 0, 0, n, n);
+          const d = cx.getImageData(0, 0, n, n).data;
+          for (let i = 3; i < d.length; i += 4) {
+            if (d[i] < 250) { value = true; break; }
+          }
+        }
+        this.alphaCache = { src, value };
+      } catch {
+        // Tainted canvas: opak varsay (eski davranış)
+      }
+    }
+    return value;
+  }
 
   public override render(ctx: CanvasRenderingContext2D, canvasWidth: number, canvasHeight: number): void {
     if (!this.visible || !this.image) return;
@@ -222,6 +250,13 @@ export class OverlayImageLayer extends BaseLayer {
       ctx.shadowBlur = this.isInteracting ? 26 : 16;
       ctx.shadowOffsetX = 0;
       ctx.shadowOffsetY = this.isInteracting ? 8 : 4;
+
+      // Şeffaf PNG/SVG: siyah taban ve yuvarlak kırpma yok; gölge görselin alfa şeklini izler.
+      if (this.hasTransparency()) {
+        ctx.drawImage(this.image, -origW / 2, -origH / 2, origW, origH);
+        ctx.restore();
+        return;
+      }
 
       ctx.beginPath();
       if (typeof ctx.roundRect === 'function') {
