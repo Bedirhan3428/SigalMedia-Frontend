@@ -29,6 +29,7 @@ import {
   FILTER_PRESETS,
   getMusicFadeGain,
   getMusicTimelineRange,
+  isMediaLoadError,
 } from "@/lib/canvas-editor";
 import MusicPickerDrawer from "@/components/share/MusicPickerDrawer";
 import MusicSettingsPanel from "@/components/share/MusicSettingsPanel";
@@ -701,16 +702,13 @@ export default function ShareStoryPage() {
   // [END] CREATED BY Bedirhan
 
   // [MODIFIED BY Bedirhan]
-  const handleBaseFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-
+  const processBaseFile = async (file: File) => {
     const MAX_FILE_BYTES = 100 * 1024 * 1024;
     if (file.size > MAX_FILE_BYTES) {
       setFilterToast("Maksimum 100 MB dosya seçilebilir");
       if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
       toastTimerRef.current = setTimeout(() => setFilterToast(null), 2200);
-      e.target.value = "";
+      if (baseFileInputRef.current) baseFileInputRef.current.value = "";
       return;
     }
 
@@ -718,7 +716,7 @@ export default function ShareStoryPage() {
       setFilterToast("Gönderi modunda yalnızca fotoğraf seçilebilir");
       if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
       toastTimerRef.current = setTimeout(() => setFilterToast(null), 2200);
-      e.target.value = "";
+      if (baseFileInputRef.current) baseFileInputRef.current.value = "";
       return;
     }
 
@@ -750,7 +748,7 @@ export default function ShareStoryPage() {
       setActiveFilterIndex(engine.getCurrentFilterIndex());
       setActiveReelsEffect(engine.getReelsEffect());
       setEffectClips(engine.getEffectClips());
-      e.target.value = "";
+      if (baseFileInputRef.current) baseFileInputRef.current.value = "";
 
       if (media.type === "video") {
         setVideoState(engine.getVideoState());
@@ -771,10 +769,30 @@ export default function ShareStoryPage() {
         setVideoState(INITIAL_VIDEO_STATE);
       }
     } catch (err) {
+      if ((err as Error)?.name === "AbortError") return;
       console.error("Taban görsel yüklenemedi:", err);
-      if (!hasMedia) {
-        router.back();
-      }
+      const msg = isMediaLoadError(err)
+        ? "Bu dosya açılamadı. Dosya desteklenmiyor veya bozuk."
+        : "Dosya yüklenemedi, lütfen tekrar deneyin.";
+      setFilterToast(msg);
+      if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
+      toastTimerRef.current = setTimeout(() => setFilterToast(null), 3000);
+      if (baseFileInputRef.current) baseFileInputRef.current.value = "";
+    }
+  };
+
+  const handleBaseFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = "";
+    if (!file) return;
+    await processBaseFile(file);
+  };
+
+  const handleRootDrop = (e: React.DragEvent) => {
+    e.preventDefault();
+    const file = e.dataTransfer.files?.[0];
+    if (file && !hasMedia) {
+      processBaseFile(file);
     }
   };
 
@@ -1164,7 +1182,11 @@ export default function ShareStoryPage() {
     shareMode === "story" ? "Hikaye" : shareMode === "reels" ? "Reels" : "Gönderi";
 
   return (
-    <div className="fixed inset-0 w-screen h-[100dvh] bg-black text-white overflow-hidden select-none no-select touch-none">
+    <div
+      onDragOver={(e) => e.preventDefault()}
+      onDrop={handleRootDrop}
+      className="fixed inset-0 w-screen h-[100dvh] bg-black text-white overflow-hidden select-none no-select touch-none"
+    >
       {/* 1. Görünmez Taban Medya Dosya Seçici */}
       <input
         type="file"
@@ -1252,9 +1274,14 @@ export default function ShareStoryPage() {
         </div>
       </div>
 
-      {/* 4. CANLI FİLTRE ROZETİ (0.5s Minimal Instagram Swipe Toast) */}
+      {/* 4. CANLI FİLTRE ROZETİ (0.5s Minimal Instagram Swipe Toast) / BİLDİRİM */}
       {filterToast && (
-        <div className="fixed top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 z-40 bg-black/60 backdrop-blur-md px-5 py-2 rounded-full text-sm font-bold text-white shadow-2xl pointer-events-none animate-in fade-in zoom-in-95 duration-150">
+        <div
+          data-testid="filter-toast"
+          className={`fixed left-1/2 -translate-x-1/2 z-40 bg-black/60 backdrop-blur-md px-5 py-2 rounded-full text-sm font-bold text-white shadow-2xl pointer-events-none animate-in fade-in zoom-in-95 duration-150 ${
+            hasMedia ? "top-1/2 -translate-y-1/2" : "top-20"
+          }`}
+        >
           {filterToast}
         </div>
       )}
@@ -1322,6 +1349,7 @@ export default function ShareStoryPage() {
         <div className="fixed inset-0 flex flex-col items-center justify-center pointer-events-none z-30">
           <button
             type="button"
+            data-testid="media-picker-btn"
             onClick={() => baseFileInputRef.current?.click()}
             className="pointer-events-auto flex items-center gap-2.5 px-6 py-3.5 rounded-2xl bg-white/10 hover:bg-white/15 active:scale-95 backdrop-blur-xl border border-white/20 text-white font-semibold text-sm shadow-2xl transition-all"
           >
