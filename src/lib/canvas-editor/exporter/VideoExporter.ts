@@ -6,15 +6,45 @@ import { FastDemuxer, DemuxedSample, DemuxedVideoTrack } from './FastDemuxer';
 import { applyMusicFadeToGain } from '../utils/musicFade';
 import { MediaRecorderFallback } from './MediaRecorderFallback';
 
+export type ExportResolution = '1080p' | '720p' | 'auto';
+export type ExportWarning = 'downscaled-720p';
+
+export interface ExportStats {
+  width: number;
+  height: number;
+  bitrate: number;
+  frames: number;
+  totalMs: number;
+  decodeMs: number;
+  drawMs: number;
+  /** drawMs içinde: canvas -> I420 dönüşümü (readback + renk uzayı) */
+  convertMs: number;
+  /** drawMs içinde: getImageData readback */
+  readbackMs: number;
+  encodeMs: number;
+  /** Kaynak kareleri WebCodecs imleciyle mi (hızlı) yoksa seek yedek yoluyla mı alındı */
+  usedFrameCursor: boolean;
+  /** Çıktı I420 bt709 limited-range olarak etiketlendi mi (E-06) */
+  taggedBt709Limited: boolean;
+}
+
 export interface ExportVideoOptions {
+  /** Açık boyut verilirse resolution'ı geçersiz kılar (çift sayıya yuvarlanır). Normalde verilmez. */
   width?: number;
   height?: number;
   fps?: number;
+  /** bit/sn. Verilmezse çözünürlüğe göre: 1080p 7 Mbps, 720p 4 Mbps */
   bitrate?: number;
-  resolution?: '1080p' | '720p';
+  /**
+   * 'auto' (varsayılan) ve '1080p': 1080x1920; '720p': 720x1280. Encoder 1080p desteklemezse
+   * 720p'ye düşülür ve onWarning('downscaled-720p') çağrılır.
+   */
+  resolution?: ExportResolution;
   music?: StoryAudioMeta | null;
   musicVolume?: number;
   onProgress?: (progress: number) => void;
+  onWarning?: (code: ExportWarning) => void;
+  onStats?: (stats: ExportStats) => void;
   signal?: AbortSignal;
 }
 
@@ -32,8 +62,58 @@ const H264_CODEC_CANDIDATES = [
 ];
 
 const OUTPUT_FPS = 30;
-// 720x1280 @ 30 FPS dikey video için yeterli; 6 Mbps dosyayı ~3 kat şişiriyordu
-const DEFAULT_BITRATE = 2_500_000;
+const PREFETCH_FRAMES = 12;
+// Çözünürlük başına varsayılan bitrate (H.264 High, 30 fps dikey): 1080p ~7 Mbps, 720p ~4 Mbps
+const BITRATE_1080P = 7_000_000;
+const BITRATE_720P = 4_000_000;
+const SIZE_1080P = { width: 1080, height: 1920 };
+const SIZE_720P = { width: 720, height: 1280 };
+
+function defaultBitrateFor(height: number): number {
+  return height >= 1500 ? BITRATE_1080P : BITRATE_720P;
+}
+
+/**
+ * Tuval (sRGB tam aralık RGBA) -> I420, BT.709 limited range (Y 16-235, UV 16-240). Chroma 2x2 ortalama.
+ * Pikseller tek seferde Uint32 olarak okunur (little-endian: R | G<<8 | B<<16 | A<<24).
+ */
+function rgbaToI420Bt709Limited(
+  rgba: Uint8ClampedArray,
+  width: number,
+  height: number,
+  out: Uint8Array
+): void {
+  const px = new Uint32Array(rgba.buffer, rgba.byteOffset, width * height);
+  const ySize = width * height;
+  const cw = width >> 1;
+  const uOff = ySize;
+  const vOff = ySize + cw * (height >> 1);
+  for (let y = 0; y < height; y += 2) {
+    const row0 = y * width;
+    const row1 = row0 + width;
+    const cRow = (y >> 1) * cw;
+    for (let x = 0; x < width; x += 2) {
+      const i0 = row0 + x;
+      const i1 = row1 + x;
+      const p00 = px[i0], p01 = px[i0 + 1], p10 = px[i1], p11 = px[i1 + 1];
+      const r00 = p00 & 255, g00 = (p00 >> 8) & 255, b00 = (p00 >> 16) & 255;
+      const r01 = p01 & 255, g01 = (p01 >> 8) & 255, b01 = (p01 >> 16) & 255;
+      const r10 = p10 & 255, g10 = (p10 >> 8) & 255, b10 = (p10 >> 16) & 255;
+      const r11 = p11 & 255, g11 = (p11 >> 8) & 255, b11 = (p11 >> 16) & 255;
+      out[i0] = ((47 * r00 + 157 * g00 + 16 * b00 + 128) >> 8) + 16;
+      out[i0 + 1] = ((47 * r01 + 157 * g01 + 16 * b01 + 128) >> 8) + 16;
+      out[i1] = ((47 * r10 + 157 * g10 + 16 * b10 + 128) >> 8) + 16;
+      out[i1 + 1] = ((47 * r11 + 157 * g11 + 16 * b11 + 128) >> 8) + 16;
+      const r = r00 + r01 + r10 + r11;
+      const g = g00 + g01 + g10 + g11;
+      const b = b00 + b01 + b10 + b11;
+      const ci = cRow + (x >> 1);
+      out[uOff + ci] = ((-26 * r - 86 * g + 112 * b + 512) >> 10) + 128;
+      out[vOff + ci] = ((112 * r - 102 * g - 10 * b + 512) >> 10) + 128;
+    }
+  }
+}
+
 const AUDIO_SAMPLE_RATE = 44100;
 
 function abortError(): DOMException {
@@ -67,25 +147,36 @@ class DecodedFrameCursor {
     }
     if (this.samples.length === 0) return false;
 
-    const config: VideoDecoderConfig = {
-      codec: this.track.codec,
-      codedWidth: this.track.codedWidth,
-      codedHeight: this.track.codedHeight,
-      description: this.track.description,
-      hardwareAcceleration: 'prefer-hardware',
-    };
-    try {
-      const support = await VideoDecoder.isConfigSupported(config);
-      if (!support.supported) return false;
-    } catch {
-      return false;
+    // 'prefer-hardware' donanım dekoderi olmayan cihazda (ve headless Chromium'da) "unsupported" döner;
+    // eskiden bu durumda ~0.3 s/kare süren seek yoluna düşülüyordu (E-02 kök nedeni).
+    // Önce donanım, sonra tercihsiz (yazılım) dekoder denenir.
+    let config: VideoDecoderConfig | null = null;
+    for (const hw of ['prefer-hardware', 'no-preference'] as HardwareAcceleration[]) {
+      const candidate: VideoDecoderConfig = {
+        codec: this.track.codec,
+        codedWidth: this.track.codedWidth,
+        codedHeight: this.track.codedHeight,
+        description: this.track.description,
+        hardwareAcceleration: hw,
+      };
+      try {
+        const support = await VideoDecoder.isConfigSupported(candidate);
+        if (support.supported) {
+          config = candidate;
+          break;
+        }
+      } catch {
+        // sonraki tercih
+      }
     }
+    if (!config) return false;
 
     try {
       this.decoder = new VideoDecoder({
         output: (frame) => {
           this.queue.push(frame);
           this.outCount++;
+          this.feed();
           this.wake();
         },
         error: (err) => {
@@ -122,10 +213,11 @@ class DecodedFrameCursor {
   private feed(): void {
     const dec = this.decoder;
     if (!dec) return;
+    // Önden okuma: çözülmüş kare kuyruğu en fazla ~PREFETCH_FRAMES kare (1080p'de ~25 MB) ile sınırlı
     while (
       this.nextSampleIdx < this.samples.length &&
-      dec.decodeQueueSize < 6 &&
-      this.fedCount - this.outCount < 10
+      dec.decodeQueueSize < 8 &&
+      this.fedCount - this.outCount + this.queue.length < PREFETCH_FRAMES
     ) {
       const s = this.samples[this.nextSampleIdx++];
       if (s.data.byteLength === 0) continue;
@@ -147,6 +239,7 @@ class DecodedFrameCursor {
     if (!dec) return null;
     const targetUs = Math.round(sourceSec * 1_000_000) + this.track.ptsOffsetUs + 1500;
     let idleMs = 0;
+    this.feed();
 
     for (;;) {
       if (signal?.aborted) throw abortError();
@@ -328,20 +421,32 @@ export class VideoExporter {
   private static async findSupportedVideoConfig(
     preferredWidth: number,
     preferredHeight: number,
-    bitrate: number
-  ): Promise<{ config: VideoEncoderConfig; width: number; height: number } | null> {
+    bitrate: number | undefined
+  ): Promise<{
+    config: VideoEncoderConfig;
+    width: number;
+    height: number;
+    bitrate: number;
+    downscaled: boolean;
+  } | null> {
     if (!this.isWebCodecsSupported()) return null;
 
-    const targetW = (preferredWidth || 720) & ~1;
-    const targetH = (preferredHeight || 1280) & ~1;
+    const targetW = (preferredWidth || SIZE_720P.width) & ~1;
+    const targetH = (preferredHeight || SIZE_720P.height) & ~1;
 
-    // latencyMode 'quality': 'realtime' modu hız kontrolü için kare DÜŞÜRÜR (3-5 FPS çıktının kök nedeni)
+    // Encoder hedef boyutu desteklemezse 720p'ye düşülür (çağıran onWarning ile bilgilendirilir)
     const attempts: Array<{ width: number; height: number; bitrate: number }> = [
-      { width: targetW, height: targetH, bitrate },
-      { width: 720, height: 1280, bitrate: Math.min(bitrate, DEFAULT_BITRATE) },
+      { width: targetW, height: targetH, bitrate: bitrate || defaultBitrateFor(targetH) },
     ];
+    if (targetH > SIZE_720P.height) {
+      attempts.push({
+        ...SIZE_720P,
+        bitrate: bitrate ? Math.min(bitrate, BITRATE_720P) : BITRATE_720P,
+      });
+    }
 
-    for (const attempt of attempts) {
+    for (let a = 0; a < attempts.length; a++) {
+      const attempt = attempts[a];
       for (const hw of ['prefer-hardware', 'no-preference'] as HardwareAcceleration[]) {
         for (const codec of H264_CODEC_CANDIDATES) {
           const candidate: VideoEncoderConfig = {
@@ -351,6 +456,7 @@ export class VideoExporter {
             bitrate: attempt.bitrate,
             bitrateMode: 'variable',
             framerate: OUTPUT_FPS,
+            // 'realtime' kare düşürebildiği için 'quality' kullanılır
             latencyMode: 'quality',
             hardwareAcceleration: hw,
             avc: { format: 'avc' },
@@ -362,6 +468,8 @@ export class VideoExporter {
                 config: support.config || candidate,
                 width: attempt.width,
                 height: attempt.height,
+                bitrate: attempt.bitrate,
+                downscaled: a > 0,
               };
             }
           } catch {
@@ -372,6 +480,20 @@ export class VideoExporter {
     }
 
     return null;
+  }
+
+  /** Çıktı boyutu: açık width/height > resolution ('auto' = 1080x1920, Hikaye görseliyle tutarlı) */
+  private static resolveTargetSize(options?: ExportVideoOptions): {
+    width: number;
+    height: number;
+  } {
+    if (options?.width && options?.height) {
+      return { width: options.width & ~1, height: options.height & ~1 };
+    }
+    const res = options?.resolution ?? 'auto';
+    if (res === '1080p') return SIZE_1080P;
+    if (res === '720p') return SIZE_720P;
+    return SIZE_1080P;
   }
 
   /** Dışa aktarılacak klip listesi (Reels NLE veya tek parça Hikaye/Gönderi videosu) */
@@ -534,19 +656,22 @@ export class VideoExporter {
       throw new Error('Aktif medya bir video değil');
     }
 
-    const preferredW = options?.width || 720;
-    const preferredH = options?.height || 1280;
-    const bitrate = options?.bitrate || DEFAULT_BITRATE;
     const signal = options?.signal;
+    const clips = this.resolveExportClips(engine);
+    const targetSize = this.resolveTargetSize(options);
 
-    const supportedVideo = await this.findSupportedVideoConfig(preferredW, preferredH, bitrate);
+    const supportedVideo = await this.findSupportedVideoConfig(
+      targetSize.width,
+      targetSize.height,
+      options?.bitrate
+    );
 
     if (!supportedVideo) {
       return MediaRecorderFallback.exportToBlob(engine, {
-        width: preferredW,
-        height: preferredH,
+        width: targetSize.width,
+        height: targetSize.height,
         fps: OUTPUT_FPS,
-        bitrate,
+        bitrate: options?.bitrate || defaultBitrateFor(targetSize.height),
         music: options?.music,
         musicVolume: options?.musicVolume,
         onProgress: options?.onProgress,
@@ -554,11 +679,16 @@ export class VideoExporter {
       });
     }
 
-    const { config: videoConfig, width: exportWidth, height: exportHeight } = supportedVideo;
+    const {
+      config: videoConfig,
+      width: exportWidth,
+      height: exportHeight,
+      bitrate: exportBitrate,
+    } = supportedVideo;
+    if (supportedVideo.downscaled) options?.onWarning?.('downscaled-720p');
     const fps = OUTPUT_FPS;
     const isReelsNle =
       engine.getShareMode() === 'reels' && engine.getVideoClips().length > 0;
-    const clips = this.resolveExportClips(engine);
     const outputDuration = Math.max(
       0.2,
       Math.min(
@@ -568,6 +698,7 @@ export class VideoExporter {
     );
     const totalFrames = Math.max(1, Math.round(outputDuration * fps));
     const frameDurationUs = Math.round(1_000_000 / fps);
+    const videoEndUs = totalFrames * frameDurationUs;
     const restoreTime = engine.getCurrentTime();
 
     engine.setExportingVideo(true);
@@ -666,7 +797,22 @@ export class VideoExporter {
       if (renderedAudio) {
         audioEncoder = new AudioEncoder({
           output: (chunk, meta) => {
-            muxer.addAudioChunk(chunk, meta);
+            // E-05: AAC paket dolgusu sesi videodan uzatıyordu; ses, video bitiş anına (kare sayısı x süre) kırpılır
+            if (chunk.timestamp >= videoEndUs) return;
+            const dur = chunk.duration ?? 0;
+            if (dur > 0 && chunk.timestamp + dur > videoEndUs) {
+              const data = new Uint8Array(chunk.byteLength);
+              chunk.copyTo(data);
+              muxer.addAudioChunkRaw(
+                data,
+                chunk.type,
+                chunk.timestamp,
+                videoEndUs - chunk.timestamp,
+                meta
+              );
+            } else {
+              muxer.addAudioChunk(chunk, meta);
+            }
           },
           error: (err) => {
             encoderError = err instanceof Error ? err : new Error(String(err));
@@ -682,9 +828,13 @@ export class VideoExporter {
         const chunkFrames = 4096;
         const reusablePlanar = new Float32Array(chunkFrames * 2);
 
-        for (let offset = 0; offset < renderedAudio.length; offset += chunkFrames) {
+        const audioLength = Math.min(
+          renderedAudio.length,
+          Math.ceil((videoEndUs / 1_000_000) * AUDIO_SAMPLE_RATE)
+        );
+        for (let offset = 0; offset < audioLength; offset += chunkFrames) {
           if (signal?.aborted) throw abortError();
-          const frameCount = Math.min(chunkFrames, renderedAudio.length - offset);
+          const frameCount = Math.min(chunkFrames, audioLength - offset);
           const planarView =
             frameCount === chunkFrames
               ? reusablePlanar
@@ -716,6 +866,62 @@ export class VideoExporter {
       // Video klip  → WebCodecs çekme imleci (gerçek kare) | desteklenmezse kare-kilitli seek
       // Foto klip   → sahne değişmediği sürece yeniden çizim yok, yalnızca encode
       // ─────────────────────────────────────────────────────────────
+      const stats: ExportStats = {
+        width: exportWidth,
+        height: exportHeight,
+        bitrate: exportBitrate,
+        frames: totalFrames,
+        totalMs: 0,
+        decodeMs: 0,
+        drawMs: 0,
+        convertMs: 0,
+        readbackMs: 0,
+        encodeMs: 0,
+        usedFrameCursor: false,
+        taggedBt709Limited: false,
+      };
+      const tStart = performance.now();
+
+      // E-06: Canvas -> I420 BT.709 limited-range. Canvas karesi doğrudan verilirse encoder sRGB/tam aralık
+      // (yuvj420p) etiketler. I420 üretilemezse (eski tarayıcı) canvas karesine geri düşülür.
+      const colorSpace = {
+        primaries: 'bt709',
+        transfer: 'bt709',
+        matrix: 'bt709',
+        fullRange: false,
+      } as const;
+      let i420Ok = true;
+      let i420Buf: Uint8Array | null = null;
+      let i420Fresh = false;
+      const makeVideoFrame = (timestamp: number, canvasChanged: boolean): VideoFrame => {
+        if (i420Ok) {
+          try {
+            if (!i420Buf) i420Buf = new Uint8Array((exportWidth * exportHeight * 3) >> 1);
+            if (canvasChanged || !i420Fresh) {
+              const tConv = performance.now();
+              const img = exportCtx.getImageData(0, 0, exportWidth, exportHeight);
+              const tRead = performance.now();
+              rgbaToI420Bt709Limited(img.data, exportWidth, exportHeight, i420Buf);
+              stats.readbackMs += tRead - tConv;
+              stats.convertMs += performance.now() - tRead;
+              i420Fresh = true;
+            }
+            const f = new VideoFrame(i420Buf, {
+              format: 'I420',
+              codedWidth: exportWidth,
+              codedHeight: exportHeight,
+              timestamp,
+              duration: frameDurationUs,
+              colorSpace,
+            });
+            stats.taggedBt709Limited = true;
+            return f;
+          } catch {
+            i420Ok = false;
+          }
+        }
+        return new VideoFrame(exportCanvas, { timestamp, duration: frameDurationUs });
+      };
       let frameIdx = 0;
       let clipOutStartSec = 0;
       let lastReportedPct = -1;
@@ -788,7 +994,10 @@ export class VideoExporter {
             if (isVideoClip) {
               if (cursor) {
                 try {
+                  const tDec = performance.now();
                   const vf = await cursor.frameAt(sourceSec, signal);
+                  stats.decodeMs += performance.now() - tDec;
+                  if (vf) stats.usedFrameCursor = true;
                   if (vf) externalFrame = this.orientFrame(vf, rotation);
                 } catch (err) {
                   if (err instanceof DOMException && err.name === 'AbortError') throw err;
@@ -806,6 +1015,7 @@ export class VideoExporter {
               needsDraw = sceneChanged || animated || staticFrameClipId !== clip.id;
             }
 
+            const tDraw = performance.now();
             if (needsDraw) {
               exportCtx.clearRect(0, 0, exportWidth, exportHeight);
               engine.drawBaseMedia(exportCtx, exportWidth, exportHeight, outTimeSec, externalFrame);
@@ -813,10 +1023,10 @@ export class VideoExporter {
               staticFrameClipId = isVideoClip ? null : clip.id;
             }
 
-            const videoFrame = new VideoFrame(exportCanvas, {
-              timestamp: Math.round(frameIdx * frameDurationUs),
-              duration: frameDurationUs,
-            });
+            if (needsDraw) i420Fresh = false;
+            const videoFrame = makeVideoFrame(Math.round(frameIdx * frameDurationUs), needsDraw);
+            stats.drawMs += performance.now() - tDraw;
+            const tEnc = performance.now();
             try {
               videoEncoder.encode(videoFrame, { keyFrame: frameIdx % (fps * 2) === 0 });
             } finally {
@@ -824,6 +1034,7 @@ export class VideoExporter {
             }
 
             await this.drainEncoder(videoEncoder, 6, signal);
+            stats.encodeMs += performance.now() - tEnc;
 
             const rawProgress = Math.min(0.97, (frameIdx + 1) / totalFrames);
             const pct = Math.floor(rawProgress * 100);
@@ -857,6 +1068,10 @@ export class VideoExporter {
 
       muxer.finalize();
       options?.onProgress?.(1);
+      stats.totalMs = performance.now() - tStart;
+      options?.onStats?.(stats);
+      // Teşhis için (QA harness): son export istatistiği
+      (globalThis as { __lastExportStats?: ExportStats }).__lastExportStats = stats;
 
       return new Blob([target.buffer], { type: 'video/mp4' });
     } finally {
