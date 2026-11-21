@@ -4,6 +4,7 @@ import {
   useCallback,
   useEffect,
   useLayoutEffect,
+  useMemo,
   useRef,
   useState,
   type ReactNode,
@@ -11,7 +12,7 @@ import {
 import { AtSign, ChevronLeft, Loader2, Search, UserRound, X } from "lucide-react";
 import { Sheet } from "./Sheet";
 import { useBackLayer } from "./hooks/useEditorBackStack";
-import { EMOJI_CATEGORIES } from "./emojiData";
+import { getRenderableEmojiCategories } from "./emojiData";
 
 /** A user that can be mentioned with the "@Bahset" sticker. */
 export interface MentionUser {
@@ -189,7 +190,8 @@ function StickerGrid({
   onPickEmoji: (emoji: string) => void;
 }) {
   const sectionRefs = useRef(new Map<string, HTMLElement>());
-  const [activeCat, setActiveCat] = useState(EMOJI_CATEGORIES[0].id);
+  const categories = useMemo(() => getRenderableEmojiCategories(), []);
+  const [activeCat, setActiveCat] = useState(categories[0]?.id ?? "");
 
   const tiles: Array<StickerSheetAction & { onTap: () => void }> = [
     ...(showMention
@@ -239,7 +241,7 @@ function StickerGrid({
       {/* Kategori sekmeleri (yapışkan) */}
       <div className="sticky top-0 z-10 bg-neutral-900/95 backdrop-blur-xl border-b border-white/5">
         <div className="flex overflow-x-auto no-scrollbar px-2" role="tablist" aria-label="Emoji kategorileri">
-          {EMOJI_CATEGORIES.map((c) => (
+          {categories.map((c) => (
             <button
               key={c.id}
               type="button"
@@ -257,7 +259,7 @@ function StickerGrid({
         </div>
       </div>
 
-      {EMOJI_CATEGORIES.map((c) => (
+      {categories.map((c) => (
         <section
           key={c.id}
           ref={(el) => {

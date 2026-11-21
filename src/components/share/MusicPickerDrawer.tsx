@@ -672,7 +672,7 @@ export default function MusicPickerDrawer({
 
   return (
     <EditorPortal>
-    <div className="fixed inset-0 z-sheet flex flex-col bg-neutral-950/98 text-white backdrop-blur-2xl animate-in slide-in-from-bottom duration-300 ease-out pt-safe pb-safe">
+    <div role="dialog" aria-modal="true" aria-label="Müzik Seç" className="fixed inset-0 z-sheet flex flex-col bg-neutral-950/98 text-white backdrop-blur-2xl animate-in slide-in-from-bottom duration-300 ease-out pt-safe pb-safe">
       {/* Görünmez Canlı Ses Akışı Oynatıcısı */}
       <audio
         ref={audioRef}
@@ -774,7 +774,8 @@ export default function MusicPickerDrawer({
             if (audioRef.current) audioRef.current.pause();
             onClose();
           }}
-          className="w-9 h-9 rounded-full bg-white/10 hover:bg-white/15 active:scale-95 text-white flex items-center justify-center transition-all"
+          aria-label="Müzik seçiciyi kapat"
+          className="w-11 h-11 rounded-full bg-white/10 hover:bg-white/15 active:scale-95 text-white flex items-center justify-center transition-all"
         >
           <ChevronDown className="w-5 h-5" />
         </button>
@@ -794,7 +795,7 @@ export default function MusicPickerDrawer({
             <Check className="w-3.5 h-3.5" />
           </button>
         ) : (
-          <div className="w-9 h-9" />
+          <div className="w-11 h-11" />
         )}
       </div>
 
@@ -813,6 +814,7 @@ export default function MusicPickerDrawer({
             <button
               type="button"
               onClick={() => handleSearchChange("")}
+              aria-label="Aramayı temizle"
               className="p-1 rounded-full text-zinc-400 hover:text-white"
             >
               <X className="w-3.5 h-3.5" />
@@ -837,6 +839,7 @@ export default function MusicPickerDrawer({
                 key={key}
                 type="button"
                 onClick={() => setActiveTab(key)}
+                aria-pressed={activeTab === key}
                 className={`py-1.5 rounded-xl text-[11px] font-bold transition-all truncate ${
                   activeTab === key
                     ? "bg-white text-black shadow-sm"
@@ -923,7 +926,9 @@ export default function MusicPickerDrawer({
                     e.stopPropagation();
                     toggleSavedTrack(track);
                   }}
-                  className="w-8 h-8 rounded-full flex items-center justify-center text-zinc-400 hover:text-white transition-all active:scale-90"
+                  aria-label={isSaved ? `Kaydedilenlerden çıkar: ${track.title}` : `Kaydet: ${track.title}`}
+                  aria-pressed={isSaved}
+                  className="w-11 h-11 rounded-full flex items-center justify-center text-zinc-400 hover:text-white transition-all active:scale-90"
                 >
                   <Heart
                     className={`w-4 h-4 ${isSaved ? "fill-pink-500 text-pink-500" : ""}`}
@@ -935,7 +940,8 @@ export default function MusicPickerDrawer({
                     e.stopPropagation();
                     if (!isSelected) handleSelectTrack(track);
                   }}
-                  className={`h-8 px-3 rounded-full flex items-center justify-center gap-1 text-[11px] font-bold transition-all active:scale-95 ${
+                  aria-label={isSelected ? `Seçili: ${track.title}` : `Kullan: ${track.title}`}
+                  className={`h-11 min-w-11 px-3 rounded-full flex items-center justify-center gap-1 text-[11px] font-bold transition-all active:scale-95 ${
                     isSelected
                       ? "bg-pink-500 text-white"
                       : "bg-white/10 text-white hover:bg-white/20"
@@ -985,6 +991,7 @@ export default function MusicPickerDrawer({
             <button
               type="button"
               onClick={togglePlayPause}
+              aria-label={isPlaying ? "Duraklat" : "Oynat"}
               className="w-11 h-11 rounded-full bg-white text-black flex items-center justify-center shrink-0 shadow-xl hover:bg-neutral-100 active:scale-95 transition-all"
             >
               {isAudioLoading ? (

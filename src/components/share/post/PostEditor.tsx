@@ -53,6 +53,10 @@ export interface PostEditorProps {
 }
 
 type Step = "crop" | "edit";
+
+// E-03: sayfa metin düzenlerken PostEditor kaldırılıp yeniden bağlanır; adımı motor başına hatırla
+// (yeni oturum = yeni motor = Kırp). WeakMap motor ömrünü aşmaz.
+const stepByEngine = new WeakMap<object, Step>();
 type EditTab = "filters" | "adjust";
 type ToolKey = Exclude<keyof PostAdjustmentState, "filterPreset">;
 
@@ -84,7 +88,14 @@ const iconBtn =
   "min-w-11 h-11 rounded-full flex items-center justify-center text-white bg-white/10 active:scale-90 transition-transform disabled:opacity-30";
 
 export default function PostEditor({ engine, canvas, isPublishing, onPublish, onLayout }: PostEditorProps) {
-  const [step, setStep] = useState<Step>("crop");
+  const [step, setStepState] = useState<Step>(() => stepByEngine.get(engine) ?? "crop");
+  const setStep = useCallback(
+    (next: Step) => {
+      stepByEngine.set(engine, next);
+      setStepState(next);
+    },
+    [engine]
+  );
   const [tab, setTab] = useState<EditTab>("filters");
   const [aspect, setAspect] = useState<PostAspect>(() => engine.getPostAspect());
   const [adj, setAdj] = useState<PostAdjustmentState>(() => engine.getPostAdjustments());
@@ -531,7 +542,7 @@ export default function PostEditor({ engine, canvas, isPublishing, onPublish, on
                     type="button"
                     aria-pressed={tab === id}
                     onClick={() => setTab(id)}
-                    className={`h-9 rounded-full text-xs font-bold transition-colors ${
+                    className={`relative h-9 rounded-full text-xs font-bold transition-colors after:absolute after:inset-x-0 after:-inset-y-[4px] after:content-[''] ${
                       tab === id ? "bg-white text-black" : "text-zinc-300"
                     }`}
                   >
@@ -568,7 +579,7 @@ export default function PostEditor({ engine, canvas, isPublishing, onPublish, on
                           type="button"
                           aria-pressed={selected}
                           onClick={() => setTool(t.key)}
-                          className={`relative h-9 px-3 rounded-full shrink-0 text-xs font-semibold border active:scale-95 transition-all ${
+                          className={`relative h-9 px-3 rounded-full shrink-0 after:absolute after:inset-x-0 after:-inset-y-[4px] after:content-[''] text-xs font-semibold border active:scale-95 transition-all ${
                             selected ? "bg-white text-black border-white" : "bg-white/5 text-zinc-200 border-white/10"
                           }`}
                         >

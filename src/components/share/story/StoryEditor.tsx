@@ -72,9 +72,32 @@ export default function StoryEditor({
 
   const [isVideo, setIsVideo] = useState(() => engine.getVideoState().isVideo);
   const [playing, setPlaying] = useState(() => engine.isPlaying());
+  const [videoVolume, setVideoVolume] = useState(() => {
+    const v = engine.getVideoState();
+    return v.muted ? 0 : v.volume;
+  });
   const [soundBlocked, setSoundBlocked] = useState(() => engine.needsUserGestureForSound());
   const [filterName, setFilterName] = useState<string | null>(null);
   const filterTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // BUG-28: filtreler yalnız yatay kaydırmayla açılır; ilk kullanımda kısa ipucu (bir kez)
+  const [filterHint, setFilterHint] = useState(false);
+  useEffect(() => {
+    let seen = false;
+    try {
+      seen = window.localStorage.getItem("story-filter-hint") === "1";
+      if (!seen) window.localStorage.setItem("story-filter-hint", "1");
+    } catch {
+      /* depolama yok: her açılışta göster */
+    }
+    if (seen) return;
+    const show = setTimeout(() => setFilterHint(true), 600);
+    const hide = setTimeout(() => setFilterHint(false), 4600);
+    return () => {
+      clearTimeout(show);
+      clearTimeout(hide);
+    };
+  }, []);
 
   const [dragging, setDragging] = useState(false);
   const [trashHot, setTrashHot] = useState(false);
@@ -187,7 +210,9 @@ export default function StoryEditor({
     offs.push(
       engine.on("video-time", () => {
         setPlaying(engine.isPlaying());
-        setIsVideo(engine.getVideoState().isVideo);
+        const vs = engine.getVideoState();
+        setIsVideo(vs.isVideo);
+        setVideoVolume(vs.muted ? 0 : vs.volume);
       })
     );
     offs.push(engine.on("music-change", (m: StoryAudioMeta | null) => onMusicChange(m)));
@@ -337,6 +362,12 @@ export default function StoryEditor({
     else openPicker("trim");
   };
 
+  // D-05: orijinal video sesi (0 = sessiz); motor önizlemeyi ve dışa aktarmayı bu değerle sürer
+  const handleVideoVolume = (v: number) => {
+    setVideoVolume(v);
+    engine.setVolume(v, v === 0);
+  };
+
   const unmute = () => {
     engine.unlockSound().catch(() => {});
     setSoundBlocked(engine.needsUserGestureForSound());
@@ -388,6 +419,16 @@ export default function StoryEditor({
           <div className="flex h-16 w-16 items-center justify-center rounded-full bg-black/45 backdrop-blur-md">
             <Play className="h-7 w-7 fill-white text-white" />
           </div>
+        </div>
+      )}
+
+      {/* Filtre ipucu (ilk kullanım) */}
+      {filterHint && !filterName && !overlayOpen && (
+        <div
+          role="status"
+          className="pointer-events-none fixed bottom-safe-20 left-1/2 z-chrome -translate-x-1/2 whitespace-nowrap rounded-full bg-black/60 px-4 py-2 text-xs font-semibold text-white backdrop-blur-md"
+        >
+          Filtreler için sağa veya sola kaydırın
         </div>
       )}
 
@@ -458,6 +499,8 @@ export default function StoryEditor({
             music={selectedMusic}
             volume={musicVolume}
             onChangeVolume={onMusicVolumeChange}
+            videoVolume={isVideo ? videoVolume : undefined}
+            onChangeVideoVolume={isVideo ? handleVideoVolume : undefined}
             onChangeMusic={(m) => {
               engine.setMusic(m);
               onMusicChange(m);

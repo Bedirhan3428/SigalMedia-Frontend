@@ -11,6 +11,9 @@ export interface MusicSettingsPanelProps {
   /** Music volume 0..1. */
   volume: number;
   onChangeVolume: (volume: number) => void;
+  /** Original video audio volume 0..1 (0 = muted). Omit when there is no video audio to control. */
+  videoVolume?: number;
+  onChangeVideoVolume?: (volume: number) => void;
   /** Fade in/out changes (returns the updated meta). */
   onChangeMusic: (music: StoryAudioMeta) => void;
   /** "Değiştir": open the picker to choose another song. */
@@ -37,6 +40,8 @@ export default function MusicSettingsPanel({
   music,
   volume,
   onChangeVolume,
+  videoVolume,
+  onChangeVideoVolume,
   onChangeMusic,
   onReplace,
   onTrim,
@@ -46,6 +51,7 @@ export default function MusicSettingsPanel({
   hideCloseButton = false,
 }: MusicSettingsPanelProps) {
   const volumePct = Math.round(Math.max(0, Math.min(1, volume)) * 100);
+  const videoPct = Math.round(Math.max(0, Math.min(1, videoVolume ?? 1)) * 100);
 
   const setFade = (key: "fadeIn" | "fadeOut", value: number) => {
     if ((music[key] || 0) === value) return;
@@ -115,9 +121,29 @@ export default function MusicSettingsPanel({
         </button>
       </div>
 
-      {/* Ses */}
+      {/* Orijinal video sesi */}
+      {onChangeVideoVolume && (
+        <div className="flex items-center gap-3 bg-[#16171b] rounded-2xl px-3.5 min-h-12">
+          <span className="text-xs font-medium text-zinc-400 w-12 shrink-0">Video</span>
+          <input
+            type="range"
+            min={0}
+            max={100}
+            value={videoPct}
+            onChange={(e) => onChangeVideoVolume(Number(e.target.value) / 100)}
+            aria-label="Orijinal video sesi"
+            className="editor-range flex-1 min-w-0"
+            style={{ "--range-pct": `${videoPct}%` } as CSSProperties}
+          />
+          <span className="text-xs font-semibold text-white w-10 text-right tabular-nums">
+            {videoPct}%
+          </span>
+        </div>
+      )}
+
+      {/* Müzik sesi */}
       <div className="flex items-center gap-3 bg-[#16171b] rounded-2xl px-3.5 min-h-12">
-        <span className="text-xs font-medium text-zinc-400 w-12 shrink-0">Ses</span>
+        <span className="text-xs font-medium text-zinc-400 w-12 shrink-0">Müzik</span>
         <input
           type="range"
           min={0}
