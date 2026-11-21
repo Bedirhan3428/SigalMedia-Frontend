@@ -2,7 +2,7 @@
 // [MODIFIED BY Bedirhan]
 "use client";
 
-import React, { useEffect, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { VolumeX, ArrowLeftRight, Plus, Check } from "lucide-react";
 import { VideoTrackClip } from "@/lib/canvas-editor";
 
@@ -17,7 +17,8 @@ export interface TimelineTrackClipsProps {
   onReorderClips: (fromIndex: number, toIndex: number) => void;
   onReorderModeChange?: (isReordering: boolean) => void;
   onAppendClipClick?: () => void;
-  onEdgeScroll?: (deltaPx: number) => void;
+  /** Gerçekte kaydırılan px döner (sınırda 0) — kırpma deltası kaymasın diye. */
+  onEdgeScroll?: (deltaPx: number) => number | void;
   onPanScroll?: (deltaPx: number) => void;
   onPauseVideo?: () => void;
   onSeek?: (time: number) => void;
@@ -34,6 +35,8 @@ type ClipDragState = {
   clipTimelineStart: number;
   playbackRate: number;
   isMotionPhoto?: boolean;
+  /** Önceki işaretçi x konumu: kenara otomatik kaydırma yalnızca kenara doğru hareketle tetiklenir. */
+  lastX?: number;
 };
 
 type TrimPreviewState = {
@@ -47,6 +50,224 @@ type TrimPreviewState = {
 
 const DRAG_THRESHOLD_PX = 8;
 const TILE_SLOT_PX = 74; // 64px (w-16) + 10px (gap-2.5)
+
+/** Kimliği sabit, her zaman son fonksiyonu çağıran geri çağrı (memo'lu klipler gereksiz çizilmesin). */
+function useStable<A extends unknown[], R>(fn: (...args: A) => R): (...args: A) => R {
+  const ref = useRef(fn);
+  useEffect(() => {
+    ref.current = fn;
+  });
+  return useCallback((...args: A) => ref.current(...args), []);
+}
+
+type ClipItemProps = {
+  clip: VideoTrackClip;
+  idx: number;
+  pps: number;
+  multi: boolean;
+  isSelected: boolean;
+  /** Yalnızca bu klip kırpılıyorsa dolu; diğer kliplerde null kalır (memo bozulmaz). */
+  preview: TrimPreviewState | null;
+  thumbnails: string[];
+  maxSourceDuration: number;
+  /** İlk birkaç klip IntersectionObserver gelmeden de küçük resimlerle çizilir. */
+  eager: boolean;
+  onBodyDown: (e: React.PointerEvent, clip: VideoTrackClip, idx: number) => void;
+  onBeginDrag: (
+    e: React.PointerEvent,
+    mode: ClipDragState["mode"],
+    clip: VideoTrackClip,
+    idx: number
+  ) => void;
+  onClipClick: (clipId: string) => void;
+};
+
+// Her klip kendi görünürlüğünü IntersectionObserver ile izler (kaydırma sırasında React state'i
+// güncellenmez). Görünür alanın ±1 ekran dışındaki kliplerde küçük resim şeridi çizilmez.
+const ClipItem = React.memo(function ClipItem({
+  clip,
+  idx,
+  pps,
+  multi,
+  isSelected,
+  preview,
+  thumbnails,
+  maxSourceDuration,
+  eager,
+  onBodyDown,
+  onBeginDrag,
+  onClipClick,
+}: ClipItemProps) {
+  const rootRef = useRef<HTMLDivElement | null>(null);
+  const [near, setNear] = useState<boolean>(eager);
+
+  useEffect(() => {
+    const el = rootRef.current;
+    if (!el || typeof IntersectionObserver === "undefined") {
+      setNear(true);
+      return;
+    }
+    const root = el.closest("[data-tl-scroll]") as HTMLElement | null;
+    const io = new IntersectionObserver(
+      (entries) => {
+        for (const en of entries) setNear(en.isIntersecting);
+      },
+      { root, rootMargin: "0px 100% 0px 100%" }
+    );
+    io.observe(el);
+    return () => io.disconnect();
+  }, []);
+
+  const clipThumbs = useMemo(
+    () =>
+      clip.isMotionPhoto
+        ? clip.thumbnailUrl
+          ? [clip.thumbnailUrl]
+          : thumbnails
+        : clip.thumbnails && clip.thumbnails.length > 1
+          ? clip.thumbnails
+          : thumbnails.length > 0
+            ? thumbnails
+            : clip.thumbnailUrl
+              ? [clip.thumbnailUrl]
+              : [],
+    [clip.isMotionPhoto, clip.thumbnailUrl, clip.thumbnails, thumbnails]
+  );
+
+  const rate = Math.max(0.25, clip.playbackRate || 1);
+  const effectiveDuration = preview
+    ? Math.max(0.2, (preview.previewSourceEnd - preview.previewSourceStart) / rate)
+    : clip.duration;
+  const widthPx = Math.max(28, Math.round(effectiveDuration * pps));
+  const leftGapPx = preview ? preview.leftGapPx : 0;
+  const rightGapPx = preview ? preview.rightGapPx : 0;
+
+  const rawMediaDur = Math.max(clip.sourceEnd, clip.media?.duration || maxSourceDuration || 1);
+  const activeSourceStart = preview ? preview.previewSourceStart : clip.sourceStart;
+  const activeSourceEnd = preview ? preview.previewSourceEnd : clip.sourceEnd;
+  const startRatio = Math.max(0, Math.min(1, activeSourceStart / rawMediaDur));
+  const endRatio = Math.max(startRatio, Math.min(1, activeSourceEnd / rawMediaDur));
+  const thumbCount = Math.max(1, Math.min(16, Math.ceil(widthPx / 42)));
+  const showThumbs = near || isSelected || preview !== null;
+
+  return (
+    <div
+      className="flex items-center shrink-0 transition-[margin] duration-150"
+      style={{
+        marginLeft: leftGapPx > 0 ? `${leftGapPx}px` : "0px",
+        marginRight: rightGapPx > 0 ? `${rightGapPx}px` : "0px",
+      }}
+    >
+      <div
+        ref={rootRef}
+        onClick={(e) => {
+          e.stopPropagation();
+          onClipClick(clip.id);
+        }}
+        onPointerDown={(e) => onBodyDown(e, clip, idx)}
+        className={`relative h-14 rounded overflow-visible cursor-pointer shrink-0 ${
+          isSelected ? "z-20" : "z-10"
+        }`}
+        style={{ width: `${widthPx}px` }}
+      >
+        {/* İç Film Şeridi Konteyneri (1px yan boşluk klipler arası ayrımı verir; zaman ölçeği birebir kalır) */}
+        <div
+          className={`h-full mx-px rounded overflow-hidden relative flex bg-zinc-900 border-2 transition-colors ${
+            isSelected
+              ? "border-amber-400 shadow-[0_0_0_1px_rgba(251,191,36,0.45)]"
+              : "border-white/15 hover:border-white/30"
+          }`}
+        >
+          {clipThumbs.length > 0 ? (
+            showThumbs ? (
+              Array.from({ length: thumbCount }).map((_, tIdx) => {
+                const ratio =
+                  thumbCount <= 1
+                    ? startRatio
+                    : startRatio + (tIdx / (thumbCount - 1)) * (endRatio - startRatio);
+                const frameIdx = Math.min(
+                  clipThumbs.length - 1,
+                  Math.max(0, Math.floor(ratio * clipThumbs.length))
+                );
+                return (
+                  <img
+                    key={tIdx}
+                    src={clipThumbs[frameIdx]}
+                    alt=""
+                    draggable={false}
+                    loading="lazy"
+                    decoding="async"
+                    className="h-full flex-1 object-cover pointer-events-none select-none opacity-90"
+                  />
+                );
+              })
+            ) : (
+              <div className="w-full h-full" />
+            )
+          ) : (
+            <div className="w-full h-full bg-gradient-to-r from-zinc-800 via-zinc-700 to-zinc-800" />
+          )}
+
+          <div className="absolute inset-0 bg-gradient-to-t from-black/55 via-transparent to-black/25 pointer-events-none" />
+
+          {/* Klip Etiket ve Bilgi Rozetleri */}
+          <div className="absolute left-2.5 bottom-1.5 flex items-center gap-1.5 pointer-events-none">
+            <span className="px-1.5 py-0.5 rounded bg-black/65 text-[10px] font-bold text-white tabular-nums">
+              {effectiveDuration.toFixed(1)}s
+            </span>
+            {Math.abs((clip.playbackRate || 1) - 1) > 0.01 && (
+              <span className="px-1.5 py-0.5 rounded bg-amber-400 text-black text-[9px] font-extrabold tabular-nums">
+                {clip.playbackRate}x
+              </span>
+            )}
+            {clip.muted && !clip.isMotionPhoto && (
+              <span className="p-0.5 rounded bg-black/65 text-red-400">
+                <VolumeX className="w-2.5 h-2.5" />
+              </span>
+            )}
+          </div>
+
+          {/* Çoklu klip varsa sıra değiştirme tutamacı */}
+          {isSelected && multi && (
+            <div
+              onClick={(e) => e.stopPropagation()}
+              onPointerDown={(e) => onBeginDrag(e, "reorder", clip, idx)}
+              className="absolute top-1 right-2.5 px-1.5 py-0.5 rounded bg-black/75 border border-white/20 text-[9px] font-semibold text-zinc-200 flex items-center gap-1 cursor-grab active:cursor-grabbing z-20 touch-none"
+            >
+              <ArrowLeftRight className="w-2.5 h-2.5 text-amber-400" />
+              <span>Sırala</span>
+            </div>
+          )}
+        </div>
+
+        {/* Seçili Klip Sol ve Sağ Kırpma Kulakçıkları (Trim Handles).
+            Tutamaçların ek dokunma alanı yalnızca DIŞARI doğru uzar: kısa klipte iki tutamaç
+            birbirinin alanını örtmez (sol sol yarıyı, sağ sağ yarıyı alır). */}
+        {isSelected && (
+          <>
+            <div
+              onClick={(e) => e.stopPropagation()}
+              onPointerDown={(e) => onBeginDrag(e, "trim-left", clip, idx)}
+              className="absolute left-0 top-0 bottom-0 w-3.5 rounded-l bg-amber-400 before:absolute before:content-[''] before:-left-3 before:right-0 before:inset-y-0 flex items-center justify-center cursor-ew-resize z-30 shadow-lg touch-none"
+              style={{ top: 0, bottom: 0, height: "100%" }}
+            >
+              <div className="w-[2px] h-5 rounded-full bg-black/80" />
+            </div>
+
+            <div
+              onClick={(e) => e.stopPropagation()}
+              onPointerDown={(e) => onBeginDrag(e, "trim-right", clip, idx)}
+              className="absolute right-0 top-0 bottom-0 w-3.5 rounded-r bg-amber-400 before:absolute before:content-[''] before:left-0 before:-right-3 before:inset-y-0 flex items-center justify-center cursor-ew-resize z-30 shadow-lg touch-none"
+              style={{ top: 0, bottom: 0, height: "100%" }}
+            >
+              <div className="w-[2px] h-5 rounded-full bg-black/80" />
+            </div>
+          </>
+        )}
+      </div>
+    </div>
+  );
+});
 
 function TimelineTrackClips({
   clips,
@@ -167,6 +388,26 @@ function TimelineTrackClips({
     }
   };
 
+  const stableBeginDrag = useStable(
+    (e: React.PointerEvent, mode: ClipDragState["mode"], clip: VideoTrackClip, idx: number) =>
+      beginClipDrag(e, {
+        mode,
+        clipId: clip.id,
+        clipIndex: idx,
+        startX: e.clientX,
+        lastX: e.clientX,
+        initSourceStart: clip.sourceStart,
+        initSourceEnd: clip.sourceEnd,
+        clipTimelineStart: getClipTimelineStart(idx),
+        playbackRate: clip.playbackRate || 1,
+        isMotionPhoto: clip.isMotionPhoto,
+      })
+  );
+  const stableClipClick = useStable((clipId: string) => {
+    if (suppressClipClickRef.current) return;
+    onSelectClip(clipId);
+  });
+
   // Sıralama modundayken herhangi bir 1:1 karoya dokunulduğunda 0ms gecikmeyle anında sürükleme başlatır
   const handleTilePointerDown = (
     e: React.PointerEvent,
@@ -245,6 +486,11 @@ function TimelineTrackClips({
     }, 350);
   };
 
+  const stableBodyDown = useStable(
+    (e: React.PointerEvent, clip: VideoTrackClip, idx: number) =>
+      handleClipBodyPointerDown(e, clip, idx)
+  );
+
   // Trim sürüklemesi: durum + seek her karede en fazla bir kez (rAF, son değer kazanır)
   const trimFlushRafRef = useRef<number | null>(null);
   const trimFlushRef = useRef<{ preview: TrimPreviewState; seekSec: number } | null>(null);
@@ -259,6 +505,65 @@ function TimelineTrackClips({
       setTrimPreview(f.preview);
       onSeek?.(f.seekSec);
     });
+  };
+
+  // Parmak/fare konumundan kırpma önizlemesi. Eşik yalnızca sürüklemeyi başlatır; başladıktan sonra
+  // tutamaç parmağın altında kalır (piksel -> zaman: dx / pps, ölçekten bağımsız 1:1).
+  const computeTrim = (
+    st: ClipDragState,
+    dxPx: number
+  ): { preview: TrimPreviewState; seekSec: number } | null => {
+    if (st.mode !== "trim-left" && st.mode !== "trim-right") return null;
+    if (Math.abs(dxPx) < DRAG_THRESHOLD_PX) return null; // Eşik aşılana kadar süre ve önizleme kaymaz
+
+    const rate = Math.max(0.25, st.playbackRate || 1.0);
+    const dtTimelineSec = dxPx / Math.max(20, pps);
+    const dtSourceSec = dtTimelineSec * rate;
+    const clipObj = clips.find((c) => c.id === st.clipId);
+    const clipMediaDur = clipObj?.media?.duration || maxSourceDuration || 60;
+    const maxAllowedSource = st.isMotionPhoto
+      ? 60
+      : Math.max(0.5, clipMediaDur, st.initSourceEnd + 30);
+    const initDurSec = (st.initSourceEnd - st.initSourceStart) / rate;
+
+    if (st.mode === "trim-left") {
+      const nextStart = Number(
+        Math.max(0, Math.min(st.initSourceStart + dtSourceSec, st.initSourceEnd - 0.3)).toFixed(2)
+      );
+      const nextDurSec = Math.max(0.2, (st.initSourceEnd - nextStart) / rate);
+      const shrunkSec = Math.max(0, initDurSec - nextDurSec);
+      return {
+        preview: {
+          clipId: st.clipId,
+          mode: "trim-left",
+          previewSourceStart: nextStart,
+          previewSourceEnd: st.initSourceEnd,
+          leftGapPx: Math.round(shrunkSec * pps),
+          rightGapPx: 0,
+        },
+        seekSec: Number(Math.max(0, st.clipTimelineStart + shrunkSec).toFixed(2)),
+      };
+    }
+
+    const nextEnd = Number(
+      Math.max(
+        st.initSourceStart + 0.3,
+        Math.min(st.initSourceEnd + dtSourceSec, maxAllowedSource)
+      ).toFixed(2)
+    );
+    const nextDurSec = Math.max(0.2, (nextEnd - st.initSourceStart) / rate);
+    const shrunkSec = Math.max(0, initDurSec - nextDurSec);
+    return {
+      preview: {
+        clipId: st.clipId,
+        mode: "trim-right",
+        previewSourceStart: st.initSourceStart,
+        previewSourceEnd: nextEnd,
+        leftGapPx: 0,
+        rightGapPx: Math.round(shrunkSec * pps),
+      },
+      seekSec: Number(Math.max(0, st.clipTimelineStart + nextDurSec).toFixed(2)),
+    };
   };
 
   const handlePointerMove = (e: React.PointerEvent) => {
@@ -294,77 +599,26 @@ function TimelineTrackClips({
       onEdgeScroll
     ) {
       const edgeZone = 48;
-      if (e.clientX > window.innerWidth - edgeZone) {
-        onEdgeScroll(10);
-        st.startX -= 10;
-      } else if (e.clientX < edgeZone) {
-        onEdgeScroll(-10);
-        st.startX += 10;
+      const prevX = st.lastX ?? e.clientX;
+      st.lastX = e.clientX;
+      // Kenar bölgesinde parmak kenardan uzaklaşırken kaydırma yapılmaz (kırpma parmağı 1:1 izler)
+      if (e.clientX > window.innerWidth - edgeZone && e.clientX >= prevX) {
+        const moved = onEdgeScroll(10);
+        st.startX -= typeof moved === "number" ? moved : 10;
+      } else if (e.clientX < edgeZone && e.clientX <= prevX) {
+        const moved = onEdgeScroll(-10);
+        st.startX -= typeof moved === "number" ? moved : -10;
       }
     }
 
     const dxPx = e.clientX - st.startX;
 
     if (st.mode === "trim-left" || st.mode === "trim-right") {
-      if (Math.abs(dxPx) < DRAG_THRESHOLD_PX) {
-        return; // Eşik aşılana kadar süre ve önizleme kaymaz
+      const res = computeTrim(st, dxPx);
+      if (res) {
+        trimPreviewRef.current = res.preview;
+        scheduleTrimFlush(res.preview, res.seekSec);
       }
-    }
-
-    const rate = Math.max(0.25, st.playbackRate || 1.0);
-    const effectiveDx =
-      dxPx > 0 ? dxPx - DRAG_THRESHOLD_PX : dxPx + DRAG_THRESHOLD_PX;
-    const dtTimelineSec = effectiveDx / Math.max(20, pps);
-    const dtSourceSec = dtTimelineSec * rate;
-    const clipObj = clips.find((c) => c.id === st.clipId);
-    const clipMediaDur = clipObj?.media?.duration || maxSourceDuration || 60;
-    const maxAllowedSource = st.isMotionPhoto
-      ? 60
-      : Math.max(0.5, clipMediaDur, st.initSourceEnd + 30);
-    const initDurSec = (st.initSourceEnd - st.initSourceStart) / rate;
-
-    if (st.mode === "trim-left") {
-      const nextStart = Number(
-        Math.max(0, Math.min(st.initSourceStart + dtSourceSec, st.initSourceEnd - 0.3)).toFixed(2)
-      );
-      const nextDurSec = Math.max(0.2, (st.initSourceEnd - nextStart) / rate);
-      const shrunkSec = Math.max(0, initDurSec - nextDurSec);
-      const leftGapPx = Math.round(shrunkSec * pps);
-
-      const nextPreview: TrimPreviewState = {
-        clipId: st.clipId,
-        mode: "trim-left",
-        previewSourceStart: nextStart,
-        previewSourceEnd: st.initSourceEnd,
-        leftGapPx,
-        rightGapPx: 0,
-      };
-      trimPreviewRef.current = nextPreview;
-      scheduleTrimFlush(nextPreview, Number(Math.max(0, st.clipTimelineStart + shrunkSec).toFixed(2)));
-      return;
-    }
-
-    if (st.mode === "trim-right") {
-      const nextEnd = Number(
-        Math.max(
-          st.initSourceStart + 0.3,
-          Math.min(st.initSourceEnd + dtSourceSec, maxAllowedSource)
-        ).toFixed(2)
-      );
-      const nextDurSec = Math.max(0.2, (nextEnd - st.initSourceStart) / rate);
-      const shrunkSec = Math.max(0, initDurSec - nextDurSec);
-      const rightGapPx = Math.round(shrunkSec * pps);
-
-      const nextPreview: TrimPreviewState = {
-        clipId: st.clipId,
-        mode: "trim-right",
-        previewSourceStart: st.initSourceStart,
-        previewSourceEnd: nextEnd,
-        leftGapPx: 0,
-        rightGapPx,
-      };
-      trimPreviewRef.current = nextPreview;
-      scheduleTrimFlush(nextPreview, Number(Math.max(0, st.clipTimelineStart + nextDurSec).toFixed(2)));
       return;
     }
 
@@ -400,7 +654,8 @@ function TimelineTrackClips({
     const cpr = clipPressRef.current;
     if (cpr) {
       if (!cpr.hasMoved) {
-        e.stopPropagation();
+        // stopPropagation YOK: kapsayıcının pan durumu (pointerPanRef / isPointerDownRef) bu pointerup ile
+        // sıfırlanmalı; aksi halde bayat durum sonraki ilk kırpma sürüklemesini timeline kaydırmasına çevirir (B-03).
         onPauseVideo?.();
         onSelectClip(cpr.clipId);
         suppressClipClickRef.current = true;
@@ -421,7 +676,11 @@ function TimelineTrackClips({
     e.stopPropagation();
     releaseOnRoot(e.pointerId);
 
-    const activePreview = trimPreviewRef.current;
+    let activePreview = trimPreviewRef.current;
+    if (e.type === "pointerup" && (st.mode === "trim-left" || st.mode === "trim-right")) {
+      const fin = computeTrim(st, e.clientX - st.startX);
+      if (fin) activePreview = fin.preview;
+    }
     if (trimFlushRafRef.current !== null) {
       cancelAnimationFrame(trimFlushRafRef.current);
       trimFlushRafRef.current = null;
@@ -556,203 +815,24 @@ function TimelineTrackClips({
       ) : (
         /* NORMAL MANYETİK ANA VİDEO KANALI + SONDAKİ [+] KLİP EKLEME BUTONU */
         <div className="flex items-center h-14">
-          <div className="flex items-center h-14 gap-[2px] bg-black/80 rounded transition-all duration-180 ease-[cubic-bezier(0.22,1,0.36,1)]">
-            {clips.map((clip, idx) => {
-              const isTrimmingThis = trimPreview?.clipId === clip.id;
-              const rate = Math.max(0.25, clip.playbackRate || 1);
-              const effectiveDuration = isTrimmingThis
-                ? Math.max(
-                    0.2,
-                    (trimPreview.previewSourceEnd - trimPreview.previewSourceStart) / rate
-                  )
-                : clip.duration;
-              const widthPx = Math.max(28, Math.round(effectiveDuration * pps));
-              const leftGapPx = isTrimmingThis ? trimPreview.leftGapPx : 0;
-              const rightGapPx = isTrimmingThis ? trimPreview.rightGapPx : 0;
-
-              const isSelected = selectedClipId === clip.id;
-              const clipThumbs = clip.isMotionPhoto
-                ? clip.thumbnailUrl
-                  ? [clip.thumbnailUrl]
-                  : thumbnails
-                : clip.thumbnails && clip.thumbnails.length > 1
-                  ? clip.thumbnails
-                  : thumbnails.length > 0
-                    ? thumbnails
-                    : clip.thumbnailUrl
-                      ? [clip.thumbnailUrl]
-                      : [];
-              const rawMediaDur = Math.max(
-                clip.sourceEnd,
-                clip.media?.duration || maxSourceDuration || 1
-              );
-              const activeSourceStart = isTrimmingThis
-                ? trimPreview.previewSourceStart
-                : clip.sourceStart;
-              const activeSourceEnd = isTrimmingThis
-                ? trimPreview.previewSourceEnd
-                : clip.sourceEnd;
-              const startRatio = Math.max(
-                0,
-                Math.min(1, activeSourceStart / rawMediaDur)
-              );
-              const endRatio = Math.max(
-                startRatio,
-                Math.min(1, activeSourceEnd / rawMediaDur)
-              );
-              const thumbCount = Math.max(
-                1,
-                Math.min(16, Math.ceil(widthPx / 42))
-              );
-
-              return (
-                <div
-                  key={clip.id}
-                  className="flex items-center shrink-0 transition-[margin] duration-150"
-                  style={{
-                    marginLeft: leftGapPx > 0 ? `${leftGapPx}px` : "0px",
-                    marginRight: rightGapPx > 0 ? `${rightGapPx}px` : "0px",
-                  }}
-                >
-                  <div
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      if (suppressClipClickRef.current) return;
-                      onSelectClip(clip.id);
-                    }}
-                    onPointerDown={(e) => handleClipBodyPointerDown(e, clip, idx)}
-                    className="relative h-14 rounded overflow-visible cursor-pointer shrink-0 z-10"
-                    style={{ width: `${widthPx}px` }}
-                  >
-                    {/* İç Film Şeridi Konteyneri */}
-                    <div
-                      className={`w-full h-full rounded overflow-hidden relative flex bg-zinc-900 border-2 transition-colors ${
-                        isSelected
-                          ? "border-amber-400 shadow-[0_0_0_1px_rgba(251,191,36,0.45)]"
-                          : "border-white/15 hover:border-white/30"
-                      }`}
-                    >
-                      {clipThumbs.length > 0 ? (
-                        Array.from({ length: thumbCount }).map((_, tIdx) => {
-                          const ratio =
-                            thumbCount <= 1
-                              ? startRatio
-                              : startRatio +
-                                (tIdx / (thumbCount - 1)) * (endRatio - startRatio);
-                          const frameIdx = Math.min(
-                            clipThumbs.length - 1,
-                            Math.max(0, Math.floor(ratio * clipThumbs.length))
-                          );
-                          const src = clipThumbs[frameIdx];
-                          return (
-                            <img
-                              key={tIdx}
-                              src={src}
-                              alt=""
-                              draggable={false}
-                              className="h-full flex-1 object-cover pointer-events-none select-none opacity-90"
-                            />
-                          );
-                        })
-                      ) : (
-                        <div className="w-full h-full bg-gradient-to-r from-zinc-800 via-zinc-700 to-zinc-800" />
-                      )}
-
-                      <div className="absolute inset-0 bg-gradient-to-t from-black/55 via-transparent to-black/25 pointer-events-none" />
-
-                      {/* Klip Etiket ve Bilgi Rozetleri */}
-                      <div className="absolute left-2.5 bottom-1.5 flex items-center gap-1.5 pointer-events-none">
-                        <span className="px-1.5 py-0.5 rounded bg-black/65 text-[10px] font-bold text-white tabular-nums">
-                          {effectiveDuration.toFixed(1)}s
-                        </span>
-                        {Math.abs((clip.playbackRate || 1) - 1) > 0.01 && (
-                          <span className="px-1.5 py-0.5 rounded bg-amber-400 text-black text-[9px] font-extrabold tabular-nums">
-                            {clip.playbackRate}x
-                          </span>
-                        )}
-                        {clip.muted && !clip.isMotionPhoto && (
-                          <span className="p-0.5 rounded bg-black/65 text-red-400">
-                            <VolumeX className="w-2.5 h-2.5" />
-                          </span>
-                        )}
-                      </div>
-
-                      {/* Çoklu klip varsa sıra değiştirme tutamacı */}
-                      {isSelected && clips.length > 1 && (
-                        <div
-                          onClick={(e) => e.stopPropagation()}
-                          onPointerDown={(e) =>
-                            beginClipDrag(e, {
-                              mode: "reorder",
-                              clipId: clip.id,
-                              clipIndex: idx,
-                              startX: e.clientX,
-                              initSourceStart: clip.sourceStart,
-                              initSourceEnd: clip.sourceEnd,
-                              clipTimelineStart: getClipTimelineStart(idx),
-                              playbackRate: clip.playbackRate || 1,
-                              isMotionPhoto: clip.isMotionPhoto,
-                            })
-                          }
-                          className="absolute top-1 right-2.5 px-1.5 py-0.5 rounded bg-black/75 border border-white/20 text-[9px] font-semibold text-zinc-200 flex items-center gap-1 cursor-grab active:cursor-grabbing z-20 touch-none"
-                        >
-                          <ArrowLeftRight className="w-2.5 h-2.5 text-amber-400" />
-                          <span>Sırala</span>
-                        </div>
-                      )}
-                    </div>
-
-                    {/* Seçili Klip Sol ve Sağ Kırpma Kulakçıkları (Trim Handles) */}
-                    {isSelected && (
-                      <>
-                        <div
-                          onClick={(e) => e.stopPropagation()}
-                          onPointerDown={(e) =>
-                            beginClipDrag(e, {
-                              mode: "trim-left",
-                              clipId: clip.id,
-                              clipIndex: idx,
-                              startX: e.clientX,
-                              initSourceStart: clip.sourceStart,
-                              initSourceEnd: clip.sourceEnd,
-                              clipTimelineStart: getClipTimelineStart(idx),
-                              playbackRate: clip.playbackRate || 1,
-                              isMotionPhoto: clip.isMotionPhoto,
-                            })
-                          }
-                          className="absolute left-0 top-0 bottom-0 w-3.5 rounded-l bg-amber-400 before:absolute before:content-[''] before:-inset-x-2.5 before:inset-y-0 flex items-center justify-center cursor-ew-resize z-30 shadow-lg touch-none"
-                          style={{ top: 0, bottom: 0, height: "100%" }}
-                        >
-                          <div className="w-[2px] h-5 rounded-full bg-black/80" />
-                        </div>
-
-                        <div
-                          onClick={(e) => e.stopPropagation()}
-                          onPointerDown={(e) =>
-                            beginClipDrag(e, {
-                              mode: "trim-right",
-                              clipId: clip.id,
-                              clipIndex: idx,
-                              startX: e.clientX,
-                              initSourceStart: clip.sourceStart,
-                              initSourceEnd: clip.sourceEnd,
-                              clipTimelineStart: getClipTimelineStart(idx),
-                              playbackRate: clip.playbackRate || 1,
-                              isMotionPhoto: clip.isMotionPhoto,
-                            })
-                          }
-                          className="absolute right-0 top-0 bottom-0 w-3.5 rounded-r bg-amber-400 before:absolute before:content-[''] before:-inset-x-2.5 before:inset-y-0 flex items-center justify-center cursor-ew-resize z-30 shadow-lg touch-none"
-                          style={{ top: 0, bottom: 0, height: "100%" }}
-                        >
-                          <div className="w-[2px] h-5 rounded-full bg-black/80" />
-                        </div>
-                      </>
-                    )}
-                  </div>
-                </div>
-              );
-            })}
-          </div>
+          <div className="relative flex items-center h-14 bg-black/80 rounded transition-all duration-180 ease-[cubic-bezier(0.22,1,0.36,1)]">
+            {clips.map((clip, idx) => (
+              <ClipItem
+                key={clip.id}
+                clip={clip}
+                idx={idx}
+                pps={pps}
+                multi={clips.length > 1}
+                isSelected={selectedClipId === clip.id}
+                preview={trimPreview?.clipId === clip.id ? trimPreview : null}
+                thumbnails={thumbnails}
+                maxSourceDuration={maxSourceDuration}
+                eager={idx < 3}
+                onBodyDown={stableBodyDown}
+                onBeginDrag={stableBeginDrag}
+                onClipClick={stableClipClick}
+              />
+            ))}
 
           {/* ANA BARIN SONUNA YENİ KLİP / GÖRSEL EKLEME [+] BUTONU */}
           {onAppendClipClick && (
@@ -763,11 +843,12 @@ function TimelineTrackClips({
                 onPauseVideo?.();
                 onAppendClipClick();
               }}
-              className="ml-2.5 w-11 h-11 rounded-xl bg-[#1c1c1e] hover:bg-[#28282d] border border-white/15 active:scale-95 transition-all flex items-center justify-center text-white shadow-md shrink-0"
+              className="absolute left-full top-1/2 -translate-y-1/2 ml-2.5 w-11 h-11 rounded-xl bg-[#1c1c1e] hover:bg-[#28282d] border border-white/15 active:scale-95 transition-all flex items-center justify-center text-white shadow-md shrink-0"
             >
               <Plus className="w-5 h-5 text-white" />
             </button>
           )}
+          </div>
         </div>
       )}
     </div>
