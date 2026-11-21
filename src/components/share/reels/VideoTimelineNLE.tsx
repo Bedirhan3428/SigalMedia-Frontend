@@ -402,6 +402,7 @@ function VideoTimelineNLE({
           <button
             type="button"
             onClick={onTogglePlay}
+            aria-label={isPlaying ? "Duraklat" : "Oynat"}
             className="w-11 h-11 rounded-full bg-[#1c1c1e] hover:bg-[#28282d] active:scale-90 transition-all flex items-center justify-center text-white shadow"
           >
             {isPlaying ? (
@@ -428,7 +429,8 @@ function VideoTimelineNLE({
               onPauseVideo?.();
               setPps((p) => Math.max(40, p - 10));
             }}
-            className="w-11 h-11 rounded-full bg-[#1c1c1e] hover:bg-[#28282d] active:scale-90 transition-all flex items-center justify-center text-zinc-300"
+            aria-label="Uzaklaştır"
+            className="max-[359px]:hidden w-11 h-11 rounded-full bg-[#1c1c1e] hover:bg-[#28282d] active:scale-90 transition-all flex items-center justify-center text-zinc-300"
           >
             <ZoomOut className="w-3.5 h-3.5" />
           </button>
@@ -438,7 +440,8 @@ function VideoTimelineNLE({
               onPauseVideo?.();
               setPps((p) => Math.min(100, p + 10));
             }}
-            className="w-11 h-11 rounded-full bg-[#1c1c1e] hover:bg-[#28282d] active:scale-90 transition-all flex items-center justify-center text-zinc-300"
+            aria-label="Yakınlaştır"
+            className="max-[359px]:hidden w-11 h-11 rounded-full bg-[#1c1c1e] hover:bg-[#28282d] active:scale-90 transition-all flex items-center justify-center text-zinc-300"
           >
             <ZoomIn className="w-3.5 h-3.5" />
           </button>
@@ -451,6 +454,7 @@ function VideoTimelineNLE({
               onUndo();
             }}
             disabled={!canUndo}
+            aria-label="Geri al"
             className="w-11 h-11 rounded-full bg-[#1c1c1e] hover:bg-[#28282d] disabled:opacity-35 active:scale-90 transition-all flex items-center justify-center text-zinc-200"
           >
             <Undo2 className="w-3.5 h-3.5" />
@@ -462,6 +466,7 @@ function VideoTimelineNLE({
               onRedo();
             }}
             disabled={!canRedo}
+            aria-label="Yinele"
             className="w-11 h-11 rounded-full bg-[#1c1c1e] hover:bg-[#28282d] disabled:opacity-35 active:scale-90 transition-all flex items-center justify-center text-zinc-200"
           >
             <Redo2 className="w-3.5 h-3.5" />
