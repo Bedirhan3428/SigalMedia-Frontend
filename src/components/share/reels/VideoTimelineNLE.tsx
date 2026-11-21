@@ -155,6 +155,17 @@ function VideoTimelineNLE({
     };
   }, [currentTime, getCurrentTime, isPlaying, syncScrollToTimeAnalog]);
 
+  // Scrub seek'i: karede en fazla bir kez (çağıranlar rAF içinde), bir kareden (~33ms) küçük değişimde atlanır
+  // Scrub seek'i: çağıranlar rAF içinde (karede en fazla bir kez). Hızlı ardışık seek'ler tarayıcıda
+  // birbirini iptal eder (yalnızca sonuncusu çizilir); seek aralığı büyütülürse her seek tamamlanıp
+  // tuvale kare çizdirdiği için long task sayısı ARTAR (ölçüldü) — bu yüzden aralık sınırı konmaz.
+  const seekScrub = useCallback(
+    (sec: number) => {
+      onSeek(Number(sec.toFixed(3)));
+    },
+    [onSeek]
+  );
+
   // Kullanıcı parmağıyla timeline'ı kaydırdığında anlıkSaniye = scrollLeft / PPS ve anında otomatik duraklatma
   const handleScroll = () => {
     const el = scrollContainerRef.current;
@@ -198,7 +209,7 @@ function VideoTimelineNLE({
     }
     scrollRafIdRef.current = requestAnimationFrame(() => {
       scrollRafIdRef.current = null;
-      onSeek(Number(scrubbedSec.toFixed(3)));
+      seekScrub(scrubbedSec);
     });
   };
 
@@ -223,7 +234,7 @@ function VideoTimelineNLE({
       }
       scrollRafIdRef.current = requestAnimationFrame(() => {
         scrollRafIdRef.current = null;
-        onSeek(Number(scrubbedSec.toFixed(3)));
+        seekScrub(scrubbedSec);
       });
 
       if (scrollIdleTimerRef.current) clearTimeout(scrollIdleTimerRef.current);
@@ -233,7 +244,7 @@ function VideoTimelineNLE({
         }
       }, 250);
     },
-    [isPlaying, onPauseVideo, onSeek, pps, safeTotal]
+    [isPlaying, onPauseVideo, seekScrub, pps, safeTotal]
   );
 
   const pointerPanRef = useRef<{
@@ -262,6 +273,11 @@ function VideoTimelineNLE({
     if (!pp || !el || handleDraggingRef.current) return;
     // Dokunmatik kaydırmayı tarayıcı yapar; elle kaydırma yalnızca fare için (C3)
     if (e.pointerType !== "mouse") return;
+    // Basılı düğme yoksa bayat bir pan durumudur (pointerup başka bir öğede yutulmuş olabilir)
+    if (e.buttons === 0) {
+      pointerPanRef.current = null;
+      return;
+    }
 
     const dx = e.clientX - pp.startX;
     if (!pp.isPanning && Math.abs(dx) >= 6) {
@@ -279,7 +295,7 @@ function VideoTimelineNLE({
       }
       scrollRafIdRef.current = requestAnimationFrame(() => {
         scrollRafIdRef.current = null;
-        onSeek(Number(scrubbedSec.toFixed(3)));
+        seekScrub(scrubbedSec);
       });
     }
   };
@@ -343,8 +359,10 @@ function VideoTimelineNLE({
     handleDragTimerRef.current = setTimeout(() => {
       handleDraggingRef.current = false;
     }, 180);
+    const before = el.scrollLeft;
     programmaticScrollRef.current = true;
-    el.scrollLeft = Math.max(0, el.scrollLeft + deltaPx);
+    el.scrollLeft = Math.max(0, before + deltaPx);
+    return el.scrollLeft - before;
   }, []);
 
   const handleSelectClip = useCallback(
@@ -453,7 +471,10 @@ function VideoTimelineNLE({
 
       {/* 2. Sabit Merkez İbreli (Fixed Center Playhead) ve 50vw Boşluklu 60 FPS Analog Kayar Konteyner */}
       {/* Panel max-height'ı (42dvh) aşınca kanallar buradan taşmaz, içeride kayar (A5) */}
-      <div className="relative w-full flex-1 min-h-[104px] flex flex-col overflow-hidden bg-[#0b0c0e] border-y border-white/10 py-2">
+      <div
+        className="relative w-full flex-1 min-h-[104px] flex flex-col overflow-hidden bg-[#0b0c0e] border-y border-white/10 py-2"
+        style={{ containerType: "inline-size" }}
+      >
         {/* SABİT MERKEZ PLAYHEAD (left: 50%, üstte yuvarlak başlık + dikey beyaz ibre) */}
         {!isClipReordering && (
           <div className="pointer-events-none absolute top-0 bottom-0 left-1/2 -translate-x-1/2 z-40 flex flex-col items-center">
@@ -464,6 +485,7 @@ function VideoTimelineNLE({
         {/* Yatay Kaydırılabilir 50vw Sol / 50vw Sağ Boşluklu Çok Kanallı Alan */}
         <div
           ref={scrollContainerRef}
+          data-tl-scroll=""
           onScroll={isClipReordering ? undefined : handleScroll}
           onPointerDown={handleContainerPointerDown}
           onPointerMove={handleContainerPointerMove}
@@ -503,7 +525,7 @@ function VideoTimelineNLE({
             }
           >
             {/* 50vw Sol Boşluk (Videonun 0.00s karesi tam merkez ibreye oturur) */}
-            {!isClipReordering && <div className="w-[50vw] shrink-0" />}
+            {!isClipReordering && <div className="w-[50cqw] shrink-0" />}
 
             {/* Kanallar Yığını */}
             <div className={`flex flex-col gap-2 ${isClipReordering ? "w-full" : ""}`}>
@@ -563,7 +585,7 @@ function VideoTimelineNLE({
             </div>
 
             {/* 50vw Sağ Boşluk (Videonun son karesi tam merkez ibreye oturur) */}
-            {!isClipReordering && <div className="w-[50vw] shrink-0" />}
+            {!isClipReordering && <div className="w-[50cqw] shrink-0" />}
           </div>
         </div>
       </div>

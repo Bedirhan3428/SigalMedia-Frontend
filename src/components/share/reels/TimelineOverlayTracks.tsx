@@ -112,8 +112,8 @@ function TimelineOverlayTracks({
   const longPressTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [elevatedItemId, setElevatedItemId] = useState<string | null>(null);
 
-  const trackMaxSec = Math.max(10, Math.ceil(totalDuration + 10));
-  const trackWidthPx = trackMaxSec * pps;
+  // Kanal genişliği içerik süresiyle sınırlı: sonrasında boş kaydırma alanı olmaz
+  const trackWidthPx = Math.max(1, totalDuration * pps);
 
   const clearLongPress = () => {
     if (longPressTimerRef.current) {
@@ -532,7 +532,7 @@ function TimelineOverlayTracks({
               onOpenTextEditor?.();
             }}
             style={{ width: `${Math.max(120, totalDuration * pps)}px` }}
-            className="h-7 rounded bg-[#16171b] hover:bg-[#1e2026] border border-white/5 px-3 flex items-center gap-1.5 text-zinc-400 text-[11px] font-medium transition-colors"
+            className="relative h-7 rounded bg-[#16171b] hover:bg-[#1e2026] border border-white/5 px-3 flex items-center gap-1.5 text-zinc-400 text-[11px] font-medium transition-colors before:absolute before:content-[''] before:inset-x-0 before:-inset-y-[9px]"
           >
             <Type className="w-3.5 h-3.5 text-amber-400 shrink-0" />
             <span>+ Metin veya Çıkartma ekle</span>
@@ -553,7 +553,7 @@ function TimelineOverlayTracks({
                   onQuickAddEffect?.();
                 }}
                 style={{ width: `${Math.max(120, totalDuration * pps)}px` }}
-                className="h-7 rounded bg-[#16171b] hover:bg-[#1e2026] border border-white/5 px-3 flex items-center gap-1.5 text-zinc-400 text-[11px] font-medium transition-colors"
+                className="relative h-7 rounded bg-[#16171b] hover:bg-[#1e2026] border border-white/5 px-3 flex items-center gap-1.5 text-zinc-400 text-[11px] font-medium transition-colors before:absolute before:content-[''] before:inset-x-0 before:-inset-y-[9px]"
               >
                 <BsStars className="w-3.5 h-3.5 text-pink-400 shrink-0" />
                 <span>+ Efekt ekle</span>
@@ -807,7 +807,7 @@ function TimelineOverlayTracks({
               onOpenMusicPicker?.();
             }}
             style={{ width: `${Math.max(120, totalDuration * pps)}px` }}
-            className="h-7 rounded bg-[#16171b] hover:bg-[#1e2026] border border-white/5 px-3 flex items-center gap-1.5 text-zinc-400 text-[11px] font-medium transition-colors"
+            className="relative h-7 rounded bg-[#16171b] hover:bg-[#1e2026] border border-white/5 px-3 flex items-center gap-1.5 text-zinc-400 text-[11px] font-medium transition-colors before:absolute before:content-[''] before:inset-x-0 before:-inset-y-[9px]"
           >
             <Music className="w-3.5 h-3.5 text-sky-400 shrink-0" />
             <span>+ Ses / Müzik ekle</span>
