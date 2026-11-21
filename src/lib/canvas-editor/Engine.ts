@@ -1212,6 +1212,11 @@ export class CanvasEngine {
     return preset.name;
   }
 
+  /** WP-09: taslak kaydı için bir çıkartma/fotoğraf katmanının kaynak medyası. */
+  public getOverlayLayerMedia(layer: BaseLayer): EditorMedia | null {
+    return this.overlayMedia.get(layer) ?? null;
+  }
+
   public async addOverlayImage(
     source: string | Blob | File | HTMLImageElement,
     x = 0.5,

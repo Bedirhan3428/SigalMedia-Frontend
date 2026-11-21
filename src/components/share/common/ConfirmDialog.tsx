@@ -29,6 +29,9 @@ export interface ConfirmDialogProps {
   onCancel: () => void;
   /** Shows a spinner on the confirm button and blocks both buttons / dismissal. */
   busy?: boolean;
+  /** Optional third action between confirm and cancel (WP-09: "Sil" for the draft prompt). */
+  secondaryLabel?: string;
+  onSecondary?: () => void;
 }
 
 /**
@@ -45,6 +48,8 @@ export function ConfirmDialog({
   onConfirm,
   onCancel,
   busy = false,
+  secondaryLabel,
+  onSecondary,
 }: ConfirmDialogProps) {
   const { rendered, closing } = usePresence(open, 160);
   const cancelRef = useRef<HTMLButtonElement | null>(null);
@@ -102,6 +107,16 @@ export function ConfirmDialog({
               {busy && <Loader2 className="w-4 h-4 animate-spin" />}
               {confirmLabel}
             </button>
+            {secondaryLabel && onSecondary && (
+              <button
+                type="button"
+                onClick={onSecondary}
+                disabled={busy}
+                className="w-full min-h-12 rounded-2xl bg-red-600/20 text-red-400 font-semibold text-sm active:scale-[0.97] transition-transform disabled:opacity-50"
+              >
+                {secondaryLabel}
+              </button>
+            )}
             <button
               ref={cancelRef}
               type="button"

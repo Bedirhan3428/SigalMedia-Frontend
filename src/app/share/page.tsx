@@ -45,6 +45,9 @@ import {
 import StoryEditor from "@/components/share/story/StoryEditor";
 import ReelsEditor from "@/components/share/reels/ReelsEditor";
 import PostEditor from "@/components/share/post/PostEditor";
+import { DraftAutosaver } from "@/lib/drafts/DraftAutosaver";
+import { deleteDraft, listDrafts, loadDraftFiles, requestPersistence, type DraftMode, type DraftRecord } from "@/lib/drafts/DraftStore";
+import { adoptBlobKey, applyDraft, baseMediaKeyOf, type DraftState } from "@/lib/drafts/serialize";
 // [END] CREATED BY Bedirhan
 // [MODIFIED BY Bedirhan]
 import {
@@ -115,7 +118,6 @@ function PageBackLayer({ open, onClose }: { open: boolean; onClose: () => void }
 
 // F-05: "en az bir düzenleme" tespiti. Medya yüklendikten sonraki belge durumunun imzası; ilk
 // imzadan farklıysa düzenleme vardır (yalnız medya yüklemek kirli sayılmaz).
-const UNSAVED_LOST_KEY = "sigal_share_unsaved_lost";
 function editSignature(engine: CanvasEngine, music: StoryAudioMeta | null): string {
   const s = engine.snapshot();
   return JSON.stringify([
@@ -204,7 +206,12 @@ export default function ShareStoryPage() {
   const [showExitConfirm, setShowExitConfirm] = useState(false);
   // F-01/F-02: medya yüklüyken seçilen farklı mod, onay bekler
   const [pendingMode, setPendingMode] = useState<ShareMode | null>(null);
-  const [reloadNotice, setReloadNotice] = useState<string | null>(null);
+  // WP-09: bulunan taslak (geri yükle / sil teklifi)
+  const [draftOffer, setDraftOffer] = useState<DraftRecord<DraftState> | null>(null);
+  const [draftBusy, setDraftBusy] = useState(false);
+  const autosaverRef = useRef<DraftAutosaver | null>(null);
+  const isDirtyRef = useRef<() => boolean>(() => false);
+  const musicVolumeRef = useRef(0.85);
   // F-05: medya yüklendiği andaki belge imzası; farklıysa "düzenleme var"
   const baselineSigRef = useRef<string | null>(null);
   const selectedMusicRef = useRef<StoryAudioMeta | null>(null);
@@ -222,7 +229,8 @@ export default function ShareStoryPage() {
       sessionStorage.removeItem("sigal_editor_reloaded");
       sessionStorage.removeItem("sigal_editor_active");
 
-      // Yalnızca /share üzerinde tarayıcı yenilemesi (F5 / Reload) yapılmışsa ana sayfaya yönlendir
+      // Yalnızca /share üzerinde tarayıcı yenilemesi (F5 / Reload) yapılmışsa ve taslak yoksa ana sayfaya yönlendir
+      let redirectIfNoDraft = false;
       if (!hasHandledShareReload) {
         hasHandledShareReload = true;
         const navEntries = performance.getEntriesByType("navigation") as PerformanceNavigationTiming[];
@@ -230,20 +238,19 @@ export default function ShareStoryPage() {
         const wasOnShare = navEntries.length > 0 && (navEntries[0].name.endsWith("/share") || navEntries[0].name.includes("/share?"));
 
         if (isReload && wasOnShare) {
-          // BUG-04 (dürüst davranış): taslak sistemi yok. Kaydedilmemiş iş varken yenilendiyse
-          // kullanıcıyı sessizce ana sayfaya atmak yerine kaybı açıkça söyle (taslak: WP-09).
-          let lost = false;
-          try {
-            lost = sessionStorage.getItem(UNSAVED_LOST_KEY) === "1";
-            sessionStorage.removeItem(UNSAVED_LOST_KEY);
-          } catch {}
-          if (!lost) {
-            router.replace("/");
-            return;
-          }
-          setReloadNotice("Sayfa yenilendi: kaydedilmemiş çalışmanız kayboldu. Taslak kaydı henüz yok.");
+          redirectIfNoDraft = true;
         }
       }
+      // WP-09: kayıtlı taslak varsa geri yükle / sil teklif et; yenilemede taslak yoksa eski yönlendirme
+      listDrafts()
+        .then((drafts) => {
+          if (drafts.length > 0) setDraftOffer(drafts[0] as DraftRecord<DraftState>);
+          else if (redirectIfNoDraft) router.replace("/");
+        })
+        .catch(() => {
+          if (redirectIfNoDraft) router.replace("/");
+        });
+      void requestPersistence();
     }
 
     // Tuvali ve arkaplanı kesin olarak sıfırla, yeni bir tuval anahtarı üret
@@ -293,6 +300,10 @@ export default function ShareStoryPage() {
   // [MODIFIED BY Bedirhan]
   // Editörü Tamamen Temizleme Fonksiyonu
   const resetEditor = useCallback(() => {
+    // WP-09: kullanıcı düzenlemeleri bilerek siliyor -> taslak da silinir (düzenleme yoksa eski taslağa dokunma)
+    if (engineRef.current && isDirtyRef.current()) {
+      void autosaverRef.current?.discard(shareModeRef.current as DraftMode);
+    }
     if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
     exportAbortRef.current?.abort();
     thumbAbortRef.current?.abort();
@@ -337,9 +348,6 @@ export default function ShareStoryPage() {
     setEffectClips([]);
     releasePreviewAudio();
     baselineSigRef.current = null;
-    try {
-      sessionStorage.removeItem(UNSAVED_LOST_KEY);
-    } catch {}
     setPendingMode(null);
     setShowExitConfirm(false);
   }, [releasePreviewAudio]);
@@ -556,10 +564,7 @@ export default function ShareStoryPage() {
   useEffect(() => {
     const handleBeforeUnload = (e: BeforeUnloadEvent) => {
       const dirty = isDirty();
-      try {
-        if (dirty) sessionStorage.setItem(UNSAVED_LOST_KEY, "1");
-        else sessionStorage.removeItem(UNSAVED_LOST_KEY);
-      } catch {}
+      autosaverRef.current?.flush();
       if (dirty) {
         e.preventDefault();
         e.returnValue = "";
@@ -571,6 +576,41 @@ export default function ShareStoryPage() {
       window.removeEventListener("beforeunload", handleBeforeUnload);
     };
   }, [isDirty]);
+
+  // WP-09: otomatik taslak kaydı (debounce 1.5 sn); sekme gizlenirken / kapanırken hemen başlat
+  useEffect(() => {
+    isDirtyRef.current = isDirty;
+  }, [isDirty]);
+  useEffect(() => {
+    musicVolumeRef.current = musicVolume;
+    autosaverRef.current?.schedule();
+  }, [musicVolume, selectedMusic]);
+  useEffect(() => {
+    const a = new DraftAutosaver({
+      getEngine: () => engineRef.current,
+      getMode: () => shareModeRef.current as DraftMode,
+      isDirty: () => isDirtyRef.current(),
+      getMusicVolume: () => musicVolumeRef.current,
+      onError: (msg) => {
+        setFilterToast(msg);
+        if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
+        toastTimerRef.current = setTimeout(() => setFilterToast(null), 3500);
+      },
+    });
+    autosaverRef.current = a;
+    const onHide = () => {
+      if (document.visibilityState === "hidden") a.flush();
+    };
+    const onPageHide = () => a.flush();
+    document.addEventListener("visibilitychange", onHide);
+    window.addEventListener("pagehide", onPageHide);
+    return () => {
+      document.removeEventListener("visibilitychange", onHide);
+      window.removeEventListener("pagehide", onPageHide);
+      a.dispose();
+      autosaverRef.current = null;
+    };
+  }, []);
 
   // [MODIFIED BY Bedirhan]
   // Tuval Motorunu Başlatma (Moda Göre 9:16 Tam Ekran veya 4:3 Gönderi Boyutları)
@@ -592,6 +632,9 @@ export default function ShareStoryPage() {
       fitMode: currentMode === "post" ? "cover" : "contain",
     });
     engine.setShareMode(currentMode);
+
+    engine.on("change", () => autosaverRef.current?.schedule());
+    engine.on("music-change", () => autosaverRef.current?.schedule());
 
     // Katman Seçimi
     engine.on("select", (layer: BaseLayer | null) => {
@@ -874,6 +917,46 @@ export default function ShareStoryPage() {
       if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
       toastTimerRef.current = setTimeout(() => setFilterToast(null), 3000);
       if (baseFileInputRef.current) baseFileInputRef.current.value = "";
+    }
+  };
+
+  // WP-09: taslağı geri yükle (medya + katmanlar + klipler + müzik + filtreler), sonra React durumunu motorla eşle
+  const restoreDraft = async (rec: DraftRecord<DraftState>) => {
+    setDraftBusy(true);
+    try {
+      const st = rec.state;
+      const files = await loadDraftFiles(rec);
+      const baseKey = baseMediaKeyOf(st);
+      const baseFile = baseKey ? files.get(baseKey) : undefined;
+      if (!baseFile) throw new Error("draft-media-missing");
+      for (const [k, f] of files) adoptBlobKey(f, k);
+      shareModeRef.current = st.mode;
+      setShareMode(st.mode);
+      setIsModeSelectorOpen(false);
+      setActiveDrawer("none");
+      await processBaseFile(baseFile);
+      const engine = engineRef.current;
+      if (!engine || !engine.getMedia()) throw new Error("draft-base-load");
+      if (!(await applyDraft(engine, st, files))) throw new Error("draft-apply");
+      setPostAdjustments(engine.getPostAdjustments());
+      const fi = engine.getCurrentFilterIndex();
+      setActiveFilterIndex(fi);
+      const preset = FILTER_PRESETS[fi];
+      if (preset) setActiveFilterGradient(preset.backgroundGradient);
+      setActiveReelsEffect(engine.getReelsEffect());
+      setEffectClips(engine.getEffectClips());
+      setVideoState(engine.getVideoState());
+      setSelectedMusic(st.music ? engine.getMusic() : null);
+      setMusicVolume(st.musicVolume ?? 0.85);
+      setDraftOffer(null);
+    } catch (err) {
+      console.error("Taslak geri yüklenemedi:", err);
+      setDraftOffer(null);
+      setFilterToast("Taslak geri yüklenemedi.");
+      if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
+      toastTimerRef.current = setTimeout(() => setFilterToast(null), 3000);
+    } finally {
+      setDraftBusy(false);
     }
   };
 
@@ -1259,6 +1342,11 @@ export default function ShareStoryPage() {
 
       await refreshProfile();
 
+      // WP-09: yayınlandı -> taslak silinir ve bir daha kaydedilmez
+      const autosaver = autosaverRef.current;
+      autosaver?.stop();
+      await autosaver?.discard(shareModeRef.current as DraftMode);
+
       setTimeout(() => {
         router.push("/profile");
       }, 400);
@@ -1578,7 +1666,6 @@ export default function ShareStoryPage() {
         isOpen={isModeSelectorOpen}
         activeMode={hasMedia ? shareMode : null}
         onSelectMode={handleSelectMode}
-        notice={reloadNotice}
         onBack={() => {
           if (hasMedia) {
             setIsModeSelectorOpen(false);
@@ -1596,6 +1683,26 @@ export default function ShareStoryPage() {
         destructive
         onConfirm={confirmModeSwitch}
         onCancel={() => setPendingMode(null)}
+      />
+      <ConfirmDialog
+        open={draftOffer !== null}
+        title="Kayıtlı taslak bulundu"
+        message={
+          draftOffer
+            ? `${draftOffer.mode === "story" ? "Hikaye" : draftOffer.mode === "reels" ? "Reels" : "Gönderi"} · ${new Date(draftOffer.savedAt).toLocaleString("tr-TR")}`
+            : undefined
+        }
+        confirmLabel="Taslağı geri yükle"
+        secondaryLabel="Sil"
+        cancelLabel="Şimdilik kapat"
+        busy={draftBusy}
+        onConfirm={() => draftOffer && void restoreDraft(draftOffer)}
+        onSecondary={() => {
+          const mode = draftOffer?.mode;
+          setDraftOffer(null);
+          if (mode) void deleteDraft(mode);
+        }}
+        onCancel={() => setDraftOffer(null)}
       />
       <PageBackLayer open={activeDrawer !== "none"} onClose={() => setActiveDrawer("none")} />
       <PageBackLayer open={isTextEditing} onClose={closeTextEditor} />
