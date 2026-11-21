@@ -843,6 +843,7 @@ function TimelineTrackClips({
                 onPauseVideo?.();
                 onAppendClipClick();
               }}
+              aria-label="Klip ekle"
               className="absolute left-full top-1/2 -translate-y-1/2 ml-2.5 w-11 h-11 rounded-xl bg-[#1c1c1e] hover:bg-[#28282d] border border-white/15 active:scale-95 transition-all flex items-center justify-center text-white shadow-md shrink-0"
             >
               <Plus className="w-5 h-5 text-white" />
