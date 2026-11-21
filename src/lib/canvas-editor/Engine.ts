@@ -2047,6 +2047,8 @@ export class CanvasEngine {
       ml.timelineTime = t;
     }
 
+    if (ml && ml.visible && ml.renderFullFrameFast(targetCtx, width, height, externalFrame)) return;
+
     this.renderAmbientBackground(targetCtx, width, height);
 
     if (ml && ml.visible) {
