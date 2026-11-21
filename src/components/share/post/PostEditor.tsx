@@ -136,6 +136,8 @@ export default function PostEditor({ engine, canvas, isPublishing, onPublish, on
       ro?.disconnect();
       offResize();
       onLayoutRef.current({ bottom: 0, ratio: lastLayout.current.ratio > 0 ? lastLayout.current.ratio : 4 / 5 });
+      // A-04: StrictMode yeniden bağlanmasında aynı değer "değişmedi" sayılıp bildirilmesin
+      lastLayout.current = { bottom: -1, ratio: -1 };
     };
   }, [engine, reportLayout]);
 
