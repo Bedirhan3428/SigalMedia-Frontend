@@ -27,6 +27,8 @@ export interface ModeSelectorModalProps {
    * unregistered, so Back reaches the shell's `onExitRequest`.
    */
   registerBackLayer?: boolean;
+  /** Optional info line under the title (e.g. "unsaved work was lost on reload"). */
+  notice?: string | null;
 }
 
 interface ModeOption {
@@ -71,6 +73,7 @@ export default function ModeSelectorModal({
   onSelectMode,
   onBack,
   registerBackLayer,
+  notice,
 }: ModeSelectorModalProps) {
   const overSession = activeMode !== null;
   useBackLayer(isOpen && (registerBackLayer ?? overSession), onBack);
@@ -102,6 +105,14 @@ export default function ModeSelectorModal({
 
         <div className="flex-1 min-h-0 overflow-y-auto overscroll-contain no-scrollbar flex flex-col justify-center px-6 py-4">
           <div className="w-full max-w-sm mx-auto flex flex-col gap-3.5">
+            {notice ? (
+              <p
+                role="status"
+                className="rounded-2xl border border-amber-400/30 bg-amber-500/10 px-4 py-3 text-xs font-medium leading-snug text-amber-200"
+              >
+                {notice}
+              </p>
+            ) : null}
             {MODES.map((m) => {
               const active = activeMode === m.mode;
               return (
