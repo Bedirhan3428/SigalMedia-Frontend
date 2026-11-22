@@ -1,7 +1,7 @@
 "use client";
 
 // [START] CREATED BY Umut
-import { useState, useEffect, useRef, useMemo } from "react";
+import { useState, useEffect, useLayoutEffect, useRef, useMemo } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { ChevronLeft, Send, User as UserIcon } from "lucide-react";
 import { useAuth } from "@/context/AuthContext";
@@ -74,6 +74,21 @@ function formatChatTimeHeader(timestamp?: number): string {
     month: "short",
   });
   return `${dayStr} ${timeStr}`;
+}
+
+const INPUT_MAX_HEIGHT = 120;
+
+// scrollHeight border'ı içermez; box-sizing: border-box olduğu için border eklenmezse
+// textarea 2px kısa kalır ve tek satırda bile kaydırma çubuğu çıkar.
+function fitTextarea(el: HTMLTextAreaElement | null) {
+  if (!el) return;
+  el.style.height = "auto";
+  const cs = getComputedStyle(el);
+  const border =
+    (parseFloat(cs.borderTopWidth) || 0) + (parseFloat(cs.borderBottomWidth) || 0);
+  const needed = Math.ceil(el.scrollHeight + border);
+  el.style.height = `${Math.min(needed, INPUT_MAX_HEIGHT)}px`;
+  el.style.overflowY = needed > INPUT_MAX_HEIGHT ? "auto" : "hidden";
 }
 
 export default function ChatRoomPage() {
@@ -236,12 +251,16 @@ export default function ChatRoomPage() {
     prevDisplayedCountRef.current = displayedMessages.length;
   }, [displayedMessages.length, peerTyping]);
 
+  useLayoutEffect(() => {
+    fitTextarea(inputRef.current);
+  }, [inputText]);
+
   const handleInputChange = (val: string) => {
     // Gönder butonuna basıldıktan hemen sonraki 80ms içinde mobil klavyenin eski kelimeyi geri basmasını engelle
     if (Date.now() < ignoreInputUntilRef.current) {
       if (inputRef.current) {
         inputRef.current.value = "";
-        inputRef.current.style.height = "auto";
+        fitTextarea(inputRef.current);
       }
       setInputText("");
       return;
@@ -249,13 +268,7 @@ export default function ChatRoomPage() {
 
     setInputText(val);
 
-    if (inputRef.current) {
-      inputRef.current.style.height = "auto";
-      inputRef.current.style.height = `${Math.min(
-        inputRef.current.scrollHeight,
-        120
-      )}px`;
-    }
+    fitTextarea(inputRef.current);
 
     if (!chatId || !profile?.uid) return;
 
@@ -300,7 +313,7 @@ export default function ChatRoomPage() {
     setInputText("");
     if (inputRef.current) {
       inputRef.current.value = "";
-      inputRef.current.style.height = "auto";
+      fitTextarea(inputRef.current);
       inputRef.current.focus();
     }
 
@@ -551,7 +564,7 @@ export default function ChatRoomPage() {
             value={inputText}
             onChange={(e) => handleInputChange(e.target.value)}
             placeholder="Mesaj yaz..."
-            className="flex-1 bg-zinc-900 border border-zinc-800 rounded-2xl px-3.5 py-2.5 text-[15.5px] text-zinc-100 placeholder:text-zinc-500 focus:outline-none focus:border-zinc-700 resize-none max-h-[120px] leading-snug"
+            className="flex-1 bg-zinc-900 border border-zinc-800 rounded-2xl px-3.5 py-2.5 text-[15.5px] text-zinc-100 placeholder:text-zinc-500 focus:outline-none focus:border-zinc-700 resize-none overflow-y-hidden max-h-[120px] leading-snug"
           />
 
           <button
