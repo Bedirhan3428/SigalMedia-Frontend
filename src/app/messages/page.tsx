@@ -3,6 +3,8 @@
 // [MODIFIED BY Umut]
 import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
+import { chatSettingsStore } from "@/lib/chat/chatSettingsStore";
+import { getTheme } from "@/lib/chat/chatThemes";
 import {
   Search,
   SquarePen,
@@ -247,6 +249,9 @@ export default function MessagesPage() {
                 chat.peerProfile?.displayName || "Kullanıcı";
               const photoURL = chat.peerProfile?.photoURL || "";
               const unread = chat.unreadCount || 0;
+              // Sohbete özel takma ad ve tema vurgusu (yalnızca bu cihazda, localStorage)
+              const chatPrefs = chatSettingsStore.get(chat.chatId);
+              const shownName = chatPrefs.nickname.trim() || displayName;
 
               return (
                 <button
@@ -281,7 +286,12 @@ export default function MessagesPage() {
                             : "font-semibold text-zinc-200"
                         }`}
                       >
-                        {displayName}
+                        {shownName}
+                        <span
+                          aria-hidden="true"
+                          className="inline-block w-1.5 h-1.5 rounded-full ml-1.5 align-middle"
+                          style={{ background: getTheme(chatPrefs.theme).acc }}
+                        />
                       </h2>
                       <span className="text-[11px] text-zinc-500 shrink-0 ml-2">
                         {formatRelativeMessageTime(chat.lastMessageTimestamp)}
