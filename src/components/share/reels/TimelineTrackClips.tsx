@@ -175,7 +175,7 @@ const ClipItem = React.memo(function ClipItem({
           className={`h-full mx-px rounded overflow-hidden relative flex bg-zinc-900 border-2 transition-colors ${
             isSelected
               ? "border-amber-400 shadow-[0_0_0_1px_rgba(251,191,36,0.45)]"
-              : "border-white/15 hover:border-white/30"
+              : "border-[var(--ed-line2,#3a4350)] hover:border-white/30"
           }`}
         >
           {clipThumbs.length > 0 ? (
@@ -232,7 +232,7 @@ const ClipItem = React.memo(function ClipItem({
             <div
               onClick={(e) => e.stopPropagation()}
               onPointerDown={(e) => onBeginDrag(e, "reorder", clip, idx)}
-              className="absolute top-1 right-2.5 px-1.5 py-0.5 rounded bg-black/75 border border-white/20 text-[9px] font-semibold text-zinc-200 flex items-center gap-1 cursor-grab active:cursor-grabbing z-20 touch-none"
+              className="absolute top-1 right-2.5 px-1.5 py-0.5 rounded bg-black/75 border border-[var(--ed-line2,#3a4350)] text-[9px] font-semibold text-[var(--ed-tx,#e8ecf1)] flex items-center gap-1 cursor-grab active:cursor-grabbing z-20 touch-none"
             >
               <ArrowLeftRight className="w-2.5 h-2.5 text-amber-400" />
               <span>Sırala</span>
@@ -720,9 +720,9 @@ function TimelineTrackClips({
     >
       {/* KALICI 1:1 KÜÇÜK KARELER SIRALAMA MODU (Kullanıcı [✓ Bitti] diyene kadar açık kalır) */}
       {isReorderMode ? (
-        <div className="flex flex-col gap-2 w-full bg-zinc-900/95 border border-white/20 rounded-2xl p-2.5 shadow-2xl touch-none">
+        <div className="flex flex-col gap-2 w-full bg-zinc-900/95 border border-[var(--ed-line2,#3a4350)] rounded-md p-2.5 shadow-2xl touch-none">
           <div className="flex items-center justify-between gap-3 px-1">
-            <div className="flex items-center gap-1.5 text-xs font-bold text-amber-400">
+            <div className="flex items-center gap-1.5 text-xs font-bold text-[var(--ed-ac,#38d5c8)]">
               <ArrowLeftRight className="w-3.5 h-3.5" />
               <span>Sıralama</span>
             </div>
@@ -734,7 +734,7 @@ function TimelineTrackClips({
                 e.stopPropagation();
                 exitReorderMode();
               }}
-              className="h-8 px-3.5 rounded-xl bg-amber-400 hover:bg-amber-300 text-black font-bold text-xs flex items-center gap-1.5 shrink-0 active:scale-95 transition-all shadow-md"
+              className="h-8 px-3.5 rounded-md bg-[var(--ed-ac,#38d5c8)] text-[var(--ed-ac-tx,#04201e)] font-bold text-xs flex items-center gap-1.5 shrink-0 active:scale-95 transition-all"
             >
               <Check className="w-3.5 h-3.5 stroke-[2.5]" />
               <span>Bitti</span>
@@ -782,12 +782,12 @@ function TimelineTrackClips({
                       ? `translate3d(${reorderOffsetPx}px, -4px, 0) scale(1.1)`
                       : "translate3d(0, 0, 0) scale(1)",
                   }}
-                  className={`relative w-16 h-16 rounded-xl overflow-hidden shrink-0 border-2 transition-transform duration-75 cursor-grab active:cursor-grabbing touch-none select-none ${
+                  className={`relative w-16 h-16 rounded-md overflow-hidden shrink-0 border-2 transition-transform duration-75 cursor-grab active:cursor-grabbing touch-none select-none ${
                     isHeld
                       ? "border-emerald-400 ring-2 ring-emerald-400/60 shadow-[0_12px_28px_rgba(0,0,0,0.85)] z-40"
                       : insertionIndex === idx
                         ? "border-amber-400 opacity-95 z-20"
-                        : "border-white/25 opacity-90 hover:border-white/50 z-10"
+                        : "border-[var(--ed-line2,#3a4350)] opacity-90 hover:border-[var(--ed-line,#2a303a)]0 z-10"
                   }`}
                 >
                   {thumbSrc ? (
@@ -844,7 +844,7 @@ function TimelineTrackClips({
                 onAppendClipClick();
               }}
               aria-label="Klip ekle"
-              className="absolute left-full top-1/2 -translate-y-1/2 ml-2.5 w-11 h-11 rounded-xl bg-[#1c1c1e] hover:bg-[#28282d] border border-white/15 active:scale-95 transition-all flex items-center justify-center text-white shadow-md shrink-0"
+              className="absolute left-full top-1/2 -translate-y-1/2 ml-2.5 w-11 h-11 rounded-md bg-[var(--ed-bg3,#232932)] hover:bg-[var(--ed-line,#2a303a)] border border-[var(--ed-line2,#3a4350)] active:scale-95 transition-all flex items-center justify-center text-white shadow-md shrink-0"
             >
               <Plus className="w-5 h-5 text-white" />
             </button>

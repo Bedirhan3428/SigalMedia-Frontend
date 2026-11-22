@@ -127,6 +127,8 @@ export interface ReelsMenuProps {
   onDeselect: () => void;
   /** "rail": sol dikey araç rayı + sağ denetçi (masaüstü / yatay). Varsayılan "bottom": alt şerit. */
   variant?: "bottom" | "rail";
+  /** Geri al / yinele sonrası artar; kaydırıcı değerleri motordan yeniden okunur. */
+  restoreSeq?: number;
   /** Dar/kısa ekran: menü satırı 56 px. */
   compact?: boolean;
 }
@@ -160,22 +162,22 @@ function MenuButton({ item }: { item: MenuItem }) {
       onClick={item.onClick}
       disabled={item.disabled}
       aria-label={item.label}
-      className={`flex flex-col items-center justify-center gap-1 rounded-xl disabled:opacity-40 active:scale-95 transition-transform focus-visible:outline-2 focus-visible:outline-[var(--ed-sel,#38d5c8)] ${
+      className={`flex flex-col items-center justify-center gap-1 rounded-md disabled:opacity-40 active:scale-95 transition-transform focus-visible:outline-2 focus-visible:outline-[var(--ed-sel,#38d5c8)] ${
         rail ? "h-16 w-full min-w-0 hover:bg-white/5" : compact ? "h-14 min-w-[64px]" : "h-16 min-w-[72px]"
       }`}
     >
       <span
-        className={`rounded-xl flex items-center justify-center ${compact && !rail ? "w-11 h-7" : "w-12 h-9"} ${
+        className={`rounded-md flex items-center justify-center ${compact && !rail ? "w-11 h-7" : "w-12 h-9"} ${
           item.danger
             ? "bg-red-500/15 text-red-400"
             : item.active
               ? "bg-[var(--ed-ac,#38d5c8)] text-[var(--ed-ac-tx,#04201e)]"
-              : "bg-[#1c1c1e] text-white"
+              : "bg-[var(--ed-bg3,#232932)] text-white"
         }`}
       >
         {item.icon}
       </span>
-      <span className={`${compact && !rail ? "text-[10px]" : "text-[11px]"} font-medium leading-none max-w-full truncate ${item.danger ? "text-red-300" : "text-zinc-200"}`}>
+      <span className={`${compact && !rail ? "text-[10px]" : "text-[11px]"} font-medium leading-none max-w-full truncate ${item.danger ? "text-red-300" : "text-[var(--ed-tx,#e8ecf1)]"}`}>
         {item.label}
       </span>
     </button>
@@ -212,7 +214,7 @@ function ToolPanel({ title, onClose, children }: { title: string; onClose: () =>
   return (
     <div
       style={{ height: REELS_MENU_HEIGHT }}
-      className="absolute inset-x-0 bottom-0 z-20 bg-black border-t border-white/10 flex items-stretch gap-2 px-3 py-1.5"
+      className="absolute inset-x-0 bottom-0 z-20 bg-[var(--ed-bg1,#12151a)] border-t border-[var(--ed-line,#2a303a)] flex items-stretch gap-2 px-3 py-1.5"
     >
       <div className="flex flex-col items-center gap-1 shrink-0 w-12">
         <button
@@ -223,7 +225,7 @@ function ToolPanel({ title, onClose, children }: { title: string; onClose: () =>
         >
           <Check className="w-5 h-5 stroke-[2.5]" />
         </button>
-        <span className="text-[10px] font-semibold text-zinc-400 text-center leading-tight">{title}</span>
+        <span className="text-[10px] font-semibold text-[var(--ed-tx2,#98a2b3)] text-center leading-tight">{title}</span>
       </div>
       <div className="flex-1 min-w-0 h-full overflow-y-auto no-scrollbar flex flex-col [&>*]:my-auto">{children}</div>
     </div>
@@ -276,7 +278,7 @@ function RangeRow({
   if (stacked) {
     return (
       <label className="flex flex-col min-w-0 w-full">
-        <span className="flex items-center justify-between text-[12px] text-zinc-300 leading-none">
+        <span className="flex items-center justify-between text-[12px] text-[var(--ed-tx,#e8ecf1)] leading-none">
           <span className="truncate">{label}</span>
           <span className="font-mono font-medium tabular-nums text-white">
             {v}
@@ -289,7 +291,7 @@ function RangeRow({
   }
   return (
     <label className="flex items-center gap-2 min-w-0">
-      <span className="text-[11px] text-zinc-400 w-[60px] shrink-0 truncate">{label}</span>
+      <span className="text-[11px] text-[var(--ed-tx2,#98a2b3)] w-[60px] shrink-0 truncate">{label}</span>
       {input}
       <span className="w-10 text-right text-[11px] font-semibold tabular-nums text-white">
         {v}
@@ -316,8 +318,8 @@ function Chip({
       onClick={onClick}
       disabled={disabled}
       aria-pressed={active}
-      className={`h-11 px-3.5 rounded-xl text-xs font-semibold shrink-0 border flex items-center justify-center gap-1.5 active:scale-95 transition-all disabled:opacity-40 ${
-        active ? "bg-amber-400 text-black border-amber-400" : "bg-[#1c1c1e] text-zinc-100 border-white/10"
+      className={`h-11 px-3.5 rounded-md text-xs font-semibold shrink-0 border flex items-center justify-center gap-1.5 active:scale-95 transition-all disabled:opacity-40 ${
+        active ? "bg-[var(--ed-ac-soft,rgba(56,213,200,.14))] text-[var(--ed-ac,#38d5c8)] border-[var(--ed-ac,#38d5c8)]" : "bg-[var(--ed-bg3,#232932)] text-[var(--ed-tx,#e8ecf1)] border-[var(--ed-line,#2a303a)]"
       }`}
     >
       {children}
@@ -359,7 +361,7 @@ function Tile({
           height: h,
           background: src ? undefined : `radial-gradient(circle at 30% 30%, ${tint || "#3f3f46"}, #111827)`,
         }}
-        className={`relative rounded-xl overflow-hidden border-2 block ${active ? "border-white" : "border-transparent"}`}
+        className={`relative rounded-md overflow-hidden border-2 block ${active ? "border-white" : "border-transparent"}`}
       >
         {src && (
           // eslint-disable-next-line @next/next/no-img-element
@@ -373,7 +375,7 @@ function Tile({
         )}
         {tint && src && <span className="absolute inset-0" style={{ background: tint, opacity: 0.32 }} />}
       </span>
-      <span className={`text-[10px] leading-none truncate max-w-full ${active ? "text-white font-semibold" : "text-zinc-400"}`}>
+      <span className={`text-[10px] leading-none truncate max-w-full ${active ? "text-white font-semibold" : "text-[var(--ed-tx2,#98a2b3)]"}`}>
         {label}
       </span>
     </button>
@@ -420,7 +422,7 @@ function AdjustPanel({
           onReset();
           setResetKey((k) => k + 1);
         }}
-        className="h-11 text-xs font-semibold text-zinc-300 active:text-white"
+        className="h-11 text-xs font-semibold text-[var(--ed-tx,#e8ecf1)] active:text-white"
       >
         Sıfırla
       </button>
@@ -441,24 +443,42 @@ function FiltersPanel({
   onPick: (index: number | null) => void;
 }) {
   // Panel açılırken geçerli kare bir kez yakalanır; her kareye CSS filtresi uygulanır
-  const [frame] = useState(() => captureFramePreview(engine.getMedia()?.element, 72, 96));
+  // Yoğunluk: motor setFilterIntensity/getFilterIntensity sağlıyorsa gösterilir (BUG-28)
+  const ie = engine as unknown as { setFilterIntensity?: (v: number) => void; getFilterIntensity?: () => number };
+  const hasIntensity = typeof ie.setFilterIntensity === "function" && typeof ie.getFilterIntensity === "function";
+  const tw = hasIntensity ? 56 : 72;
+  const th = hasIntensity ? 64 : 96;
+  const [frame] = useState(() => captureFramePreview(engine.getMedia()?.element, tw, th));
+  const initialIntensity = hasIntensity ? Math.round((ie.getFilterIntensity?.() ?? 1) * 100) : 100;
   return (
-    <div className="flex items-start gap-2 overflow-x-auto no-scrollbar h-full py-0.5">
-      {inheritable && (
-        <Tile src={frame} label="Genel" active={activeIndex === null} w={72} h={96} onClick={() => onPick(null)} />
-      )}
-      {FILTER_PRESETS.map((p, i) => (
-        <Tile
-          key={p.id}
-          src={frame}
-          label={p.name}
-          active={activeIndex === i}
-          w={72}
-          h={96}
-          cssFilter={p.cssFilter}
-          onClick={() => onPick(i)}
+    <div className="flex flex-col gap-0.5 h-full min-w-0 py-0.5">
+      <div className="flex items-start gap-2 overflow-x-auto no-scrollbar">
+        {inheritable && (
+          <Tile src={frame} label="Genel" active={activeIndex === null} w={tw} h={th} onClick={() => onPick(null)} />
+        )}
+        {FILTER_PRESETS.map((p, i) => (
+          <Tile
+            key={p.id}
+            src={frame}
+            label={p.name}
+            active={activeIndex === i}
+            w={tw}
+            h={th}
+            cssFilter={p.cssFilter}
+            onClick={() => onPick(i)}
+          />
+        ))}
+      </div>
+      {hasIntensity && (
+        <RangeRow
+          label="Yoğunluk"
+          min={0}
+          max={100}
+          suffix="%"
+          value={initialIntensity}
+          onChange={(v) => ie.setFilterIntensity?.(v / 100)}
         />
-      ))}
+      )}
     </div>
   );
 }
@@ -538,7 +558,7 @@ function StickersPanel({
           type="button"
           onClick={() => setTab("stk")}
           className={`h-8 px-3 rounded-full text-[11px] font-semibold shrink-0 ${
-            tab === "stk" ? "bg-white text-black" : "bg-[#1c1c1e] text-zinc-200"
+            tab === "stk" ? "bg-[var(--ed-ac-soft,rgba(56,213,200,.14))] text-[var(--ed-ac,#38d5c8)]" : "bg-[var(--ed-bg3,#232932)] text-[var(--ed-tx,#e8ecf1)]"
           }`}
         >
           Çıkartma
@@ -550,7 +570,7 @@ function StickersPanel({
             aria-label={c.label}
             onClick={() => setTab(c.id)}
             className={`h-8 min-w-9 px-2 rounded-full text-base shrink-0 ${
-              tab === c.id ? "bg-white" : "bg-[#1c1c1e]"
+              tab === c.id ? "bg-[var(--ed-ac,#38d5c8)]" : "bg-[var(--ed-bg3,#232932)]"
             }`}
           >
             {c.icon}
@@ -969,6 +989,7 @@ export default function ReelsMenu(props: ReelsMenuProps) {
         panel = (
           <ToolPanel title="Filtre" onClose={closeTool}>
             <FiltersPanel
+              key={`flt:${props.restoreSeq ?? 0}`}
               engine={engine}
               inheritable={clipScope}
               activeIndex={clipScope ? (clip?.filterIndex ?? null) : activeFilterIndex}
@@ -985,7 +1006,7 @@ export default function ReelsMenu(props: ReelsMenuProps) {
           <ToolPanel title="Ayarla" onClose={closeTool}>
             {clipScope && clip ? (
               <AdjustPanel
-                key={clip.id}
+                key={`${clip.id}:${props.restoreSeq ?? 0}`}
                 initial={clip.adjustments ?? {}}
                 onChange={(k, v) => engine.updateClipAdjustments(clip.id, { [k]: v })}
                 onReset={() =>
@@ -1001,6 +1022,7 @@ export default function ReelsMenu(props: ReelsMenuProps) {
               />
             ) : (
               <AdjustPanel
+                key={`post:${props.restoreSeq ?? 0}`}
                 initial={engine.getPostAdjustments()}
                 onChange={(k, v) => engine.setPostAdjustments({ [k]: v })}
                 onReset={() => engine.resetPostAdjustments()}
@@ -1140,7 +1162,7 @@ export default function ReelsMenu(props: ReelsMenuProps) {
             <div className="flex flex-col gap-2">
               <span className="text-xs font-semibold text-white">Klip ters çevriliyor… %{Math.round(reverseProgress * 100)}</span>
               <div className="h-2 rounded-full bg-white/15 overflow-hidden">
-                <div className="h-full bg-amber-400 transition-[width] duration-150" style={{ width: `${Math.round(reverseProgress * 100)}%` }} />
+                <div className="h-full bg-[var(--ed-ac,#38d5c8)] transition-[width] duration-150" style={{ width: `${Math.round(reverseProgress * 100)}%` }} />
               </div>
               <div>
                 <Chip onClick={() => reverseAbortRef.current?.abort()}>İptal</Chip>
@@ -1156,7 +1178,7 @@ export default function ReelsMenu(props: ReelsMenuProps) {
               <div className="flex flex-col gap-1.5">
                 <div className="flex items-center gap-2 overflow-x-auto no-scrollbar">
                   <Chip onClick={photo.cycleShape}>
-                    <Crop className="w-4 h-4 text-amber-400" />
+                    <Crop className="w-4 h-4 text-[var(--ed-ac,#38d5c8)]" />
                     Şekil
                   </Chip>
                   <Chip onClick={() => photo.patch((t) => ({ ...t, rotation: (t.rotation + 90) % 360 }))}>
@@ -1194,7 +1216,7 @@ export default function ReelsMenu(props: ReelsMenuProps) {
       {/* Menüler tek satır (yatay kaydırma); yalnızca bir araç paneli açıkken alan büyür */}
       <div
         style={rail ? undefined : { height: compact ? REELS_MENU_ROW_HEIGHT - 20 : REELS_MENU_ROW_HEIGHT }}
-        className={rail ? "relative h-full bg-transparent" : "relative shrink-0 bg-black"}
+        className={rail ? "relative h-full bg-transparent" : "relative shrink-0 bg-[var(--ed-bg1,#12151a)]"}
       >
         {/* Ana menü */}
         <div
@@ -1213,7 +1235,7 @@ export default function ReelsMenu(props: ReelsMenuProps) {
 
         {/* Düzenle alt menüsü: ana menüyle aynı alanı kaplar */}
         {editOpen && (
-          <div className={`absolute inset-0 z-10 flex items-stretch ${rail ? "flex-col bg-[var(--ed-bg1,#12151a)]" : "bg-black"}`}>
+          <div className={`absolute inset-0 z-10 flex items-stretch ${rail ? "flex-col bg-[var(--ed-bg1,#12151a)]" : "bg-[var(--ed-bg1,#12151a)]"}`}>
             <button
               type="button"
               aria-label="Geri"
@@ -1295,7 +1317,7 @@ function AnimationPanel({ engine, clip }: { engine: CanvasEngine; clip: VideoTra
         ] as const
       ).map(([label, value, setter, field]) => (
         <div key={field} className="flex items-center gap-2">
-          <span className="text-[11px] text-zinc-400 w-9 shrink-0">{label}</span>
+          <span className="text-[11px] text-[var(--ed-tx2,#98a2b3)] w-9 shrink-0">{label}</span>
           <div className="flex items-center gap-1.5 overflow-x-auto no-scrollbar">
             {ANIM_KINDS.map((k) => (
               <button
@@ -1307,7 +1329,7 @@ function AnimationPanel({ engine, clip }: { engine: CanvasEngine; clip: VideoTra
                   engine.updateClipAnimation(clip.id, { [field]: k.id });
                 }}
                 className={`h-8 px-3 rounded-full text-[11px] font-semibold shrink-0 ${
-                  value === k.id ? "bg-amber-400 text-black" : "bg-[#1c1c1e] text-zinc-200"
+                  value === k.id ? "bg-[var(--ed-ac-soft,rgba(56,213,200,.14))] text-[var(--ed-ac,#38d5c8)]" : "bg-[var(--ed-bg3,#232932)] text-[var(--ed-tx,#e8ecf1)]"
                 }`}
               >
                 {k.label}
@@ -1345,7 +1367,7 @@ function VolumePanel({ engine, clip }: { engine: CanvasEngine; clip: VideoTrackC
           setNonce((n) => n + 1);
           engine.updateClipVolume(clip.id, next / 100, next === 0);
         }}
-        className="w-11 h-11 rounded-xl bg-[#1c1c1e] flex items-center justify-center shrink-0"
+        className="w-11 h-11 rounded-md bg-[var(--ed-bg3,#232932)] flex items-center justify-center shrink-0"
       >
         {vol === 0 ? <VolumeX className="w-5 h-5 text-red-400" /> : <Volume2 className="w-5 h-5 text-white" />}
       </button>
@@ -1397,7 +1419,7 @@ function ColorRow({ engine, layer }: { engine: CanvasEngine; layer: TextLayer })
           }}
           style={{ backgroundColor: c }}
           className={`w-9 h-9 rounded-full shrink-0 border-2 active:scale-90 transition-transform ${
-            color === c.toUpperCase() ? "border-amber-400" : "border-white/25"
+            color === c.toUpperCase() ? "border-[var(--ed-ac,#38d5c8)]" : "border-[var(--ed-line2,#3a4350)]"
           }`}
         />
       ))}

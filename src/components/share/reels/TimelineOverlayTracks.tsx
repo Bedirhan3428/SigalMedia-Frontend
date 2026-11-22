@@ -450,7 +450,7 @@ function TimelineOverlayTracks({
                       ? "scale-[1.03] ring-2 ring-inset ring-blue-400 shadow-[0_8px_24px_rgba(0,0,0,0.75)] z-30"
                       : isSelected
                         ? "ring-2 ring-inset ring-white shadow-lg z-20"
-                        : "border border-white/20 opacity-95 hover:opacity-100 z-10"
+                        : "border border-[var(--ed-line2,#3a4350)] opacity-95 hover:opacity-100 z-10"
                   }`}
                   style={{
                     left: `${leftPx}px`,
@@ -531,8 +531,8 @@ function TimelineOverlayTracks({
               e.stopPropagation();
               onOpenTextEditor?.();
             }}
-            style={{ width: `${Math.max(120, totalDuration * pps)}px` }}
-            className="relative h-7 rounded bg-[#16171b] hover:bg-[#1e2026] border border-white/5 px-3 flex items-center gap-1.5 text-zinc-400 text-[11px] font-medium transition-colors before:absolute before:content-[''] before:inset-x-0 before:-inset-y-[9px]"
+            style={{ width: `${Math.max(210, totalDuration * pps)}px` }}
+            className="relative h-7 rounded-[3px] bg-[var(--ed-bg2,#1a1e25)] hover:bg-[var(--ed-bg3,#232932)] border border-dashed border-[var(--ed-line2,#3a4350)] px-3 flex items-center gap-1.5 whitespace-nowrap overflow-hidden text-[var(--ed-tx2,#98a2b3)] text-[11px] font-medium transition-colors before:absolute before:content-[''] before:inset-x-0 before:-inset-y-[9px]"
           >
             <Type className="w-3.5 h-3.5 text-amber-400 shrink-0" />
             <span>+ Metin veya Çıkartma ekle</span>
@@ -552,8 +552,8 @@ function TimelineOverlayTracks({
                   onPauseVideo?.();
                   onQuickAddEffect?.();
                 }}
-                style={{ width: `${Math.max(120, totalDuration * pps)}px` }}
-                className="relative h-7 rounded bg-[#16171b] hover:bg-[#1e2026] border border-white/5 px-3 flex items-center gap-1.5 text-zinc-400 text-[11px] font-medium transition-colors before:absolute before:content-[''] before:inset-x-0 before:-inset-y-[9px]"
+                style={{ width: `${Math.max(210, totalDuration * pps)}px` }}
+                className="relative h-7 rounded-[3px] bg-[var(--ed-bg2,#1a1e25)] hover:bg-[var(--ed-bg3,#232932)] border border-dashed border-[var(--ed-line2,#3a4350)] px-3 flex items-center gap-1.5 whitespace-nowrap overflow-hidden text-[var(--ed-tx2,#98a2b3)] text-[11px] font-medium transition-colors before:absolute before:content-[''] before:inset-x-0 before:-inset-y-[9px]"
               >
                 <BsStars className="w-3.5 h-3.5 text-pink-400 shrink-0" />
                 <span>+ Efekt ekle</span>
@@ -626,7 +626,7 @@ function TimelineOverlayTracks({
                           ? "scale-[1.03] ring-2 ring-inset ring-blue-400 shadow-2xl z-30"
                           : isSelected
                             ? "ring-2 ring-inset ring-white shadow-lg z-20"
-                            : "border border-white/20 opacity-90 z-10"
+                            : "border border-[var(--ed-line2,#3a4350)] opacity-90 z-10"
                       }`}
                       style={{
                         left: `${leftPx}px`,
@@ -806,8 +806,8 @@ function TimelineOverlayTracks({
               e.stopPropagation();
               onOpenMusicPicker?.();
             }}
-            style={{ width: `${Math.max(120, totalDuration * pps)}px` }}
-            className="relative h-7 rounded bg-[#16171b] hover:bg-[#1e2026] border border-white/5 px-3 flex items-center gap-1.5 text-zinc-400 text-[11px] font-medium transition-colors before:absolute before:content-[''] before:inset-x-0 before:-inset-y-[9px]"
+            style={{ width: `${Math.max(210, totalDuration * pps)}px` }}
+            className="relative h-7 rounded-[3px] bg-[var(--ed-bg2,#1a1e25)] hover:bg-[var(--ed-bg3,#232932)] border border-dashed border-[var(--ed-line2,#3a4350)] px-3 flex items-center gap-1.5 whitespace-nowrap overflow-hidden text-[var(--ed-tx2,#98a2b3)] text-[11px] font-medium transition-colors before:absolute before:content-[''] before:inset-x-0 before:-inset-y-[9px]"
           >
             <Music className="w-3.5 h-3.5 text-sky-400 shrink-0" />
             <span>+ Ses / Müzik ekle</span>

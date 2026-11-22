@@ -122,7 +122,7 @@ export default function TextComposer({ engine, layerId, onClose }: TextComposerP
 
   return (
     <div
-      className="fixed inset-x-0 z-[70] flex flex-col justify-end bg-black/55 backdrop-blur-sm"
+      className="fixed inset-x-0 z-[70] flex flex-col justify-end bg-black/60"
       style={{ top: vv?.offsetTop ?? 0, height: vv ? vv.height : "100dvh" }}
       onPointerDown={(e) => {
         if (e.target === e.currentTarget) finish();
@@ -151,14 +151,14 @@ export default function TextComposer({ engine, layerId, onClose }: TextComposerP
                   : "rgba(255,255,255,0.08)",
             textShadow: state.bg === "neon" || state.font === "neon" ? `0 0 18px ${state.color}` : "none",
           }}
-          className="flex-1 min-w-0 max-h-28 rounded-2xl px-3.5 py-2.5 text-lg outline-none resize-none border border-white/15 placeholder:text-zinc-500"
+          className="flex-1 min-w-0 max-h-28 rounded-md px-3.5 py-2.5 text-lg outline-none resize-none border border-[var(--ed-line2,#3a4350)] focus:border-[var(--ed-ac,#38d5c8)] placeholder:text-[var(--ed-tx3,#5b6574)]"
         />
         <button
           type="button"
           aria-label="Tamam"
           onPointerDown={keepFocus}
           onClick={finish}
-          className="w-11 h-11 shrink-0 rounded-full bg-white text-black flex items-center justify-center active:scale-90 transition-transform"
+          className="w-11 h-11 shrink-0 rounded-md bg-[var(--ed-ac,#38d5c8)] text-[var(--ed-ac-tx,#04201e)] flex items-center justify-center active:scale-90 transition-transform"
         >
           <Check className="w-5 h-5 stroke-[2.5]" />
         </button>
@@ -172,8 +172,8 @@ export default function TextComposer({ engine, layerId, onClose }: TextComposerP
           onPointerDown={keepFocus}
           onClick={() => openPanel("font")}
           style={{ fontFamily: fontCfg.fontFamily, fontWeight: fontCfg.fontWeight }}
-          className={`w-11 h-11 rounded-full flex items-center justify-center text-lg border active:scale-90 transition-all ${
-            panel === "font" ? "bg-white text-black border-white" : "bg-white/10 text-white border-white/15"
+          className={`w-11 h-11 rounded-md flex items-center justify-center text-lg border active:scale-90 transition-all ${
+            panel === "font" ? "bg-[var(--ed-ac-soft,rgba(56,213,200,.14))] text-[var(--ed-ac,#38d5c8)] border-[var(--ed-ac,#38d5c8)]" : "bg-[var(--ed-bg3,#232932)] text-[var(--ed-tx,#e8ecf1)] border-[var(--ed-line,#2a303a)]"
           }`}
         >
           A
@@ -184,8 +184,8 @@ export default function TextComposer({ engine, layerId, onClose }: TextComposerP
           aria-pressed={panel === "color"}
           onPointerDown={keepFocus}
           onClick={() => openPanel("color")}
-          className={`w-11 h-11 rounded-full flex items-center justify-center border active:scale-90 transition-all ${
-            panel === "color" ? "border-white" : "border-white/15"
+          className={`w-11 h-11 rounded-md flex items-center justify-center border active:scale-90 transition-all bg-[var(--ed-bg3,#232932)] ${
+            panel === "color" ? "border-[var(--ed-ac,#38d5c8)]" : "border-[var(--ed-line,#2a303a)]"
           }`}
         >
           <span className="w-7 h-7 rounded-full border-2 border-white/80" style={{ backgroundColor: state.color }} />
@@ -197,7 +197,7 @@ export default function TextComposer({ engine, layerId, onClose }: TextComposerP
           onClick={() =>
             push({ ...state, align: ALIGN_ORDER[(ALIGN_ORDER.indexOf(state.align) + 1) % ALIGN_ORDER.length] })
           }
-          className="w-11 h-11 rounded-full flex items-center justify-center bg-white/10 text-white border border-white/15 active:scale-90 transition-all"
+          className="w-11 h-11 rounded-md flex items-center justify-center bg-[var(--ed-bg3,#232932)] text-[var(--ed-tx,#e8ecf1)] border border-[var(--ed-line,#2a303a)] active:scale-90 transition-all"
         >
           <AlignIcon className="w-5 h-5" />
         </button>
@@ -206,7 +206,7 @@ export default function TextComposer({ engine, layerId, onClose }: TextComposerP
       {panel !== "keys" && (
         <div
           style={{ height: kbHeight }}
-          className="shrink-0 bg-[#0c0c0f] border-t border-white/10 overflow-y-auto no-scrollbar px-4 pt-4"
+          className="shrink-0 bg-[var(--ed-bg1,#12151a)] border-t border-[var(--ed-line,#2a303a)] overflow-y-auto no-scrollbar px-4 pt-4"
         >
           {panel === "font" ? (
             <div className="flex flex-col gap-4">
@@ -217,10 +217,10 @@ export default function TextComposer({ engine, layerId, onClose }: TextComposerP
                     type="button"
                     onClick={() => push({ ...state, font: f.id })}
                     style={{ fontFamily: f.fontFamily, fontWeight: f.fontWeight, fontStyle: f.fontStyle }}
-                    className={`min-h-12 rounded-2xl text-lg border active:scale-95 transition-all ${
+                    className={`min-h-12 rounded-md text-lg border active:scale-95 transition-all ${
                       state.font === f.id
-                        ? "bg-white text-black border-white"
-                        : "bg-[#1c1c1e] text-white border-white/10"
+                        ? "bg-[var(--ed-ac-soft,rgba(56,213,200,.14))] text-[var(--ed-ac,#38d5c8)] border-[var(--ed-ac,#38d5c8)]"
+                        : "bg-[var(--ed-bg3,#232932)] text-[var(--ed-tx,#e8ecf1)] border-[var(--ed-line,#2a303a)]"
                     }`}
                   >
                     {f.label}
@@ -233,10 +233,10 @@ export default function TextComposer({ engine, layerId, onClose }: TextComposerP
                     key={b.id}
                     type="button"
                     onClick={() => push({ ...state, bg: b.id })}
-                    className={`min-h-11 rounded-2xl text-xs font-semibold border active:scale-95 transition-all ${
+                    className={`min-h-11 rounded-md text-xs font-semibold border active:scale-95 transition-all ${
                       state.bg === b.id
-                        ? "bg-amber-400 text-black border-amber-400"
-                        : "bg-[#1c1c1e] text-zinc-200 border-white/10"
+                        ? "bg-[var(--ed-ac-soft,rgba(56,213,200,.14))] text-[var(--ed-ac,#38d5c8)] border-[var(--ed-ac,#38d5c8)]"
+                        : "bg-[var(--ed-bg3,#232932)] text-[var(--ed-tx2,#98a2b3)] border-[var(--ed-line,#2a303a)]"
                     }`}
                   >
                     {b.label}
@@ -255,8 +255,8 @@ export default function TextComposer({ engine, layerId, onClose }: TextComposerP
                   style={{ backgroundColor: c }}
                   className={`w-11 h-11 rounded-full border-2 active:scale-90 transition-all ${
                     state.color.toUpperCase() === c.toUpperCase()
-                      ? "border-white ring-2 ring-white/50"
-                      : "border-white/20"
+                      ? "border-[var(--ed-ac,#38d5c8)] ring-2 ring-[var(--ed-ac,#38d5c8)]/50"
+                      : "border-[var(--ed-line2,#3a4350)]"
                   }`}
                 />
               ))}
