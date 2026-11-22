@@ -362,7 +362,7 @@ export default function ChatRoomPage() {
           }
         }
         .msg-bubble-slide-up {
-          animation: sigalBubbleSlideUp 260ms cubic-bezier(0.22, 1, 0.36, 1) both;
+          animation: sigalBubbleSlideUp 420ms cubic-bezier(0.22, 1, 0.36, 1) both;
           will-change: transform, opacity;
         }
       `}</style>
