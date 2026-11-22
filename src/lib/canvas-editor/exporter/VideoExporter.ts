@@ -6,6 +6,9 @@ import { FastDemuxer, DemuxedSample, DemuxedVideoTrack } from './FastDemuxer';
 import { applyMusicFadeToGain } from '../utils/musicFade';
 import { MediaRecorderFallback } from './MediaRecorderFallback';
 import { RemuxExporter } from './RemuxExporter';
+import { GlCompositor } from './gpu/GlCompositor';
+import { probeZeroCopyBt709 } from './gpu/zeroCopyProbe';
+import type { Muxer as Mp4Muxer, ArrayBufferTarget as Mp4ArrayBufferTarget } from 'mp4-muxer';
 
 export type ExportResolution = '1080p' | '720p' | 'auto';
 export type ExportWarning = 'downscaled-720p';
@@ -23,6 +26,18 @@ export interface ExportStats {
   /** drawMs içinde: getImageData readback */
   readbackMs: number;
   encodeMs: number;
+  /** exportToBlob girişinden ses başlangıcına kadar (config, muxer import) */
+  setupMs?: number;
+  /** ses karıştırma + AAC kodlama (paralel yolda: video döngüsünden sonra kalan bekleme) */
+  audioMs?: number;
+  /** encoder flush + muxer finalize */
+  finalizeMs?: number;
+  /** ses görevinin toplam duvar süresi (video ile paralel) */
+  audioWallMs?: number;
+  /** kompozitör: 'webgl2' (GPU) veya '2d' (Canvas 2D yedek yolu) */
+  compositor?: 'webgl2' | '2d';
+  /** kare tuvalden doğrudan encoder'a (VideoFrame(canvas)); false ise I420 paketleme/okuma */
+  zeroCopy?: boolean;
   /** Kaynak kareleri WebCodecs imleciyle mi (hızlı) yoksa seek yedek yoluyla mı alındı */
   usedFrameCursor: boolean;
   /** Çıktı I420 bt709 limited-range olarak etiketlendi mi (E-06) */
@@ -68,6 +83,15 @@ const H264_CODEC_CANDIDATES = [
 
 const OUTPUT_FPS = 30;
 const PREFETCH_FRAMES = 12;
+/** WP-15: encoder kuyruğu (kodlama kompozisyonla örtüşür) ve GPU'da bekleyen asenkron okuma sayısı */
+const ENCODER_QUEUE = 16;
+const PACK_DEPTH = 3;
+const BT709_LIMITED: VideoColorSpaceInit = {
+  primaries: 'bt709',
+  transfer: 'bt709',
+  matrix: 'bt709',
+  fullRange: false,
+};
 // Çözünürlük başına varsayılan bitrate (H.264 High, 30 fps dikey): 1080p ~7 Mbps, 720p ~4 Mbps
 const BITRATE_1080P = 7_000_000;
 const BITRATE_720P = 4_000_000;
@@ -665,6 +689,7 @@ export class VideoExporter {
       throw new Error('Aktif medya bir video değil');
     }
 
+    const tFn = performance.now();
     const signal = options?.signal;
     const clips = this.resolveExportClips(engine);
     const targetSize = this.resolveTargetSize(options);
@@ -714,6 +739,7 @@ export class VideoExporter {
 
     let videoEncoder: VideoEncoder | null = null;
     let audioEncoder: AudioEncoder | null = null;
+    let compositor: GlCompositor | null = null;
 
     // Kaynak dosya belleği ve demux sonucu medya başına tek sefer okunur (ses + görüntü ortak)
     const bufferCache = new Map<EditorMedia, Promise<ArrayBuffer | null>>();
@@ -753,128 +779,25 @@ export class VideoExporter {
               .catch(() => false)
           : Promise.resolve(false);
 
-      const [audioConfigSupported, { Muxer, ArrayBufferTarget }] = await Promise.all([
+      // WP-15: GPU yolu. QA anahtarı window.__EXPORT_FORCE_2D eski Canvas 2D + JS I420 yolunu zorlar.
+      const force2d = Boolean((globalThis as { __EXPORT_FORCE_2D?: boolean }).__EXPORT_FORCE_2D);
+      // Sıfır kopya (VideoFrame(canvas)) yalnızca encoder RGB'yi BT.709 limited'a çeviriyorsa (öz-test)
+      const zeroCopyPromise =
+        !force2d &&
+        !(globalThis as { __EXPORT_FORCE_PACK?: boolean }).__EXPORT_FORCE_PACK &&
+        videoConfig.hardwareAcceleration === 'prefer-hardware'
+          ? probeZeroCopyBt709(videoConfig)
+          : Promise.resolve(false);
+
+      const [audioConfigSupported, { Muxer, ArrayBufferTarget }, zeroCopy] = await Promise.all([
         audioSupportPromise,
         import('mp4-muxer'),
+        zeroCopyPromise,
       ]);
-
-      const renderedAudio = audioConfigSupported
-        ? await this.renderMixedAudio({
-            clips,
-            isReelsNle,
-            outputDuration,
-            getBuffer,
-            music: options?.music,
-            musicVolume: options?.musicVolume ?? 0.85,
-            signal,
-          })
-        : null;
-
       if (signal?.aborted) throw abortError();
 
-      const target = new ArrayBufferTarget();
-      const muxer = new Muxer({
-        target,
-        video: {
-          codec: 'avc',
-          width: exportWidth,
-          height: exportHeight,
-          frameRate: fps,
-        },
-        audio: renderedAudio
-          ? {
-              codec: 'aac',
-              numberOfChannels: 2,
-              sampleRate: AUDIO_SAMPLE_RATE,
-            }
-          : undefined,
-        fastStart: 'in-memory',
-      });
-
-      let encoderError: Error | null = null;
-
-      videoEncoder = new VideoEncoder({
-        output: (chunk, meta) => {
-          muxer.addVideoChunk(chunk, meta);
-        },
-        error: (err) => {
-          encoderError = err instanceof Error ? err : new Error(String(err));
-        },
-      });
-      videoEncoder.configure(videoConfig);
-
-      if (renderedAudio) {
-        audioEncoder = new AudioEncoder({
-          output: (chunk, meta) => {
-            // E-05: AAC paket dolgusu sesi videodan uzatıyordu; ses, video bitiş anına (kare sayısı x süre) kırpılır
-            if (chunk.timestamp >= videoEndUs) return;
-            const dur = chunk.duration ?? 0;
-            if (dur > 0 && chunk.timestamp + dur > videoEndUs) {
-              const data = new Uint8Array(chunk.byteLength);
-              chunk.copyTo(data);
-              muxer.addAudioChunkRaw(
-                data,
-                chunk.type,
-                chunk.timestamp,
-                videoEndUs - chunk.timestamp,
-                meta
-              );
-            } else {
-              muxer.addAudioChunk(chunk, meta);
-            }
-          },
-          error: (err) => {
-            encoderError = err instanceof Error ? err : new Error(String(err));
-          },
-        });
-        audioEncoder.configure(aacConfig);
-
-        const ch0 = renderedAudio.getChannelData(0);
-        const ch1 =
-          renderedAudio.numberOfChannels > 1
-            ? renderedAudio.getChannelData(1)
-            : renderedAudio.getChannelData(0);
-        const chunkFrames = 4096;
-        const reusablePlanar = new Float32Array(chunkFrames * 2);
-
-        const audioLength = Math.min(
-          renderedAudio.length,
-          Math.ceil((videoEndUs / 1_000_000) * AUDIO_SAMPLE_RATE)
-        );
-        for (let offset = 0; offset < audioLength; offset += chunkFrames) {
-          if (signal?.aborted) throw abortError();
-          const frameCount = Math.min(chunkFrames, audioLength - offset);
-          const planarView =
-            frameCount === chunkFrames
-              ? reusablePlanar
-              : reusablePlanar.subarray(0, frameCount * 2);
-          planarView.set(ch0.subarray(offset, offset + frameCount), 0);
-          planarView.set(ch1.subarray(offset, offset + frameCount), frameCount);
-
-          const audioData = new AudioData({
-            format: 'f32-planar',
-            sampleRate: AUDIO_SAMPLE_RATE,
-            numberOfFrames: frameCount,
-            numberOfChannels: 2,
-            timestamp: Math.round((offset / AUDIO_SAMPLE_RATE) * 1_000_000),
-            data: planarView,
-          });
-          audioEncoder.encode(audioData);
-          audioData.close();
-        }
-      }
-
-      const { canvas: exportCanvas, ctx: exportCtx } = this.getExportSurface(
-        exportWidth,
-        exportHeight
-      );
-      const ml = engine.getMediaLayer();
-
-      // ─────────────────────────────────────────────────────────────
-      // TEK BİRLEŞİK KARE-DOĞRU PIPELINE
-      // Video klip  → WebCodecs çekme imleci (gerçek kare) | desteklenmezse kare-kilitli seek
-      // Foto klip   → sahne değişmediği sürece yeniden çizim yok, yalnızca encode
-      // ─────────────────────────────────────────────────────────────
+      const gpu = force2d ? null : GlCompositor.create(exportWidth, exportHeight, zeroCopy ? 'direct' : 'pack');
+      compositor = gpu;
       const stats: ExportStats = {
         width: exportWidth,
         height: exportHeight,
@@ -888,28 +811,168 @@ export class VideoExporter {
         encodeMs: 0,
         usedFrameCursor: false,
         taggedBt709Limited: false,
+        setupMs: performance.now() - tFn,
+        audioMs: 0,
+        finalizeMs: 0,
+        compositor: gpu ? 'webgl2' : '2d',
+        zeroCopy: !force2d && zeroCopy,
       };
-      const tStart = performance.now();
 
-      // E-06: Canvas -> I420 BT.709 limited-range. Canvas karesi doğrudan verilirse encoder sRGB/tam aralık
-      // (yuvj420p) etiketler. I420 üretilemezse (eski tarayıcı) canvas karesine geri düşülür.
-      const colorSpace = {
-        primaries: 'bt709',
-        transfer: 'bt709',
-        matrix: 'bt709',
-        fullRange: false,
-      } as const;
+      // ── Muxer ve ses: ses video döngüsüyle PARALEL hazırlanır (WP-15 adım 5) ──
+      // Muxer ses parçası olup olmadığını bilmeden kurulamaz; o zamana kadar video paketleri bekletilir.
+      const target = new ArrayBufferTarget();
+      let muxer: Mp4Muxer<Mp4ArrayBufferTarget> | null = null;
+      const pendingVideo: Array<[EncodedVideoChunk, EncodedVideoChunkMetadata | undefined]> = [];
+      let encoderError: Error | null = null;
+      // E-06 / WP-15: çıktı değerleri her yolda BT.709 limited; mp4 'colr' kutusu bunu açıkça etiketler
+      // (donanım encoder'ı SPS VUI renk bilgisini yazmayabiliyor).
+      const tagMeta = (meta?: EncodedVideoChunkMetadata): EncodedVideoChunkMetadata | undefined =>
+        meta?.decoderConfig
+          ? { ...meta, decoderConfig: { ...meta.decoderConfig, colorSpace: { ...BT709_LIMITED } } }
+          : meta;
+
+      const tAudio = performance.now();
+      const audioTask = (async () => {
+        const renderedAudio = audioConfigSupported
+          ? await this.renderMixedAudio({
+              clips,
+              isReelsNle,
+              outputDuration,
+              getBuffer,
+              music: options?.music,
+              musicVolume: options?.musicVolume ?? 0.85,
+              signal,
+            })
+          : null;
+        if (signal?.aborted) throw abortError();
+        const mx = new Muxer({
+          target,
+          video: {
+            codec: 'avc',
+            width: exportWidth,
+            height: exportHeight,
+            frameRate: fps,
+          },
+          audio: renderedAudio
+            ? {
+                codec: 'aac',
+                numberOfChannels: 2,
+                sampleRate: AUDIO_SAMPLE_RATE,
+              }
+            : undefined,
+          fastStart: 'in-memory',
+        });
+        muxer = mx;
+        for (const [c, m] of pendingVideo) mx.addVideoChunk(c, m);
+        pendingVideo.length = 0;
+        if (!renderedAudio) return;
+
+        const aEnc = new AudioEncoder({
+          output: (chunk, meta) => {
+            // E-05: AAC paket dolgusu sesi videodan uzatıyordu; ses, video bitiş anına (kare sayısı x süre) kırpılır
+            if (chunk.timestamp >= videoEndUs) return;
+            const dur = chunk.duration ?? 0;
+            if (dur > 0 && chunk.timestamp + dur > videoEndUs) {
+              const data = new Uint8Array(chunk.byteLength);
+              chunk.copyTo(data);
+              mx.addAudioChunkRaw(data, chunk.type, chunk.timestamp, videoEndUs - chunk.timestamp, meta);
+            } else {
+              mx.addAudioChunk(chunk, meta);
+            }
+          },
+          error: (err) => {
+            encoderError = err instanceof Error ? err : new Error(String(err));
+          },
+        });
+        audioEncoder = aEnc;
+        aEnc.configure(aacConfig);
+
+        const ch0 = renderedAudio.getChannelData(0);
+        const ch1 =
+          renderedAudio.numberOfChannels > 1
+            ? renderedAudio.getChannelData(1)
+            : renderedAudio.getChannelData(0);
+        const chunkFrames = 4096;
+        const reusablePlanar = new Float32Array(chunkFrames * 2);
+        const audioLength = Math.min(
+          renderedAudio.length,
+          Math.ceil((videoEndUs / 1_000_000) * AUDIO_SAMPLE_RATE)
+        );
+        for (let offset = 0; offset < audioLength; offset += chunkFrames) {
+          if (signal?.aborted) throw abortError();
+          const frameCount = Math.min(chunkFrames, audioLength - offset);
+          const planarView =
+            frameCount === chunkFrames ? reusablePlanar : reusablePlanar.subarray(0, frameCount * 2);
+          planarView.set(ch0.subarray(offset, offset + frameCount), 0);
+          planarView.set(ch1.subarray(offset, offset + frameCount), frameCount);
+          const audioData = new AudioData({
+            format: 'f32-planar',
+            sampleRate: AUDIO_SAMPLE_RATE,
+            numberOfFrames: frameCount,
+            numberOfChannels: 2,
+            timestamp: Math.round((offset / AUDIO_SAMPLE_RATE) * 1_000_000),
+            data: planarView,
+          });
+          aEnc.encode(audioData);
+          audioData.close();
+        }
+        await aEnc.flush();
+        aEnc.close();
+        audioEncoder = null;
+      })();
+      // Hata, video döngüsünden sonra await ile yeniden fırlatılır (işlenmemiş ret uyarısı olmasın)
+      audioTask.then(
+        () => {
+          stats.audioWallMs = performance.now() - tAudio;
+        },
+        () => {}
+      );
+
+      const vEnc = new VideoEncoder({
+        output: (chunk, meta) => {
+          const m = tagMeta(meta);
+          if (muxer) muxer.addVideoChunk(chunk, m);
+          else pendingVideo.push([chunk, m]);
+        },
+        error: (err) => {
+          encoderError = err instanceof Error ? err : new Error(String(err));
+        },
+      });
+      videoEncoder = vEnc;
+      const qaLatency = (globalThis as { __EXPORT_LATENCY?: LatencyMode }).__EXPORT_LATENCY;
+      vEnc.configure(qaLatency ? { ...videoConfig, latencyMode: qaLatency } : videoConfig);
+
+      const { canvas: exportCanvas, ctx: exportCtx } = this.getExportSurface(
+        exportWidth,
+        exportHeight
+      );
+      const ml = engine.getMediaLayer();
+
+      // ─────────────────────────────────────────────────────────────
+      // TEK BİRLEŞİK KARE-DOĞRU PIPELINE
+      // Video klip  → WebCodecs çekme imleci (gerçek kare) | desteklenmezse kare-kilitli seek
+      // Foto klip   → sahne değişmediği sürece yeniden çizim yok, yalnızca encode
+      // WP-15: GPU (WebGL2) kompozitör varsa kare doğrudan dokudan çizilir; desteklenmeyen özellikte
+      // o kare Canvas 2D ile çizilip dokuya kopyalanır. Çıkış: sıfır kopya VideoFrame(canvas) ya da
+      // GPU'da I420'ye paketlenip asenkron okunan kare.
+      // ─────────────────────────────────────────────────────────────
+
+      // E-06: Canvas -> I420 BT.709 limited-range (yalnızca GPU'suz ve sıfır kopyasız yedek yol)
       let i420Ok = true;
       let i420Buf: Uint8Array | null = null;
       let i420Fresh = false;
-      // N-3: ana iş parçacığını ~8 ms'lik dilimlerle bırak; arayüz (rAF) export sırasında akıcı kalsın
+      // N-3 / WP-15: ana iş parçacığı kare başına en fazla bir kez ve yalnızca bütçe aşıldıysa bırakılır
       let lastYieldAt = performance.now();
-      const sliceYield = async (): Promise<void> => {
-        if (performance.now() - lastYieldAt < 8) return;
+      const sliceYield = async (budgetMs = 8): Promise<void> => {
+        if (performance.now() - lastYieldAt < budgetMs) return;
         await this.yieldToMain();
         lastYieldAt = performance.now();
       };
       const makeVideoFrame = async (timestamp: number, canvasChanged: boolean): Promise<VideoFrame> => {
+        if (zeroCopy) {
+          stats.taggedBt709Limited = true;
+          return new VideoFrame(exportCanvas, { timestamp, duration: frameDurationUs });
+        }
         if (i420Ok) {
           try {
             if (!i420Buf) i420Buf = new Uint8Array((exportWidth * exportHeight * 3) >> 1);
@@ -933,7 +996,7 @@ export class VideoExporter {
               codedHeight: exportHeight,
               timestamp,
               duration: frameDurationUs,
-              colorSpace,
+              colorSpace: BT709_LIMITED,
             });
             stats.taggedBt709Limited = true;
             return f;
@@ -943,6 +1006,42 @@ export class VideoExporter {
         }
         return new VideoFrame(exportCanvas, { timestamp, duration: frameDurationUs });
       };
+
+      // GPU pack modu: okunan I420 kareleri sırayla (zaman damgası kuyruğu) encoder'a verilir
+      const packQueue: Array<{ timestamp: number; keyFrame: boolean }> = [];
+      const packBuf = gpu && gpu.mode === 'pack' ? new Uint8Array((exportWidth * exportHeight * 3) >> 1) : null;
+      const yieldFn = () => this.yieldToMain();
+      const encodeOrdered = (frame: VideoFrame, keyFrame: boolean) => {
+        try {
+          vEnc.encode(frame, { keyFrame });
+        } finally {
+          frame.close();
+        }
+      };
+      const drainPack = async (keep: number) => {
+        if (!gpu || !packBuf) return;
+        while (gpu.pendingCount() > keep) {
+          const tR = performance.now();
+          await gpu.readOldest(packBuf, yieldFn);
+          stats.readbackMs += performance.now() - tR;
+          lastYieldAt = performance.now();
+          const q = packQueue.shift() as { timestamp: number; keyFrame: boolean };
+          encodeOrdered(
+            new VideoFrame(packBuf, {
+              format: 'I420',
+              codedWidth: exportWidth,
+              codedHeight: exportHeight,
+              timestamp: q.timestamp,
+              duration: frameDurationUs,
+              colorSpace: BT709_LIMITED,
+            }),
+            q.keyFrame
+          );
+          stats.taggedBt709Limited = true;
+        }
+      };
+
+      let bgCanvas: HTMLCanvasElement | null = null;
       let frameIdx = 0;
       let clipOutStartSec = 0;
       let lastReportedPct = -1;
@@ -960,6 +1059,7 @@ export class VideoExporter {
         if (isReelsNle) {
           engine.applyClipTransformToMediaLayer(clip);
         }
+        gpu?.invalidateStatic();
 
         const rate = Math.max(0.25, clip.playbackRate || 1.0);
         const isVideoClip = !clip.isMotionPhoto && clip.media?.type === 'video';
@@ -979,6 +1079,7 @@ export class VideoExporter {
             } catch {}
           }
           const track = await getDemuxed(clip.media);
+          if (track && !stats.sourceCodec) stats.sourceCodec = track.codec;
           if (track) {
             const offsetSec = track.ptsOffsetUs / 1_000_000;
             const samples = FastDemuxer.getSamplesForRange(
@@ -1009,21 +1110,21 @@ export class VideoExporter {
               clip.sourceStart + localOut * rate
             );
 
-            let externalFrame: CanvasImageSource | undefined;
+            let vf: VideoFrame | null = null;
             let needsDraw = true;
 
             if (isVideoClip) {
               if (cursor) {
                 try {
                   const tDec = performance.now();
-                  const vf = await cursor.frameAt(sourceSec, signal);
+                  vf = await cursor.frameAt(sourceSec, signal);
                   stats.decodeMs += performance.now() - tDec;
                   if (vf) stats.usedFrameCursor = true;
-                  if (vf) externalFrame = this.orientFrame(vf, rotation);
                 } catch (err) {
                   if (err instanceof DOMException && err.name === 'AbortError') throw err;
                   cursor.close();
                   cursor = null;
+                  vf = null;
                 }
               }
               if (!cursor && ml) {
@@ -1037,25 +1138,73 @@ export class VideoExporter {
             }
 
             const tDraw = performance.now();
-            if (needsDraw) {
-              exportCtx.clearRect(0, 0, exportWidth, exportHeight);
-              engine.drawBaseMedia(exportCtx, exportWidth, exportHeight, outTimeSec, externalFrame);
-              engine.drawCachedOverlays(exportCtx, exportWidth, exportHeight, outTimeSec);
+            const timestamp = Math.round(frameIdx * frameDurationUs);
+            const keyFrame = frameIdx % (fps * 2) === 0;
+            let outFrame: VideoFrame | null = null;
+
+            if (gpu) {
+              engine.prepareExportFrame(outTimeSec);
+              const params = ml && ml.visible ? ml.getGpuDrawParams(exportWidth, exportHeight) : null;
+              const src: TexImageSource | null = vf ?? (ml ? ml.getExportSourceElement() : null);
+              if (params && src) {
+                gpu.beginFrame();
+                if (!GlCompositor.coversCanvas(params, exportWidth, exportHeight)) {
+                  if (!bgCanvas) bgCanvas = document.createElement('canvas');
+                  if (bgCanvas.width !== exportWidth || bgCanvas.height !== exportHeight) {
+                    bgCanvas.width = exportWidth;
+                    bgCanvas.height = exportHeight;
+                  }
+                  const bctx = bgCanvas.getContext('2d', { alpha: false });
+                  if (bctx && gpu.needsBackground(cIdx)) engine.renderAmbientBackground(bctx, exportWidth, exportHeight);
+                  gpu.drawBackground(bgCanvas, cIdx);
+                }
+                const srcW = vf
+                  ? rotation === 90 || rotation === 270
+                    ? vf.displayHeight
+                    : vf.displayWidth
+                  : ml?.media.width || exportWidth;
+                gpu.drawMedia(src, srcW, vf ? rotation : 0, params, !vf && !isVideoClip);
+                const ov = engine.getExportOverlay(exportWidth, exportHeight, outTimeSec);
+                if (ov) gpu.drawOverlay(ov.canvas, ov.version);
+              } else {
+                // Shader karşılığı olmayan özellik: o kare Canvas 2D ile çizilir, GPU'ya doku olarak kopyalanır
+                if (needsDraw || staticFrameClipId !== clip.id) {
+                  exportCtx.clearRect(0, 0, exportWidth, exportHeight);
+                  const ext = vf ? this.orientFrame(vf, rotation) : undefined;
+                  engine.drawBaseMedia(exportCtx, exportWidth, exportHeight, outTimeSec, ext);
+                  engine.drawCachedOverlays(exportCtx, exportWidth, exportHeight, outTimeSec);
+                }
+                gpu.beginFrame();
+                gpu.drawFullFrame(exportCanvas);
+              }
               staticFrameClipId = isVideoClip ? null : clip.id;
+              if (gpu.mode === 'direct') {
+                outFrame = new VideoFrame(gpu.canvas, { timestamp, duration: frameDurationUs });
+                stats.taggedBt709Limited = true;
+              } else {
+                gpu.queuePack();
+                packQueue.push({ timestamp, keyFrame });
+              }
+              stats.drawMs += performance.now() - tDraw;
+            } else {
+              if (needsDraw) {
+                exportCtx.clearRect(0, 0, exportWidth, exportHeight);
+                const ext = vf ? this.orientFrame(vf, rotation) : undefined;
+                engine.drawBaseMedia(exportCtx, exportWidth, exportHeight, outTimeSec, ext);
+                engine.drawCachedOverlays(exportCtx, exportWidth, exportHeight, outTimeSec);
+                staticFrameClipId = isVideoClip ? null : clip.id;
+                i420Fresh = false;
+              }
+              await sliceYield();
+              outFrame = await makeVideoFrame(timestamp, needsDraw);
+              stats.drawMs += performance.now() - tDraw;
             }
 
-            if (needsDraw) i420Fresh = false;
-            await sliceYield();
-            const videoFrame = await makeVideoFrame(Math.round(frameIdx * frameDurationUs), needsDraw);
-            stats.drawMs += performance.now() - tDraw;
             const tEnc = performance.now();
-            try {
-              videoEncoder.encode(videoFrame, { keyFrame: frameIdx % (fps * 2) === 0 });
-            } finally {
-              videoFrame.close();
-            }
-
-            await this.drainEncoder(videoEncoder, 6, signal);
+            if (outFrame) encodeOrdered(outFrame, keyFrame);
+            // GPU okuma hattı: en fazla PACK_DEPTH kare GPU'da bekler (okuma kompozisyonla örtüşür)
+            await drainPack(PACK_DEPTH);
+            await this.drainEncoder(vEnc, ENCODER_QUEUE, signal);
             stats.encodeMs += performance.now() - tEnc;
 
             const rawProgress = Math.min(0.97, (frameIdx + 1) / totalFrames);
@@ -1074,21 +1223,27 @@ export class VideoExporter {
         clipOutStartSec = clipOutEndSec;
       }
 
+      await drainPack(0);
       if (encoderError) throw encoderError;
 
-      await videoEncoder.flush();
-      videoEncoder.close();
+      const tFin = performance.now();
+      await vEnc.flush();
+      vEnc.close();
       videoEncoder = null;
 
-      if (audioEncoder) {
-        await audioEncoder.flush();
-        audioEncoder.close();
-        audioEncoder = null;
-      }
+      // Ses görevi video ile paralel çalıştı; burada yalnızca kalanı beklenir
+      const tAudioWait = performance.now();
+      await audioTask;
+      stats.audioMs = performance.now() - tAudioWait;
+      if (encoderError) throw encoderError;
+      const mxFinal = muxer as Mp4Muxer<Mp4ArrayBufferTarget> | null;
+      if (!mxFinal) throw new Error('muxer not created');
 
-      muxer.finalize();
+      mxFinal.finalize();
       options?.onProgress?.(1);
-      stats.totalMs = performance.now() - tStart;
+      stats.finalizeMs = performance.now() - tFin - stats.audioMs;
+      stats.totalMs = performance.now() - tFn;
+      stats.path = gpu ? 'gpu' : stats.usedFrameCursor ? 'fast-cursor' : 'seek';
       options?.onStats?.(stats);
       // Teşhis için (QA harness): son export istatistiği
       (globalThis as { __lastExportStats?: ExportStats }).__lastExportStats = stats;
@@ -1100,9 +1255,16 @@ export class VideoExporter {
           if (videoEncoder.state !== 'closed') videoEncoder.close();
         } catch {}
       }
-      if (audioEncoder) {
+      // ses kodlayıcı paralel görevde atanır (TS akış analizi kapanışı görmez)
+      const aEncLeft = audioEncoder as AudioEncoder | null;
+      if (aEncLeft) {
         try {
-          if (audioEncoder.state !== 'closed') audioEncoder.close();
+          if (aEncLeft.state !== 'closed') aEncLeft.close();
+        } catch {}
+      }
+      if (compositor) {
+        try {
+          compositor.dispose();
         } catch {}
       }
       engine.setExportingVideo(false);

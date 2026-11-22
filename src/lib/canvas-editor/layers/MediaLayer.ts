@@ -34,6 +34,21 @@ export const DEFAULT_FILTERS: MediaFilters = {
   chromatic: 0
 };
 
+/** WP-15: GPU export kompozitörünün taban medya için kullandığı çizim parametreleri (tuval pikseli). */
+export interface MediaGpuDrawParams {
+  cx: number;
+  cy: number;
+  width: number;
+  height: number;
+  rotationDeg: number;
+  scaleX: number;
+  scaleY: number;
+  alpha: number;
+  crop: { x: number; y: number; width: number; height: number } | null;
+  cornerRadius: number;
+  filter: { brightness: number; contrast: number; saturate: number; sepia: number; grayscale: number; hueRotate: number };
+}
+
 export class MediaLayer extends BaseLayer {
   public override type = 'media';
   public media: EditorMedia;
@@ -394,6 +409,75 @@ export class MediaLayer extends BaseLayer {
     this.lastCanvasH = canvasHeight;
     ctx.drawImage(src, l, tp, dims.width, dims.height);
     return true;
+  }
+
+  /**
+   * WP-15 export GPU yolu: render() ile aynı geometri/filtre parametreleri (WebGL2 kompozitör çizer).
+   * Shader'da karşılığı olmayan bir özellik etkinse (efekt, ayar, rötuş, blur) null döner ve
+   * export o kare için Canvas 2D yoluna düşer.
+   */
+  public getGpuDrawParams(canvasWidth: number, canvasHeight: number): MediaGpuDrawParams | null {
+    if (!this.visible) return null;
+    if (
+      this.activeEffect ||
+      this.reelsEffect !== 'none' ||
+      this.effectClips.length > 0 ||
+      this.clipRetouch > 0.01 ||
+      this.currentValues.blur > 0.05
+    ) return null;
+    if (!ImageAdjustmentsEngine.isDefaultAdjustments(this.getEffectiveAdjustments())) return null;
+
+    const center = this.getPixelPosition(canvasWidth, canvasHeight);
+    const dims = this.getBaseDimensions(canvasWidth, canvasHeight);
+    const mediaAspect = (this.media.width || 1) / (this.media.height || 1);
+    const is916 = Math.abs(mediaAspect - canvasWidth / canvasHeight) < 0.025;
+    const t = this.transform;
+    const isFullScreenTouching =
+      is916 &&
+      t.scale >= 0.995 &&
+      Math.abs(t.rotation % 360) < 0.5 &&
+      Math.abs(t.x - 0.5) < 0.005 &&
+      Math.abs(t.y - 0.5) < 0.005;
+    const cornerRadius =
+      isFullScreenTouching || !this.roundCornersWhenDetached ? 0 : Math.round(24 * (canvasWidth / 414));
+    this.lastCanvasW = canvasWidth;
+    this.lastCanvasH = canvasHeight;
+    const anim = this.getClipAnimState(this.timelineTime);
+    const interactionScale = (this.isInteracting && this.springOnInteract ? 1.03 : 1.0) * anim.scale;
+    const cr = this.cropRect;
+    const crop =
+      !this.isCropOverlayOpen &&
+      cr &&
+      (cr.x > 0.002 || cr.y > 0.002 || cr.width < 0.998 || cr.height < 0.998)
+        ? { x: cr.x * canvasWidth, y: cr.y * canvasHeight, width: cr.width * canvasWidth, height: cr.height * canvasHeight }
+        : null;
+    // getFilterString() ile aynı yuvarlama ve eşikler
+    const v = this.currentValues;
+    return {
+      cx: center.x + anim.dx,
+      cy: center.y + anim.dy,
+      width: dims.width,
+      height: dims.height,
+      rotationDeg: t.rotation,
+      scaleX: t.scale * (t.flipH ? -1 : 1) * interactionScale,
+      scaleY: t.scale * (t.flipV ? -1 : 1) * interactionScale,
+      alpha: Math.max(0, Math.min(1, this.clipOpacity)) * anim.alpha,
+      crop,
+      cornerRadius,
+      filter: {
+        brightness: Math.abs(v.brightness - 1) > 0.005 ? Math.round(v.brightness * 100) / 100 : 1,
+        contrast: Math.abs(v.contrast - 1) > 0.005 ? Math.round(v.contrast * 100) / 100 : 1,
+        saturate: Math.abs(v.saturate - 1) > 0.005 ? Math.round(v.saturate * 100) / 100 : 1,
+        sepia: v.sepia > 0.005 ? Math.round(v.sepia * 100) / 100 : 0,
+        grayscale: v.grayscale > 0.005 ? Math.round(v.grayscale * 100) / 100 : 0,
+        hueRotate: Math.abs(v.hueRotate) > 0.5 ? Math.round(v.hueRotate) : 0,
+      },
+    };
+  }
+
+  /** WP-15: GPU export için kaynak öğe (foto / seek yedek yolundaki video) */
+  public getExportSourceElement(): HTMLImageElement | HTMLVideoElement | null {
+    return this.media.element || null;
   }
 
   public override render(
