@@ -58,6 +58,11 @@ function getOrCreateServerKeyPair(): ServerKeyPair {
   return globalThis.__sigalMessagingKeyPair;
 }
 
+/** Server-only secret material (used to derive other server secrets, e.g. push reply tokens). */
+export function getServerPrivateKeyPem(): string {
+  return getOrCreateServerKeyPair().privateKeyPem;
+}
+
 export function getServerPublicKeySpkiBase64(): string {
   return getOrCreateServerKeyPair().publicKeySpkiBase64;
 }
