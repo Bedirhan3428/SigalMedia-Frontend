@@ -30,6 +30,11 @@ export const saveSubscription = (uid: string, sub: StoredSub, ua?: string | null
 export const removeSubscription = (uid: string, endpoint: string) => removeSub(db, uid, endpoint);
 
 export async function notifyChatMessage(p: PushParams) {
-  if (!ensureConfigured()) return { sent: 0, removed: 0, total: 0 };
-  return sendChatPush({ db, push: webpush }, p);
+  if (!ensureConfigured()) {
+    console.warn("[push] skipped: VAPID not configured");
+    return { sent: 0, removed: 0, total: 0 };
+  }
+  const r = await sendChatPush({ db, push: webpush }, p);
+  console.log(`[push] chat=${p.chatId.slice(0, 8)} recipient=${p.recipientUid.slice(0, 6)} subs=${r.total} sent=${r.sent} removed=${r.removed}`);
+  return r;
 }
