@@ -55,7 +55,7 @@ function TimelineRuler({
       {labels.map((sec) => (
         <span
           key={sec}
-          className="absolute top-0 -translate-x-1/2 text-[10px] font-medium tabular-nums leading-none text-zinc-400 pointer-events-none"
+          className="absolute top-0 -translate-x-1/2 text-[10px] font-medium tabular-nums leading-none text-[var(--ed-tx2,#98a2b3)] pointer-events-none"
           style={{ left: `${sec * pps}px` }}
         >
           {formatRulerLabel(sec)}

@@ -1407,7 +1407,7 @@ export default function ShareStoryPage() {
         }}
         className={
           shareMode === "reels" && hasMedia
-            ? "fixed inset-x-0 [@media(min-width:1024px)_and_(min-height:600px)]:left-[168px] [@media(min-width:1024px)_and_(min-height:600px)]:right-[320px] flex items-center justify-center p-3 overflow-hidden select-none bg-black z-20"
+            ? "fixed inset-x-0 [@media(min-width:1024px)_and_(min-height:600px)]:left-[168px] [@media(min-width:1024px)_and_(min-height:600px)]:right-[168px] flex items-center justify-center p-3 [@media(min-width:1024px)_and_(min-height:600px)]:p-1 overflow-hidden select-none bg-black z-20"
             : shareMode === "post"
               ? "fixed inset-x-0 flex items-center justify-center overflow-hidden select-none"
               : "fixed inset-0 w-full h-full flex items-center justify-center overflow-hidden select-none"

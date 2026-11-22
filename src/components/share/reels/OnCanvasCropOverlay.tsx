@@ -147,15 +147,15 @@ export default function OnCanvasCropOverlay({
         onPointerMove={handlePointerMove}
         onPointerUp={handlePointerEnd}
         onPointerCancel={handlePointerEnd}
-        className="relative h-full max-h-full max-w-[85vw] aspect-[9/16] pointer-events-auto touch-none overflow-visible rounded-2xl shrink-0"
+        className="relative h-full max-h-full max-w-[85vw] aspect-[9/16] pointer-events-auto touch-none overflow-visible rounded-md shrink-0"
       >
         {/* Kırpma Dışı Karartma Maskesi (4 Bölge: Üst, Alt, Sol, Sağ - %65 Karartma) */}
         <div
-          className="absolute inset-x-0 top-0 bg-black/65 pointer-events-none rounded-t-2xl"
+          className="absolute inset-x-0 top-0 bg-black/65 pointer-events-none rounded-t-md"
           style={{ height: topPct }}
         />
         <div
-          className="absolute inset-x-0 bg-black/65 pointer-events-none rounded-b-2xl"
+          className="absolute inset-x-0 bg-black/65 pointer-events-none rounded-b-md"
           style={{ top: bottomMaskTopPct, height: bottomMaskHeightPct }}
         />
         <div
@@ -175,7 +175,7 @@ export default function OnCanvasCropOverlay({
         {/* Aktif Kırpma Kutusu: 9 Eşit Parça (3x3 Rule of Thirds) + 8 Tutamaç */}
         <div
           onPointerDown={(e) => beginDrag(e, "move")}
-          className="absolute border-[1.5px] border-white shadow-[0_0_0_1px_rgba(0,0,0,0.5)] cursor-move touch-none"
+          className="absolute border-[1.5px] border-[var(--ed-sel,#38d5c8)] shadow-[0_0_0_1px_rgba(0,0,0,0.5)] cursor-move touch-none"
           style={{
             left: leftPct,
             top: topPct,
@@ -197,7 +197,7 @@ export default function OnCanvasCropOverlay({
             onPointerDown={(e) => beginDrag(e, "tl")}
             className="absolute -top-4 -left-4 w-11 h-11 flex items-start justify-start p-3 cursor-nwse-resize z-30 touch-none"
           >
-            <div className="w-5 h-5 border-t-[4px] border-l-[4px] border-white rounded-tl-sm shadow-[0_0_6px_rgba(0,0,0,0.65)]" />
+            <div className="w-5 h-5 border-t-[4px] border-l-[4px] border-[var(--ed-sel,#38d5c8)] rounded-tl-sm shadow-[0_0_6px_rgba(0,0,0,0.65)]" />
           </div>
 
           {/* Sağ-Üst (TR) */}
@@ -205,7 +205,7 @@ export default function OnCanvasCropOverlay({
             onPointerDown={(e) => beginDrag(e, "tr")}
             className="absolute -top-4 -right-4 w-11 h-11 flex items-start justify-end p-3 cursor-nesw-resize z-30 touch-none"
           >
-            <div className="w-5 h-5 border-t-[4px] border-r-[4px] border-white rounded-tr-sm shadow-[0_0_6px_rgba(0,0,0,0.65)]" />
+            <div className="w-5 h-5 border-t-[4px] border-r-[4px] border-[var(--ed-sel,#38d5c8)] rounded-tr-sm shadow-[0_0_6px_rgba(0,0,0,0.65)]" />
           </div>
 
           {/* Sol-Alt (BL) */}
@@ -213,7 +213,7 @@ export default function OnCanvasCropOverlay({
             onPointerDown={(e) => beginDrag(e, "bl")}
             className="absolute -bottom-4 -left-4 w-11 h-11 flex items-end justify-start p-3 cursor-nesw-resize z-30 touch-none"
           >
-            <div className="w-5 h-5 border-b-[4px] border-l-[4px] border-white rounded-bl-sm shadow-[0_0_6px_rgba(0,0,0,0.65)]" />
+            <div className="w-5 h-5 border-b-[4px] border-l-[4px] border-[var(--ed-sel,#38d5c8)] rounded-bl-sm shadow-[0_0_6px_rgba(0,0,0,0.65)]" />
           </div>
 
           {/* Sağ-Alt (BR) */}
@@ -221,7 +221,7 @@ export default function OnCanvasCropOverlay({
             onPointerDown={(e) => beginDrag(e, "br")}
             className="absolute -bottom-4 -right-4 w-11 h-11 flex items-end justify-end p-3 cursor-nwse-resize z-30 touch-none"
           >
-            <div className="w-5 h-5 border-b-[4px] border-r-[4px] border-white rounded-br-sm shadow-[0_0_6px_rgba(0,0,0,0.65)]" />
+            <div className="w-5 h-5 border-b-[4px] border-r-[4px] border-[var(--ed-sel,#38d5c8)] rounded-br-sm shadow-[0_0_6px_rgba(0,0,0,0.65)]" />
           </div>
 
           {/* 4 KENAR ORTA TUTAMACI (Beyaz Hap Çubuklar + Geniş Dokunma Alanı) */}
@@ -230,7 +230,7 @@ export default function OnCanvasCropOverlay({
             onPointerDown={(e) => beginDrag(e, "t")}
             className="absolute -top-4 left-1/2 -translate-x-1/2 w-14 h-8 flex items-center justify-center cursor-ns-resize z-30 touch-none"
           >
-            <div className="w-8 h-1.5 bg-white rounded-full shadow-[0_0_6px_rgba(0,0,0,0.65)]" />
+            <div className="w-8 h-1.5 bg-[var(--ed-sel,#38d5c8)] rounded-sm shadow-[0_0_6px_rgba(0,0,0,0.65)]" />
           </div>
 
           {/* Alt Kenar (B) */}
@@ -238,7 +238,7 @@ export default function OnCanvasCropOverlay({
             onPointerDown={(e) => beginDrag(e, "b")}
             className="absolute -bottom-4 left-1/2 -translate-x-1/2 w-14 h-8 flex items-center justify-center cursor-ns-resize z-30 touch-none"
           >
-            <div className="w-8 h-1.5 bg-white rounded-full shadow-[0_0_6px_rgba(0,0,0,0.65)]" />
+            <div className="w-8 h-1.5 bg-[var(--ed-sel,#38d5c8)] rounded-sm shadow-[0_0_6px_rgba(0,0,0,0.65)]" />
           </div>
 
           {/* Sol Kenar (L) */}
@@ -246,7 +246,7 @@ export default function OnCanvasCropOverlay({
             onPointerDown={(e) => beginDrag(e, "l")}
             className="absolute top-1/2 -translate-y-1/2 -left-4 w-8 h-14 flex items-center justify-center cursor-ew-resize z-30 touch-none"
           >
-            <div className="w-1.5 h-8 bg-white rounded-full shadow-[0_0_6px_rgba(0,0,0,0.65)]" />
+            <div className="w-1.5 h-8 bg-[var(--ed-sel,#38d5c8)] rounded-sm shadow-[0_0_6px_rgba(0,0,0,0.65)]" />
           </div>
 
           {/* Sağ Kenar (R) */}
@@ -254,7 +254,7 @@ export default function OnCanvasCropOverlay({
             onPointerDown={(e) => beginDrag(e, "r")}
             className="absolute top-1/2 -translate-y-1/2 -right-4 w-8 h-14 flex items-center justify-center cursor-ew-resize z-30 touch-none"
           >
-            <div className="w-1.5 h-8 bg-white rounded-full shadow-[0_0_6px_rgba(0,0,0,0.65)]" />
+            <div className="w-1.5 h-8 bg-[var(--ed-sel,#38d5c8)] rounded-sm shadow-[0_0_6px_rgba(0,0,0,0.65)]" />
           </div>
         </div>
       </div>
