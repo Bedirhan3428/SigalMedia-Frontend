@@ -1,11 +1,10 @@
 "use client";
 
-import { useEffect, useRef, useState, type ReactNode } from "react";
-import { X } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+import { ChevronLeft, ChevronRight, X } from "lucide-react";
 import { CHAT_PHOTOS } from "@/lib/chat/chatPhotos";
 import {
   CHAT_THEMES,
-  QUICK_EMOJIS,
   getTheme,
   sentMinRatio,
   settingsToVars,
@@ -29,14 +28,21 @@ const segCls = (on: boolean) =>
       : "border-zinc-700 bg-zinc-900 text-zinc-200 hover:bg-zinc-800"
   }`;
 
-function Group({ label, children }: { label: string; children: ReactNode }) {
-  return (
-    <section className="py-4 border-b border-zinc-800 last:border-b-0 flex flex-col gap-3">
-      <h3 className="font-mono text-[11px] tracking-[0.1em] uppercase text-zinc-400">{label}</h3>
-      {children}
-    </section>
-  );
-}
+
+export type CustomizePage = "root" | "theme" | "bg" | "bubble" | "text" | "nick";
+
+const PAGE_TITLES: Record<CustomizePage, string> = {
+  root: "Sohbeti özelleştir",
+  theme: "Tema",
+  bg: "Arka plan",
+  bubble: "Balon biçimi",
+  text: "Metin boyutu",
+  nick: "Takma ad",
+};
+
+const BG_LABELS: Record<BgType, string> = { solid: "Düz", gradient: "Gradyan", pattern: "Desen", photo: "Fotoğraf" };
+const BUBBLE_LABELS: Record<BubbleShape, string> = { round: "Yuvarlak", soft: "Yumuşak", sharp: "Keskin" };
+const SIZE_LABELS: Record<TextSize, string> = { S: "Küçük", M: "Orta", L: "Büyük" };
 
 export function ChatCustomizeSheet({
   draft,
@@ -44,6 +50,8 @@ export function ChatCustomizeSheet({
   customPhoto,
   onCustomPhoto,
   realName,
+  page,
+  onPage,
   onSave,
   onReset,
   onClose,
@@ -53,6 +61,8 @@ export function ChatCustomizeSheet({
   customPhoto: string | null;
   onCustomPhoto: (dataUrl: string) => void;
   realName: string;
+  page: CustomizePage;
+  onPage: (p: CustomizePage) => void;
   onSave: () => void;
   onReset: () => void;
   onClose: () => void;
@@ -63,8 +73,14 @@ export function ChatCustomizeSheet({
   const say = (m: string) => {
     setMsg(m);
     if (msgTimer.current) clearTimeout(msgTimer.current);
-    msgTimer.current = setTimeout(() => setMsg(""), 2600);
+    msgTimer.current = setTimeout(() => setMsg(""), 3200);
   };
+  // Escape / geri okunun davranışı: alt sayfadaysa listeye, listedeyse kapat.
+  const back = () => (page === "root" ? onClose() : onPage("root"));
+  const backRef = useRef(back);
+  useEffect(() => {
+    backRef.current = back;
+  });
 
   useEffect(() => {
     const prev = document.activeElement as HTMLElement | null;
@@ -72,7 +88,7 @@ export function ChatCustomizeSheet({
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
         e.stopPropagation();
-        onClose();
+        backRef.current();
         return;
       }
       if (e.key !== "Tab" || !dialogRef.current) return;
@@ -98,8 +114,12 @@ export function ChatCustomizeSheet({
       if (msgTimer.current) clearTimeout(msgTimer.current);
       prev?.focus?.();
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Alt sayfa değişince odağı iletişim kutusuna al (klavye/ekran okuyucu için)
+  useEffect(() => {
+    dialogRef.current?.focus();
+  }, [page]);
 
   const set = (patch: Partial<ChatSettings>) => onChange({ ...draft, ...patch });
   const setBg = (patch: Partial<ChatSettings["bg"]>) => onChange({ ...draft, bg: { ...draft.bg, ...patch } });
@@ -114,8 +134,26 @@ export function ChatCustomizeSheet({
       return;
     }
     onCustomPhoto(url);
-    setBg({ photo: "custom", type: "photo" });
+    setBg({ photo: "custom", type: "photo", customAt: Date.now() });
   };
+
+  const rows: { id: Exclude<CustomizePage, "root">; label: string; value: string; shared: boolean }[] = [
+    { id: "theme", label: "Tema", value: theme.name, shared: true },
+    {
+      id: "bg",
+      label: "Arka plan",
+      value:
+        draft.bg.type === "photo"
+          ? draft.bg.photo === "custom"
+            ? "Fotoğraf (yalnızca sende)"
+            : "Fotoğraf"
+          : BG_LABELS[draft.bg.type],
+      shared: true,
+    },
+    { id: "bubble", label: "Balon biçimi", value: BUBBLE_LABELS[draft.bubble], shared: true },
+    { id: "text", label: "Metin boyutu", value: `${SIZE_LABELS[draft.textSize]}${draft.compact ? " · Sıkı" : ""}`, shared: false },
+    { id: "nick", label: "Takma ad", value: draft.nickname.trim() || "Yok", shared: false },
+  ];
 
   return (
     <div className="fixed inset-0 z-50 flex items-end lg:items-stretch lg:justify-end" data-testid="chat-sheet-root">
@@ -125,34 +163,47 @@ export function ChatCustomizeSheet({
         role="dialog"
         aria-modal="true"
         aria-labelledby="chat-sheet-title"
+        data-page={page}
         tabIndex={-1}
-        className="relative w-full max-w-lg lg:max-w-[420px] max-h-[90dvh] lg:max-h-none lg:h-full overflow-y-auto overscroll-contain bg-zinc-950 text-zinc-100 border border-zinc-800 rounded-t-[18px] lg:rounded-none lg:border-y-0 lg:border-r-0 mx-auto lg:mx-0 px-4 pb-6 outline-none"
+        className="relative w-full max-w-lg lg:max-w-[420px] max-h-[90dvh] lg:max-h-none h-[90dvh] lg:h-full flex flex-col bg-zinc-950 text-zinc-100 border border-zinc-800 rounded-t-[18px] lg:rounded-none lg:border-y-0 lg:border-r-0 mx-auto lg:mx-0 outline-none"
       >
-        <div className="sticky top-0 z-10 bg-zinc-950 pt-2">
+        <div className="shrink-0 bg-zinc-950 pt-2 px-4 rounded-t-[18px]">
           <div className="w-10 h-1 rounded-full bg-zinc-700 mx-auto mb-2 lg:hidden" aria-hidden="true" />
-          <div className="flex items-center justify-between gap-3 pb-2 border-b border-zinc-800">
-            <h2 id="chat-sheet-title" className="text-[15px] font-semibold">
-              Sohbeti özelleştir
+          <div className="flex items-center gap-1 pb-2 border-b border-zinc-800">
+            {page !== "root" && (
+              <button
+                type="button"
+                onClick={() => onPage("root")}
+                aria-label="Ayarlara dön"
+                data-testid="sheet-back"
+                className="w-11 h-11 -ml-3 grid place-items-center rounded-xl text-zinc-300 hover:bg-zinc-800"
+              >
+                <ChevronLeft className="w-5 h-5" strokeWidth={1.5} />
+              </button>
+            )}
+            <h2 id="chat-sheet-title" className="text-[15px] font-semibold flex-1 truncate">
+              {PAGE_TITLES[page]}
             </h2>
-            <div className="flex items-center gap-2">
+            {page === "theme" && (
               <span
                 data-testid="sheet-ratio"
                 className={`font-mono text-[11px] ${min >= 4.5 ? "text-emerald-400" : "text-red-400"}`}
               >
                 {fmt(min)}:1 {min >= 4.5 ? "AA" : "AA değil"}
               </span>
-              <button
-                type="button"
-                onClick={onClose}
-                aria-label="Kapat"
-                className="w-11 h-11 -mr-2 grid place-items-center rounded-xl text-zinc-300 hover:bg-zinc-800"
-              >
-                <X className="w-5 h-5" strokeWidth={1.5} />
-              </button>
-            </div>
+            )}
+            <button
+              type="button"
+              onClick={onClose}
+              aria-label="Kapat"
+              className="w-11 h-11 -mr-3 grid place-items-center rounded-xl text-zinc-300 hover:bg-zinc-800"
+            >
+              <X className="w-5 h-5" strokeWidth={1.5} />
+            </button>
           </div>
         </div>
 
+        <div className="flex-1 min-h-0 overflow-y-auto overscroll-contain px-4 pb-4">
         {/* Canlı önizleme */}
         <div
           data-testid="sheet-preview"
@@ -190,7 +241,33 @@ export function ChatCustomizeSheet({
           </div>
         </div>
 
-        <Group label="Renk teması">
+
+          {page === "root" && (
+            <div className="mt-3 flex flex-col" role="list">
+              {rows.map((r) => (
+                <button
+                  key={r.id}
+                  type="button"
+                  role="listitem"
+                  data-cat={r.id}
+                  onClick={() => onPage(r.id)}
+                  className="min-h-14 -mx-1 px-1 flex items-center gap-3 text-left border-b border-zinc-800 hover:bg-zinc-900 rounded-lg"
+                >
+                  <span className="flex-1 min-w-0">
+                    <span className="block text-[15px]">{r.label}</span>
+                    <span className="block text-[12px] text-zinc-400">{r.shared ? "İki tarafta da görünür" : "Yalnızca sende"}</span>
+                  </span>
+                  <span data-testid={`row-value-${r.id}`} className="text-[13.5px] text-zinc-300 truncate max-w-[45%]">
+                    {r.value}
+                  </span>
+                  <ChevronRight className="w-4 h-4 text-zinc-500 shrink-0" strokeWidth={1.5} />
+                </button>
+              ))}
+            </div>
+          )}
+
+          {page === "theme" && (
+            <section className="pt-4 flex flex-col gap-3">
           <div className="grid grid-cols-[repeat(auto-fill,minmax(104px,1fr))] gap-2.5" role="group" aria-label="Renk teması">
             {CHAT_THEMES.map((t) => {
               const m = sentMinRatio(t);
@@ -223,9 +300,10 @@ export function ChatCustomizeSheet({
           <p className="text-[12.5px] text-zinc-400">
             Etiketteki oran, balon metninin gradyanın en zayıf noktasındaki kontrastıdır (AA = 4,5 ve üstü).
           </p>
-        </Group>
-
-        <Group label="Sohbet arka planı">
+            </section>
+          )}
+          {page === "bg" && (
+            <section className="pt-4 flex flex-col gap-3">
           <div className="flex flex-wrap gap-2" role="group" aria-label="Arka plan türü">
             {(
               [
@@ -275,7 +353,7 @@ export function ChatCustomizeSheet({
                   <button
                     type="button"
                     aria-pressed={draft.bg.photo === "custom"}
-                    aria-label="Seçtiğiniz fotoğraf"
+                    aria-label="Seçtiğiniz fotoğraf (yalnızca sende görünür)"
                     onClick={() => setBg({ photo: "custom" })}
                     className={`w-14 h-14 rounded-xl border border-zinc-700 bg-cover bg-center ${
                       draft.bg.photo === "custom" ? "outline outline-2 outline-offset-2 outline-[#38D5C8]" : ""
@@ -297,6 +375,9 @@ export function ChatCustomizeSheet({
                   }}
                 />
               </label>
+              <p data-testid="sheet-photo-note" className="text-[12.5px] text-zinc-400">
+                Hazır fotoğraflar iki tarafta da görünür. Galeriden seçtiğin fotoğraf yalnızca sende görünür.
+              </p>
             </div>
           )}
           <div className="flex flex-col">
@@ -313,9 +394,10 @@ export function ChatCustomizeSheet({
             </label>
             <input id="chat-dim" type="range" min={0} max={80} value={draft.bg.dim} onChange={(e) => setBg({ dim: +e.target.value })} className="w-full h-11 accent-[#38D5C8] bg-transparent" />
           </div>
-        </Group>
-
-        <Group label="Balon biçimi">
+            </section>
+          )}
+          {page === "bubble" && (
+            <section className="pt-4 flex flex-col gap-3">
           <div className="flex flex-wrap gap-2" role="group" aria-label="Balon biçimi">
             {(
               [
@@ -330,9 +412,10 @@ export function ChatCustomizeSheet({
               </button>
             ))}
           </div>
-        </Group>
-
-        <Group label="Metin boyutu">
+            </section>
+          )}
+          {page === "text" && (
+            <section className="pt-4 flex flex-col gap-3">
           <div className="flex flex-wrap gap-2" role="group" aria-label="Metin boyutu">
             {(
               [
@@ -365,30 +448,10 @@ export function ChatCustomizeSheet({
               />
             </button>
           </div>
-        </Group>
-
-        <Group label="Hızlı tepki">
-          <div className="grid grid-cols-[repeat(auto-fill,minmax(52px,1fr))] gap-2" role="group" aria-label="Hızlı tepki emojisi">
-            {QUICK_EMOJIS.map((x) => (
-              <button
-                key={x}
-                type="button"
-                data-emoji={x}
-                aria-pressed={draft.quickReaction === x}
-                aria-label={`Hızlı tepki ${x}`}
-                onClick={() => set({ quickReaction: x })}
-                className={`h-[52px] text-2xl rounded-xl border ${
-                  draft.quickReaction === x ? "border-[#38D5C8] ring-1 ring-[#38D5C8] bg-[#38D5C8]/15" : "border-zinc-700 bg-zinc-900 hover:bg-zinc-800"
-                }`}
-              >
-                {x}
-              </button>
-            ))}
-          </div>
-          <p className="text-[12.5px] text-zinc-400">Yazı çubuğundaki hızlı tepki düğmesi bu emojiyi mesaj olarak gönderir.</p>
-        </Group>
-
-        <Group label="Takma ad">
+            </section>
+          )}
+          {page === "nick" && (
+            <section className="pt-4 flex flex-col gap-3">
           <div className="flex flex-col gap-1.5">
             <label htmlFor="chat-nick" className="text-[13px] text-zinc-300">
               {realName || "Bu kişi"} için takma ad
@@ -405,34 +468,38 @@ export function ChatCustomizeSheet({
             />
             <p className="text-[12.5px] text-zinc-400">Takma ad yalnızca bu cihazda görünür.</p>
           </div>
-        </Group>
-
-        <div className="flex flex-wrap gap-2.5 pt-3.5">
-          <button
-            type="button"
-            data-testid="sheet-save"
-            onClick={() => {
-              onSave();
-              say("Bu sohbet için kaydedildi (yalnızca bu tarayıcıda).");
-            }}
-            className="min-h-12 px-5 rounded-xl bg-[#38D5C8] text-[#04201E] font-semibold"
-          >
-            Kaydet
-          </button>
-          <button
-            type="button"
-            data-testid="sheet-reset"
-            onClick={() => {
-              onReset();
-              say("Varsayılan ayarlara dönüldü.");
-            }}
-            className="min-h-12 px-5 rounded-xl border border-zinc-700 bg-zinc-900 font-medium hover:bg-zinc-800"
-          >
-            Varsayılana dön
-          </button>
+            </section>
+          )}
         </div>
-        <div role="status" className="min-h-[18px] mt-2 text-[12.5px] text-emerald-400">
-          {msg}
+
+        <div className="shrink-0 border-t border-zinc-800 bg-zinc-950 px-4 pt-3 pb-4">
+          <div className="flex flex-wrap gap-2.5">
+            <button
+              type="button"
+              data-testid="sheet-save"
+              onClick={() => {
+                onSave();
+                say("Kaydedildi. Tema, arka plan ve balon biçimi karşı tarafta da görünür.");
+              }}
+              className="min-h-12 px-5 rounded-xl bg-[#38D5C8] text-[#04201E] font-semibold"
+            >
+              Kaydet
+            </button>
+            <button
+              type="button"
+              data-testid="sheet-reset"
+              onClick={() => {
+                onReset();
+                say("Varsayılan ayarlara dönüldü.");
+              }}
+              className="min-h-12 px-5 rounded-xl border border-zinc-700 bg-zinc-900 font-medium hover:bg-zinc-800"
+            >
+              Varsayılana dön
+            </button>
+          </div>
+          <div role="status" className="min-h-[18px] mt-2 text-[12.5px] text-emerald-400">
+            {msg}
+          </div>
         </div>
       </div>
     </div>

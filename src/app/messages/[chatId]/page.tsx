@@ -4,9 +4,17 @@
 import { useState, useEffect, useLayoutEffect, useRef, useMemo } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { ChevronLeft, Info, Send, User as UserIcon } from "lucide-react";
-import { ChatBackground, CHAT_CSS } from "@/components/messages/ChatBackground";
-import { ChatCustomizeSheet } from "@/components/messages/ChatCustomizeSheet";
+import { ChatBackground, CHAT_CSS, CHAT_MENU_CSS } from "@/components/messages/ChatBackground";
+import { ChatCustomizeSheet, type CustomizePage } from "@/components/messages/ChatCustomizeSheet";
+import { ChatProfileSheet } from "@/components/messages/ChatProfileSheet";
+import { ChatMessageMenu } from "@/components/messages/ChatMessageMenu";
 import { chatSettingsStore } from "@/lib/chat/chatSettingsStore";
+import {
+  applyShared,
+  listenSharedChatSettings,
+  writeSharedChatSettings,
+} from "@/lib/chat/chatSharedStore";
+import { useBackLayer } from "@/lib/chat/useBackLayer";
 import {
   DEFAULT_CHAT_SETTINGS,
   settingsToVars,
@@ -22,6 +30,7 @@ import {
   listenPeerTyping,
   markChatAsRead,
   sendEncryptedMessage,
+  setMessageReaction,
   setTypingStatus,
   type ChatMessage,
 } from "@/services/messageService";
@@ -67,9 +76,52 @@ function formatChatTimeHeader(timestamp?: number): string {
   return `${dayStr} ${timeStr}`;
 }
 
-function formatBubbleTime(timestamp?: number): string {
-  if (!timestamp) return "";
-  return new Date(timestamp).toLocaleTimeString("tr-TR", { hour: "2-digit", minute: "2-digit" });
+const LONG_PRESS_MS = 400;
+const LONG_PRESS_SLOP = 10;
+
+type MenuState = {
+  mid: string; // data-mid (kararlı anahtar)
+  msgId: string;
+  mine: boolean;
+  radiusClass: string;
+  rect: { left: number; top: number; width: number; height: number };
+};
+
+function groupReactions(
+  reactions: Record<string, string> | undefined,
+  myUid: string | undefined
+): { emoji: string; count: number; mine: boolean }[] {
+  const map = new Map<string, { emoji: string; count: number; mine: boolean }>();
+  for (const [uid, emoji] of Object.entries(reactions || {})) {
+    if (!emoji) continue;
+    const g = map.get(emoji) || { emoji, count: 0, mine: false };
+    g.count += 1;
+    if (uid === myUid) g.mine = true;
+    map.set(emoji, g);
+  }
+  return Array.from(map.values());
+}
+
+async function copyText(text: string): Promise<boolean> {
+  try {
+    await navigator.clipboard.writeText(text);
+    return true;
+  } catch {
+    try {
+      const ta = document.createElement("textarea");
+      ta.value = text;
+      ta.setAttribute("readonly", "");
+      ta.style.position = "fixed";
+      ta.style.opacity = "0";
+      document.body.appendChild(ta);
+      ta.select();
+      const ok = document.execCommand("copy");
+      ta.remove();
+      return ok;
+    } catch {
+      return false;
+    }
+  }
 }
 
 const INPUT_MAX_HEIGHT = 120;
@@ -123,6 +175,12 @@ export default function ChatRoomPage() {
   const [pendingMessages, setPendingMessages] = useState<ChatMessage[]>([]);
   const [inputText, setInputText] = useState("");
   const [errorToast, setErrorToast] = useState<string | null>(null);
+  const [infoToast, setInfoToast] = useState<string | null>(null);
+  const [profileOpen, setProfileOpen] = useState(false);
+  const [sheetPage, setSheetPage] = useState<CustomizePage>("root");
+  const [menu, setMenu] = useState<MenuState | null>(null);
+  const pressRef = useRef<{ timer: ReturnType<typeof setTimeout>; x: number; y: number } | null>(null);
+  const atBottomRef = useRef(true);
 
   const [peerProfile, setPeerProfile] = useState<{
     uid: string;
@@ -162,6 +220,11 @@ export default function ChatRoomPage() {
     }, 2600);
   };
 
+  const showInfo = (msg: string) => {
+    setInfoToast(msg);
+    setTimeout(() => setInfoToast(null), 1800);
+  };
+
   useEffect(() => {
     setMounted(true);
     preloadServerPublicKey();
@@ -180,10 +243,46 @@ export default function ChatRoomPage() {
     return chatSettingsStore.subscribe(chatId, setSettings);
   }, [chatId]);
 
-  const openSheet = () => setDraft(settings);
+  // Ortak ayarlar (tema, arka plan, balon): karşı taraf değiştirince canlı gelir; yerel önbelleğe yazılır.
+  useEffect(() => {
+    if (!chatId || !profile?.uid) return;
+    return listenSharedChatSettings(chatId, (shared) => {
+      if (!shared) return;
+      const cur = chatSettingsStore.get(chatId);
+      const next = applyShared(cur, shared);
+      if (JSON.stringify(next) !== JSON.stringify(cur)) chatSettingsStore.set(chatId, next);
+    });
+  }, [chatId, profile?.uid]);
+
+  const openSheet = () => {
+    setSheetPage("root");
+    setProfileOpen(false);
+    setDraft(settings);
+  };
   const closeSheet = () => {
     setDraft(null);
+    setSheetPage("root");
     setCustomPhoto(chatSettingsStore.getPhoto(chatId));
+  };
+  // Geri tuşu: menü, profil ve özelleştirme tek bir katman yığını gibi davranır.
+  useBackLayer(menu !== null, () => {
+    setMenu(null);
+    return false;
+  });
+  useBackLayer(profileOpen || draft !== null, () => {
+    if (draft && sheetPage !== "root") {
+      setSheetPage("root");
+      return true;
+    }
+    setProfileOpen(false);
+    closeSheet();
+    return false;
+  });
+  const syncShared = (s: ChatSettings) => {
+    if (!profile?.uid) return;
+    writeSharedChatSettings(chatId, profile.uid, s).catch(() =>
+      showError("Ortak ayarlar karşıya gönderilemedi")
+    );
   };
   const saveSheet = () => {
     if (!draft) return;
@@ -200,11 +299,13 @@ export default function ChatRoomPage() {
     }
     chatSettingsStore.set(chatId, next);
     setDraft(next);
+    syncShared(next);
   };
   const resetSheet = () => {
     chatSettingsStore.reset(chatId);
     setCustomPhoto(null);
     setDraft(DEFAULT_CHAT_SETTINGS);
+    syncShared(DEFAULT_CHAT_SETTINGS);
   };
 
   const view = draft ?? settings;
@@ -332,6 +433,15 @@ export default function ChatRoomPage() {
     inner.style.transform = "translateY(0px)";
   }, [displayedMessages.length, peerTyping]);
 
+  // Tepki çipleri görününce/değişince liste en alttaysa yeniden sabitle (animasyon yok, FLIP'e dokunmaz).
+  const reactionSig = displayedMessages
+    .map((m) => (m.reactions ? `${m.id}:${Object.values(m.reactions).join("")}` : ""))
+    .join("|");
+  useLayoutEffect(() => {
+    const el = mainScrollRef.current;
+    if (el && atBottomRef.current) el.scrollTop = el.scrollHeight;
+  }, [reactionSig]);
+
   useLayoutEffect(() => {
     fitTextarea(inputRef.current);
   }, [inputText]);
@@ -344,6 +454,7 @@ export default function ChatRoomPage() {
     let lastH = el.clientHeight;
     const onScroll = () => {
       atBottom = el.scrollHeight - el.scrollTop - el.clientHeight <= 4;
+      atBottomRef.current = atBottom;
     };
     el.addEventListener("scroll", onScroll, { passive: true });
     const ro = new ResizeObserver(() => {
@@ -396,13 +507,11 @@ export default function ChatRoomPage() {
     }
   };
 
-  // textOverride: hızlı tepki düğmesi emojiyi mevcut gönderim yolundan normal mesaj olarak yollar (yazı kutusuna dokunmaz).
-  const handleSend = (textOverride?: string) => {
-    if (textOverride === undefined) inputRef.current?.focus();
+  const handleSend = () => {
+    inputRef.current?.focus();
 
     if (!peerUid || !profile?.uid) return;
-    const rawValue =
-      textOverride ?? (inputRef.current ? inputRef.current.value : inputText);
+    const rawValue = inputRef.current ? inputRef.current.value : inputText;
     const clean = rawValue.trim();
     if (!clean) return;
 
@@ -412,7 +521,7 @@ export default function ChatRoomPage() {
       return;
     }
     lastSendTimestampRef.current = now;
-    if (textOverride === undefined) ignoreInputUntilRef.current = now + 80;
+    ignoreInputUntilRef.current = now + 80;
 
     listSnapshotRef.current = takeListSnapshot(
       mainScrollRef.current,
@@ -420,13 +529,11 @@ export default function ChatRoomPage() {
     );
 
     // Input alanını hem React state hem de DOM üzerinden kesin olarak temizle
-    if (textOverride === undefined) {
-      setInputText("");
-      if (inputRef.current) {
-        inputRef.current.value = "";
-        fitTextarea(inputRef.current);
-        inputRef.current.focus();
-      }
+    setInputText("");
+    if (inputRef.current) {
+      inputRef.current.value = "";
+      fitTextarea(inputRef.current);
+      inputRef.current.focus();
     }
 
     const tempId = `optimistic_${now}_${Math.random()
@@ -469,6 +576,77 @@ export default function ChatRoomPage() {
           err instanceof Error ? err.message : "Mesaj gönderilemedi"
         );
       });
+  };
+
+  const cancelPress = () => {
+    if (pressRef.current) {
+      clearTimeout(pressRef.current.timer);
+      pressRef.current = null;
+    }
+  };
+  const openMenuFor = (el: HTMLElement, msg: ChatMessage, mid: string, mine: boolean, radiusClass: string) => {
+    if (menu) return;
+    cancelPress();
+    const r = el.getBoundingClientRect();
+    setMenu({
+      mid,
+      msgId: msg.id,
+      mine,
+      radiusClass,
+      rect: { left: r.left, top: r.top, width: r.width, height: r.height },
+    });
+  };
+  const pressHandlers = (msg: ChatMessage, mid: string, mine: boolean, radiusClass: string) => ({
+    onPointerDown: (e: React.PointerEvent<HTMLElement>) => {
+      if (e.pointerType === "mouse" && e.button !== 0) return;
+      cancelPress();
+      const el = e.currentTarget;
+      pressRef.current = {
+        x: e.clientX,
+        y: e.clientY,
+        timer: setTimeout(() => {
+          pressRef.current = null;
+          openMenuFor(el, msg, mid, mine, radiusClass);
+        }, LONG_PRESS_MS),
+      };
+    },
+    onPointerMove: (e: React.PointerEvent<HTMLElement>) => {
+      const pr = pressRef.current;
+      if (pr && Math.hypot(e.clientX - pr.x, e.clientY - pr.y) > LONG_PRESS_SLOP) cancelPress();
+    },
+    onPointerUp: cancelPress,
+    onPointerCancel: cancelPress,
+    onPointerLeave: cancelPress,
+    onContextMenu: (e: React.MouseEvent<HTMLElement>) => {
+      e.preventDefault();
+      openMenuFor(e.currentTarget, msg, mid, mine, radiusClass);
+    },
+  });
+  const handleReact = (emoji: string) => {
+    const m = menu && displayedMessages.find((x) => x.id === menu.msgId);
+    if (!m || !profile?.uid || m.optimistic) return;
+    const next = m.reactions?.[profile.uid] === emoji ? null : emoji;
+    setMenu(null);
+    setMessageReaction(chatId, m.id, profile.uid, next).catch(() => showError("Tepki gönderilemedi"));
+  };
+  const handleCopy = async () => {
+    const m = menu && displayedMessages.find((x) => x.id === menu.msgId);
+    setMenu(null);
+    if (!m) return;
+    showInfo((await copyText(m.text)) ? "Kopyalandı" : "Kopyalanamadı");
+  };
+  const goProfile = () => {
+    if (!peerUid) return;
+    const target = `/profile/${peerUid}`;
+    // Katman girdisini önce geri al, sonra git (aksi halde yarış: push sonra geri alınır).
+    const go = () => {
+      window.removeEventListener("popstate", go);
+      router.push(target);
+    };
+    if (window.history.state && window.history.state.__chatLayer) {
+      window.addEventListener("popstate", go);
+      window.history.back();
+    } else router.push(target);
   };
 
   if (!mounted || loading) {
@@ -514,6 +692,7 @@ export default function ChatRoomPage() {
       {/* Yalnızca Mesaj Kutucuğunun Aşağıdan Yukarı Çıkma (Slide-Up) Animasyonu */}
       <style>{`
         ${CHAT_CSS}
+        ${CHAT_MENU_CSS}
         @keyframes sigalBubbleSlideUp {
           0% {
             opacity: 0;
@@ -532,6 +711,16 @@ export default function ChatRoomPage() {
 
       <ChatBackground settings={view} customPhoto={customPhoto} />
 
+      {infoToast && (
+        <div
+          role="status"
+          data-testid="chat-toast"
+          className="fixed top-5 left-1/2 -translate-x-1/2 z-[70] text-xs font-semibold px-4 py-2 rounded-full shadow-xl select-none"
+          style={{ background: "var(--panel)", color: "var(--panel-t)", border: "1px solid var(--panel-line)" }}
+        >
+          {infoToast}
+        </div>
+      )}
       {errorToast && (
         <div className="fixed top-5 left-1/2 -translate-x-1/2 z-[60] bg-red-950/90 text-red-200 text-xs font-semibold px-4 py-2 rounded-full shadow-xl border border-red-800/60 select-none">
           {errorToast}
@@ -558,6 +747,14 @@ export default function ChatRoomPage() {
             <ChevronLeft className="w-[22px] h-[22px]" strokeWidth={1.5} />
           </button>
 
+          <button
+            type="button"
+            onClick={() => setProfileOpen(true)}
+            aria-haspopup="dialog"
+            aria-label="Profil bilgisi"
+            data-testid="chat-header-profile"
+            className="flex items-center gap-2 min-w-0 flex-1 text-left rounded-xl h-11"
+          >
           <div className="relative shrink-0">
             <span
               aria-hidden="true"
@@ -585,12 +782,13 @@ export default function ChatRoomPage() {
             </h1>
             <p className="text-xs truncate text-[var(--sub)]">{subLine}</p>
           </div>
+          </button>
 
           <button
             type="button"
-            onClick={openSheet}
-            title="Sohbeti özelleştir"
-            aria-label="Sohbeti özelleştir"
+            onClick={() => setProfileOpen(true)}
+            title="Kişi bilgisi"
+            aria-label="Kişi bilgisi"
             aria-haspopup="dialog"
             data-testid="chat-info-btn"
             className="w-11 h-11 grid place-items-center rounded-xl shrink-0 hover:bg-[var(--panel-line)] transition-colors"
@@ -659,6 +857,7 @@ export default function ChatRoomPage() {
 
               const stableDomKey =
                 stableKeyMapRef.current.get(msg.id) || msg.id;
+              const chips = groupReactions(msg.reactions, profile?.uid);
               const isNewMessage =
                 Boolean(msg.optimistic) ||
                 !initialMessageIdsRef.current.has(msg.id);
@@ -687,7 +886,9 @@ export default function ChatRoomPage() {
                     )}
                     {/* Animasyon metinde değil doğrudan kutucuğun kendisinde (msg-bubble-slide-up) */}
                     <div
-                      className={`max-w-[78%] lg:max-w-[62%] px-0 text-[length:var(--fs)] leading-[1.35] break-words transform-gpu ${
+                      data-bubble-id={msg.id}
+                      {...pressHandlers(msg, stableDomKey, isMine, radiusClass)}
+                      className={`max-w-[78%] lg:max-w-[62%] px-0 text-[length:var(--fs)] leading-[1.35] break-words transform-gpu select-none [-webkit-touch-callout:none] [-webkit-user-select:none] ${
                         isNewMessage ? "msg-bubble-slide-up" : ""
                       } ${radiusClass} ${
                         isMine
@@ -697,15 +898,31 @@ export default function ChatRoomPage() {
                       style={{ padding: "var(--pad)" }}
                     >
                       <span className="whitespace-pre-wrap">{msg.text}</span>
-                      <span
-                        className={`float-right ml-2.5 mt-[5px] font-mono text-[10.5px] leading-none select-none ${
-                          isMine ? "" : "opacity-75"
-                        }`}
-                      >
-                        {formatBubbleTime(msg.timestamp)}
-                      </span>
                     </div>
                   </div>
+                  {chips.length > 0 && (
+                    <div
+                      data-testid="msg-reactions"
+                      className={`flex flex-wrap gap-1 mt-[3px] ${
+                        isMine ? "justify-end" : `justify-start ${view.compact ? "" : "pl-[35px]"}`
+                      }`}
+                    >
+                      {chips.map((c) => (
+                        <span
+                          key={c.emoji}
+                          data-emoji={c.emoji}
+                          aria-label={`${c.emoji} ${c.count}`}
+                          className={`msg-chip inline-flex items-center gap-1 h-6 px-2 rounded-full text-[13px] leading-none border select-none ${
+                            c.mine ? "ring-1 ring-[var(--acc)]" : ""
+                          }`}
+                          style={{ background: "var(--panel)", color: "var(--panel-t)", borderColor: "var(--panel-line)" }}
+                        >
+                          <span>{c.emoji}</span>
+                          {c.count > 1 && <span className="text-[11px]">{c.count}</span>}
+                        </span>
+                      ))}
+                    </div>
+                  )}
                 </div>
               );
             })}
@@ -755,19 +972,6 @@ export default function ChatRoomPage() {
 
             <button
               type="button"
-              onMouseDown={(e) => e.preventDefault()}
-              onPointerDown={(e) => e.preventDefault()}
-              onClick={() => handleSend(view.quickReaction)}
-              aria-label={`Hızlı tepki: ${view.quickReaction}`}
-              title="Hızlı tepki gönder"
-              data-testid="quick-react"
-              className="w-11 h-11 rounded-full text-[22px] leading-none grid place-items-center shrink-0 hover:bg-[var(--panel-line)] active:scale-95 transition-transform select-none"
-            >
-              {view.quickReaction}
-            </button>
-
-            <button
-              type="button"
               aria-disabled={!canSend}
               onMouseDown={(e) => e.preventDefault()}
               onPointerDown={(e) => e.preventDefault()}
@@ -792,12 +996,51 @@ export default function ChatRoomPage() {
         </div>
       </footer>
 
+      {profileOpen && !draft && (
+        <ChatProfileSheet
+          displayName={realName}
+          photoURL={peerProfile?.photoURL || ""}
+          onCustomize={openSheet}
+          onProfile={goProfile}
+          onClose={() => setProfileOpen(false)}
+        />
+      )}
+
+      {menu && (() => {
+        const m = displayedMessages.find((x) => x.id === menu.msgId);
+        if (!m) return null;
+        return (
+          <ChatMessageMenu
+            rect={menu.rect}
+            mine={menu.mine}
+            timestamp={m.timestamp}
+            myReaction={profile?.uid ? m.reactions?.[profile.uid] : undefined}
+            canReact={!m.optimistic}
+            bubble={
+              <div
+                className={`w-full h-full text-[length:var(--fs)] leading-[1.35] break-words ${menu.radiusClass} ${
+                  menu.mine ? "chat-sent" : "chat-recv"
+                }`}
+                style={{ padding: "var(--pad)" }}
+              >
+                <span className="whitespace-pre-wrap">{m.text}</span>
+              </div>
+            }
+            onReact={handleReact}
+            onCopy={handleCopy}
+            onClose={() => setMenu(null)}
+          />
+        );
+      })()}
+
       {draft && (
         <ChatCustomizeSheet
           draft={draft}
           onChange={setDraft}
           customPhoto={customPhoto}
           onCustomPhoto={setCustomPhoto}
+          page={sheetPage}
+          onPage={setSheetPage}
           realName={realName === "Sohbet" ? "" : realName}
           onSave={saveSheet}
           onReset={resetSheet}

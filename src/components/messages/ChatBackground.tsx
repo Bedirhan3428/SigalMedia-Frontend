@@ -17,12 +17,13 @@ export function ChatBackground({
   let cls = "";
   if (type === "solid") style.background = "var(--bg1)";
   else if (type === "photo") {
-    const css =
-      photo === "custom" && customPhoto
-        ? `url("${customPhoto}")`
-        : (CHAT_PHOTOS.find((p) => p.id === photo) ?? CHAT_PHOTOS[0]).css;
-    style.backgroundImage = css;
-    style.backgroundSize = "cover";
+    const isCustom = photo === "custom" && customPhoto;
+    style.backgroundImage = isCustom
+      ? `url("${customPhoto}")`
+      : (CHAT_PHOTOS.find((p) => p.id === photo) ?? CHAT_PHOTOS[0]).css;
+    // Hazır sahneler katmanı olduğu gibi doldurur (alta yaslı, yakınlaştırmasız); galeri fotoğrafı cover.
+    style.backgroundSize = isCustom ? "cover" : "100% 100%";
+    style.backgroundRepeat = "no-repeat";
     style.backgroundPosition = "center";
   } else if (type === "pattern") cls = `chat-bg-pat-${pattern}`;
   return (
@@ -52,4 +53,13 @@ export const CHAT_CSS = `
 .chat-typing-dot{animation:chatTypingBounce 1.1s infinite ease-in-out}
 @keyframes chatTypingBounce{0%,60%,100%{transform:translateY(0);opacity:.55}30%{transform:translateY(-4px);opacity:1}}
 @media (prefers-reduced-motion: reduce){.chat-typing-dot{animation:none}.chat-root *{transition:none!important}.msg-bubble-slide-up{animation:none!important}}
+`;
+
+export const CHAT_MENU_CSS = `
+.msg-menu-backdrop{animation:chatMenuFade 160ms ease-out both}
+.msg-menu-pop{animation:chatMenuPop 170ms cubic-bezier(.22,1,.36,1) both}
+.msg-chip{animation:chatMenuPop 160ms cubic-bezier(.22,1,.36,1) both}
+@keyframes chatMenuFade{from{opacity:0}to{opacity:1}}
+@keyframes chatMenuPop{from{opacity:0;transform:scale(.9)}to{opacity:1;transform:none}}
+@media (prefers-reduced-motion: reduce){.msg-menu-backdrop,.msg-menu-pop,.msg-chip{animation:none!important}}
 `;

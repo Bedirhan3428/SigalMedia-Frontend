@@ -37,6 +37,8 @@ export interface ChatMessage {
   status: "sent" | "delivered" | "read";
   replyTo?: string | null;
   optimistic?: boolean;
+  /** uid -> emoji (kişi başına tek tepki) */
+  reactions?: Record<string, string>;
 }
 
 export interface UserChatSummary {
@@ -449,6 +451,19 @@ export async function markChatAsRead(
   } catch {
     // Sessizce geç
   }
+}
+
+/** Mesaja tepki yazar (emoji) ya da kaldırır (null). Yol: chats/{chatId}/messages/{messageId}/reactions/{uid} */
+export async function setMessageReaction(
+  chatId: string,
+  messageId: string,
+  uid: string,
+  emoji: string | null
+): Promise<void> {
+  if (!chatId || !messageId || !uid) return;
+  await update(ref(rtdb), {
+    [`chats/${chatId}/messages/${messageId}/reactions/${uid}`]: emoji,
+  });
 }
 
 export async function setTypingStatus(

@@ -28,11 +28,12 @@ export type ChatSettings = {
     photo: string;
     blur: number; // 0-20 px
     dim: number; // 0-80 %
+    /** Galeri fotoğrafı seçildiği an (ms). Daha yeni bir ortak arka plan değişikliği gelirse özel fotoğraf bırakılır. */
+    customAt?: number;
   };
   bubble: BubbleShape;
   textSize: TextSize;
   compact: boolean;
-  quickReaction: string;
   nickname: string; // en çok 24 karakter
 };
 
@@ -97,7 +98,8 @@ export const BUBBLE_SHAPES: Record<BubbleShape, { r: string; rt: string }> = {
   sharp: { r: "6px", rt: "2px" },
 };
 
-export const QUICK_EMOJIS = ["❤️", "😂", "🔥", "👍", "😍", "🙏", "🎉", "😮"];
+/** Mesaj tepkileri (yaygın desteklenen emojiler). */
+export const REACTION_EMOJIS = ["❤️", "😂", "😮", "😢", "👍", "🔥"] as const;
 
 export const DEFAULT_CHAT_SETTINGS: ChatSettings = {
   v: 1,
@@ -106,7 +108,6 @@ export const DEFAULT_CHAT_SETTINGS: ChatSettings = {
   bubble: "soft",
   textSize: "M",
   compact: false,
-  quickReaction: "❤️",
   nickname: "",
 };
 
