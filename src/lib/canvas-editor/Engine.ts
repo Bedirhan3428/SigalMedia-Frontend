@@ -128,6 +128,7 @@ export class CanvasEngine {
   private overlayCacheCanvas: HTMLCanvasElement | null = null;
   private overlayCacheCtx: CanvasRenderingContext2D | null = null;
   private overlayCacheDirty = true;
+  private overlayCacheVersion = 0;
 
   private ambientBgCacheCanvas: HTMLCanvasElement | null = null;
   private ambientBgCacheCtx: CanvasRenderingContext2D | null = null;
@@ -1888,6 +1889,7 @@ export class CanvasEngine {
         }
       }
       this.overlayCacheDirty = false;
+      this.overlayCacheVersion++;
     }
     return this.overlayCacheCanvas;
   }
@@ -2106,6 +2108,36 @@ export class CanvasEngine {
         }
       }
     }
+  }
+
+  /** WP-15 GPU export: drawBaseMedia ile aynı zaman durumunu kurar (çizim GPU kompozitöründe yapılır). */
+  public prepareExportFrame(t: number): void {
+    this.nleTimelineTime = t;
+    if (this.mediaLayer) this.mediaLayer.timelineTime = t;
+  }
+
+  /**
+   * WP-15 GPU export: zamansal görünürlüğü eşitler ve statik overlay önbelleğini (metin/sticker) döndürür.
+   * `version` önbellek yeniden çizildiğinde artar; kompozitör dokuyu yalnızca o zaman yeniden yükler.
+   */
+  public getExportOverlay(
+    width: number,
+    height: number,
+    t: number
+  ): { canvas: HTMLCanvasElement; version: number } | null {
+    this.syncTemporalVisibility(t);
+    if (this.overlayLayers.length === 0) return null;
+    let any = false;
+    for (let i = 0; i < this.overlayLayers.length; i++) {
+      const l = this.overlayLayers[i];
+      if (l.visible && l.temporalVisible) {
+        any = true;
+        break;
+      }
+    }
+    if (!any) return null;
+    const c = this.ensureOverlayCache(width, height);
+    return c ? { canvas: c, version: this.overlayCacheVersion } : null;
   }
 
   /**
