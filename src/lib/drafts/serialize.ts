@@ -31,6 +31,7 @@ export interface DraftState {
   clips: DraftClipRec[];
   layers: DraftLayerRec[];
   filterIndex: number;
+  filterIntensity?: number;
   music: StoryAudioMeta | null;
   musicKey?: string;
   selectedLayerId: string | null;
@@ -140,6 +141,7 @@ export async function captureDraft(
       clips,
       layers,
       filterIndex: snap.filterIndex,
+      filterIntensity: snap.filterIntensity,
       music: snap.music,
       musicKey,
       selectedLayerId: snap.selectedLayerId,
@@ -231,6 +233,7 @@ export async function applyDraft(
     media: state.media,
     clips,
     filterIndex: state.filterIndex,
+    filterIntensity: state.filterIntensity,
     music,
     selectedLayerId: state.selectedLayerId,
     timelineTime: state.timelineTime,

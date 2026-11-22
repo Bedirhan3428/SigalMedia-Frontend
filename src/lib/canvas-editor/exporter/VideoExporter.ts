@@ -81,14 +81,16 @@ function rgbaToI420Bt709Limited(
   rgba: Uint8ClampedArray,
   width: number,
   height: number,
-  out: Uint8Array
+  out: Uint8Array,
+  yStart = 0,
+  yEnd = height
 ): void {
   const px = new Uint32Array(rgba.buffer, rgba.byteOffset, width * height);
   const ySize = width * height;
   const cw = width >> 1;
   const uOff = ySize;
   const vOff = ySize + cw * (height >> 1);
-  for (let y = 0; y < height; y += 2) {
+  for (let y = yStart; y < yEnd; y += 2) {
     const row0 = y * width;
     const row1 = row0 + width;
     const cRow = (y >> 1) * cw;
@@ -893,7 +895,14 @@ export class VideoExporter {
       let i420Ok = true;
       let i420Buf: Uint8Array | null = null;
       let i420Fresh = false;
-      const makeVideoFrame = (timestamp: number, canvasChanged: boolean): VideoFrame => {
+      // N-3: ana iş parçacığını ~8 ms'lik dilimlerle bırak; arayüz (rAF) export sırasında akıcı kalsın
+      let lastYieldAt = performance.now();
+      const sliceYield = async (): Promise<void> => {
+        if (performance.now() - lastYieldAt < 8) return;
+        await this.yieldToMain();
+        lastYieldAt = performance.now();
+      };
+      const makeVideoFrame = async (timestamp: number, canvasChanged: boolean): Promise<VideoFrame> => {
         if (i420Ok) {
           try {
             if (!i420Buf) i420Buf = new Uint8Array((exportWidth * exportHeight * 3) >> 1);
@@ -901,9 +910,14 @@ export class VideoExporter {
               const tConv = performance.now();
               const img = exportCtx.getImageData(0, 0, exportWidth, exportHeight);
               const tRead = performance.now();
-              rgbaToI420Bt709Limited(img.data, exportWidth, exportHeight, i420Buf);
               stats.readbackMs += tRead - tConv;
-              stats.convertMs += performance.now() - tRead;
+              await sliceYield();
+              const tConv2 = performance.now();
+              for (let y0 = 0; y0 < exportHeight; y0 += 256) {
+                rgbaToI420Bt709Limited(img.data, exportWidth, exportHeight, i420Buf, y0, Math.min(exportHeight, y0 + 256));
+                await sliceYield();
+              }
+              stats.convertMs += performance.now() - tConv2;
               i420Fresh = true;
             }
             const f = new VideoFrame(i420Buf, {
@@ -1024,7 +1038,8 @@ export class VideoExporter {
             }
 
             if (needsDraw) i420Fresh = false;
-            const videoFrame = makeVideoFrame(Math.round(frameIdx * frameDurationUs), needsDraw);
+            await sliceYield();
+            const videoFrame = await makeVideoFrame(Math.round(frameIdx * frameDurationUs), needsDraw);
             stats.drawMs += performance.now() - tDraw;
             const tEnc = performance.now();
             try {
@@ -1043,9 +1058,7 @@ export class VideoExporter {
               options?.onProgress?.(rawProgress);
             }
 
-            if (frameIdx % 15 === 14) {
-              await this.yieldToMain();
-            }
+            await sliceYield();
           }
         } finally {
           cursor?.close();

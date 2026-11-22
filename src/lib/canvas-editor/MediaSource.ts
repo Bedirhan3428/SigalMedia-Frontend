@@ -373,8 +373,12 @@ export class MediaSourceManager {
         el.removeAttribute('src');
         el.load();
       } else if (el instanceof HTMLImageElement) {
-        // Zaman çizelgesi önizlemeleri de bu URL'yi kullanabilir; yalnızca motor sahibi çağırır
-        el.removeAttribute('src');
+        // F-11: removeAttribute('src') Chromium'da img'e ViewportChangeListener bağlayıp elementi (ve
+        // ayrılmış DOM'unu) belgeye sonsuza dek tutuyor; boş src bunu yapmaz. Zaman çizelgesi önizlemeleri de
+        // bu URL'yi kullanabilir; yalnızca motor sahibi çağırır.
+        el.onload = null;
+        el.onerror = null;
+        el.src = '';
       }
     } catch {}
     if (media.objectUrl) {

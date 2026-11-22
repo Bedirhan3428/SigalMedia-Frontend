@@ -295,42 +295,54 @@ export class TextLayer extends BaseLayer {
     return hasBg ? (this.style.backgroundPadding ?? 24) : 16;
   }
   private cachedBoundsKey = '';
+  /** N-2: tuval yüksekliğine sığması için küçültülmüş yazı boyu (null = style.fontSize). */
+  private effFontSize: number | null = null;
 
   private getFontString(): string {
-    return `${this.style.fontStyle} ${this.style.fontWeight} ${this.style.fontSize}px ${this.style.fontFamily}`;
+    return `${this.style.fontStyle} ${this.style.fontWeight} ${this.effFontSize ?? this.style.fontSize}px ${this.style.fontFamily}`;
   }
 
   /**
    * Piksel uzayında sınırlar (BaseLayer seçim çerçevesi/hit-test bunu transform.scale ile çarpar).
    * Çizim mantıksal 1080 genişliğinde yapılıp canvasWidth/1080 ile ölçeklendiği için sınırlar da aynı oranla ölçeklenir.
    */
-  public override getBoundingBox(ctx: CanvasRenderingContext2D, canvasWidth: number, _canvasHeight: number): Rect {
-    const b = this.getLogicalBounds(ctx);
+  public override getBoundingBox(ctx: CanvasRenderingContext2D, canvasWidth: number, canvasHeight: number): Rect {
+    const b = this.getLogicalBounds(ctx, canvasWidth, canvasHeight);
     const k = canvasWidth > 0 ? canvasWidth / LOGICAL_CANVAS_WIDTH : 1;
     return { x: b.x * k, y: b.y * k, width: b.width * k, height: b.height * k };
   }
 
-  private getLogicalBounds(ctx: CanvasRenderingContext2D): Rect {
-    const fontStr = this.getFontString();
+  private getLogicalBounds(ctx: CanvasRenderingContext2D, canvasWidth = 0, canvasHeight = 0): Rect {
+    // N-2: mantıksal (1080 genişlikli) tuval yüksekliği; çok uzun metin buna sığacak şekilde küçültülür
+    const logicalH = canvasWidth > 0 && canvasHeight > 0 ? Math.round((canvasHeight * LOGICAL_CANVAS_WIDTH) / canvasWidth) : 0;
+    const fontStr = `${this.style.fontStyle} ${this.style.fontWeight} ${this.style.fontSize}px ${this.style.fontFamily}`;
     const hasBg = this.bgPreset === 'solid' || this.bgPreset === 'translucent';
     const padding = hasBg ? (this.style.backgroundPadding ?? 24) : 16;
-    const key = `${fontStr}|${padding}|${this.style.text}`;
+    const key = `${fontStr}|${padding}|${logicalH}|${this.style.text}`;
 
     if (this.cachedBounds && this.cachedBoundsKey === key) {
       return this.cachedBounds;
     }
 
     ctx.save();
-    ctx.font = fontStr;
-
-    const maxContentWidth = Math.max(
-      this.style.fontSize,
-      LOGICAL_CANVAS_WIDTH * SAFE_WIDTH_RATIO - padding * 2
-    );
-    const lines = layoutTextLines(ctx, this.style.text, maxContentWidth);
+    const maxBoxH = logicalH > 0 ? logicalH * 0.92 : Infinity;
+    const minFont = Math.min(this.style.fontSize, 28);
+    let fs = this.style.fontSize;
+    let lines: string[] = [];
+    for (let iter = 0; iter < 8; iter++) {
+      this.effFontSize = fs;
+      ctx.font = this.getFontString();
+      const maxContentWidth = Math.max(fs, LOGICAL_CANVAS_WIDTH * SAFE_WIDTH_RATIO - padding * 2);
+      lines = layoutTextLines(ctx, this.style.text, maxContentWidth);
+      const h = lines.length * fs * 1.25 + padding * 2;
+      if (h <= maxBoxH || fs <= minFont) break;
+      // Yükseklik ~ fs^2 ile büyür (satır sayısı x satır yüksekliği): karekök oranıyla küçült
+      fs = Math.max(minFont, Math.floor(fs * Math.min(0.95, Math.sqrt(maxBoxH / h))));
+    }
+    if (fs === this.style.fontSize) this.effFontSize = null;
     this.cachedLines = lines;
     let maxLineWidth = 0;
-    const lineHeight = this.style.fontSize * 1.25;
+    const lineHeight = (this.effFontSize ?? this.style.fontSize) * 1.25;
 
     for (const line of lines) {
       const metrics = ctx.measureText(line || ' ');
@@ -359,7 +371,7 @@ export class TextLayer extends BaseLayer {
     if (!this.visible || !this.style.text) return;
 
     const center = this.getPixelPosition(canvasWidth, canvasHeight);
-    const bounds = this.getLogicalBounds(ctx);
+    const bounds = this.getLogicalBounds(ctx, canvasWidth, canvasHeight);
     const resScale = canvasWidth / 1080;
     const interactionScale = this.isInteracting ? 1.015 : 1.0;
     const finalScale = this.transform.scale * interactionScale * this.pulseScale * resScale;
@@ -408,7 +420,7 @@ export class TextLayer extends BaseLayer {
   // Yerel koordinatlarda (merkez 0,0) arka plan + metin çizimi
   private drawContent(ctx: CanvasRenderingContext2D, bounds: Rect): void {
     const lines = this.cachedLines;
-    const lineHeight = this.style.fontSize * 1.25;
+    const lineHeight = (this.effFontSize ?? this.style.fontSize) * 1.25;
     const hasBg = this.bgPreset === 'solid' || this.bgPreset === 'translucent';
     const padding = this.layoutPadding;
 

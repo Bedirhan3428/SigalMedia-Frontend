@@ -103,6 +103,7 @@ export class CanvasEngine {
 
   private isDirty = false;
   private activeFilterIndex: number = 0;
+  private filterIntensity = 1;
   private listeners: Map<EngineEvent, Set<(args: unknown) => void>> = new Map();
 
   // Merkez Mıknatısı Hizalama Çizgisi Durumu
@@ -253,6 +254,11 @@ export class CanvasEngine {
     });
 
     this.setupPreviewSizing();
+    // QA kancası: yalnızca test betiği window.__QA_ENGINE_HOOK ayarlarsa motoru dışarı verir
+    if (typeof window !== "undefined" && (window as unknown as { __QA_ENGINE_HOOK?: boolean }).__QA_ENGINE_HOOK) {
+      const w = window as unknown as { __qaEngines?: WeakRef<CanvasEngine>[] };
+      (w.__qaEngines ||= []).push(new WeakRef(this));
+    }
     this.requestRender();
 
     this.canvas.addEventListener('pointerup', this.onCanvasPointerUp);
@@ -941,6 +947,7 @@ export class CanvasEngine {
     this.setSoundBlocked(false);
 
     this.mediaLayer = new MediaLayer(media, { fitMode: this.fitMode });
+    this.mediaLayer.filterIntensity = this.filterIntensity;
     this.applyModeToMediaLayer();
     const currentPreset = FILTER_PRESETS[this.activeFilterIndex];
     if (currentPreset) {
@@ -1173,6 +1180,20 @@ export class CanvasEngine {
     this.requestRender();
     this.emit('change');
     return preset.name;
+  }
+
+  /** WP-14: filtre yoğunluğu 0..1 (varsayılan 1). Önizleme + export + snapshot. */
+  public setFilterIntensity(intensity: number): void {
+    const v = Number.isFinite(intensity) ? Math.max(0, Math.min(1, intensity)) : 1;
+    this.filterIntensity = v;
+    if (this.mediaLayer) this.mediaLayer.setFilterIntensity(v, () => this.requestRender());
+    this.invalidateStaticCache();
+    this.requestRender();
+    this.emit('change');
+  }
+
+  public getFilterIntensity(): number {
+    return this.filterIntensity;
   }
 
   public getCurrentFilterName(): string {
@@ -2527,17 +2548,13 @@ export class CanvasEngine {
       const total = FILTER_PRESETS.length;
       const idx = ((clip.filterIndex % total) + total) % total;
       const preset = FILTER_PRESETS[idx];
-      ml.targetValues = { ...preset.values };
-      ml.currentValues = { ...preset.values };
-      ml.activeEffect = preset.overlayEffect || null;
+      ml.applyPresetImmediate(preset);
       if (!this.appliedClipFilter || this.lastClipFilterIdx !== idx) changed = true;
       this.appliedClipFilter = true;
       this.lastClipFilterIdx = idx;
     } else if (this.appliedClipFilter) {
       const preset = FILTER_PRESETS[this.activeFilterIndex];
-      ml.targetValues = { ...preset.values };
-      ml.currentValues = { ...preset.values };
-      ml.activeEffect = preset.overlayEffect || null;
+      ml.applyPresetImmediate(preset);
       this.appliedClipFilter = false;
       this.lastClipFilterIdx = -1;
       changed = true;
@@ -3983,6 +4000,7 @@ export class CanvasEngine {
         : null,
       clips: this.videoClips.map((c) => CanvasEngine.cloneClip(c)),
       filterIndex: this.activeFilterIndex,
+      filterIntensity: this.filterIntensity,
       music: this.musicMeta ? { ...this.musicMeta } : null,
       selectedLayerId: sel && sel.type !== 'media' ? sel.id : null,
       timelineTime: this.nleTimelineTime,
@@ -4037,11 +4055,11 @@ export class CanvasEngine {
     // 3. Filtre (animasyonsuz)
     const total = FILTER_PRESETS.length;
     this.activeFilterIndex = ((snap.filterIndex % total) + total) % total;
+    this.filterIntensity = typeof snap.filterIntensity === 'number' ? Math.max(0, Math.min(1, snap.filterIntensity)) : 1;
     if (ml) {
+      ml.filterIntensity = this.filterIntensity;
       const preset = FILTER_PRESETS[this.activeFilterIndex];
-      ml.targetValues = { ...preset.values };
-      ml.currentValues = { ...preset.values };
-      ml.activeEffect = preset.overlayEffect || null;
+      ml.applyPresetImmediate(preset);
     }
 
     // 4. Klipler

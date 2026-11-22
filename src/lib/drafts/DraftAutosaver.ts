@@ -29,6 +29,13 @@ export class DraftAutosaver {
     if (this.timer) clearTimeout(this.timer);
     this.timer = setTimeout(() => {
       this.timer = null;
+      // BUG-10: yakalama + yazma ana iş parçacığını 70-270 ms bloklayıp oynatmada donma yapıyordu.
+      // Oynatma sürerken kaydı ertele; durunca / sekme gizlenince (flush) kaydedilir.
+      const eng = this.deps.getEngine();
+      if (eng && !eng.isDestroyed() && eng.isPlaying()) {
+        this.schedule();
+        return;
+      }
       void this.run();
     }, DRAFT_DEBOUNCE_MS);
   }
