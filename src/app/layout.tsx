@@ -66,7 +66,7 @@ export default function RootLayout({
       <head>
         <meta name="darkreader-lock" content="" />
         <meta name="color-scheme" content="dark" />
-        <link rel="apple-touch-icon" href="/icons/MainLogo.svg" />
+        <link rel="apple-touch-icon" href="/icons/icon-180.png" />
       </head>
       <body
         className="min-h-full flex flex-col bg-zinc-950 text-zinc-100 selection:bg-emerald-500/20 selection:text-emerald-300"

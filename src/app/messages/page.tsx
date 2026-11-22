@@ -14,6 +14,7 @@ import {
 } from "lucide-react";
 import { useAuth } from "@/context/AuthContext";
 import BottomNav from "@/components/BottomNav";
+import PushPrompt from "@/components/notifications/PushPrompt";
 // [START] CREATED BY Umut
 import {
   listenUserChats,
@@ -154,6 +155,7 @@ export default function MessagesPage() {
           </button>
         </div>
       </header>
+      <PushPrompt />
 
       {/* Arama Çubuğu */}
       <div className="max-w-md w-full mx-auto px-4 pt-3 pb-2">
