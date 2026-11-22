@@ -5,6 +5,7 @@ import { EditorMedia, StoryAudioMeta, VideoTrackClip } from '../types';
 import { FastDemuxer, DemuxedSample, DemuxedVideoTrack } from './FastDemuxer';
 import { applyMusicFadeToGain } from '../utils/musicFade';
 import { MediaRecorderFallback } from './MediaRecorderFallback';
+import { RemuxExporter } from './RemuxExporter';
 
 export type ExportResolution = '1080p' | '720p' | 'auto';
 export type ExportWarning = 'downscaled-720p';
@@ -26,6 +27,10 @@ export interface ExportStats {
   usedFrameCursor: boolean;
   /** Çıktı I420 bt709 limited-range olarak etiketlendi mi (E-06) */
   taggedBt709Limited: boolean;
+  /** [WP-16] Kaynak görüntü kodeği (ör. avc1.640028, hvc1.1.6.L120.90) */
+  sourceCodec?: string;
+  /** [WP-16] Kullanılan yol */
+  path?: 'remux' | 'fast-cursor' | 'seek' | 'gpu';
 }
 
 export interface ExportVideoOptions {
@@ -653,6 +658,8 @@ export class VideoExporter {
     engine: CanvasEngine,
     options?: ExportVideoOptions
   ): Promise<Blob> {
+    // [WP-16] Düzenlemesiz H.264 kaynak: yeniden kodlamadan kopyala (uygun değilse null, normal yol)
+    const remuxed = await RemuxExporter.tryExport(engine, options); if (remuxed) return remuxed;
     const state = engine.getVideoState();
     if (!state.isVideo) {
       throw new Error('Aktif medya bir video değil');
