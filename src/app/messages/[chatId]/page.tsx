@@ -3,7 +3,15 @@
 // [START] CREATED BY Umut
 import { useState, useEffect, useLayoutEffect, useRef, useMemo } from "react";
 import { useParams, useRouter } from "next/navigation";
-import { ChevronLeft, Send, User as UserIcon } from "lucide-react";
+import { ChevronLeft, Info, Send, User as UserIcon } from "lucide-react";
+import { ChatBackground, CHAT_CSS } from "@/components/messages/ChatBackground";
+import { ChatCustomizeSheet } from "@/components/messages/ChatCustomizeSheet";
+import { chatSettingsStore } from "@/lib/chat/chatSettingsStore";
+import {
+  DEFAULT_CHAT_SETTINGS,
+  settingsToVars,
+  type ChatSettings,
+} from "@/lib/chat/chatThemes";
 import { useAuth } from "@/context/AuthContext";
 import { preloadServerPublicKey } from "@/lib/crypto";
 import {
@@ -21,34 +29,17 @@ import {
 const GROUP_TIME_THRESHOLD_MS = 3 * 60 * 1000; // 3 dakika
 const TIME_HEADER_INTERVAL_MS = 20 * 60 * 1000; // 20 dakika
 
-function getBubbleRadiusClass(
-  isMine: boolean,
-  prevSameCluster: boolean,
-  nextSameCluster: boolean
-): string {
+// Köşe yarıçapları sohbet köküne ait --r / --rt değişkenlerinden gelir (balon biçimi ayarı).
+// Gönderen tarafındaki alt köşe her zaman "kuyruk" (--rt); küme içinde üst köşe de küçülür.
+function getBubbleRadiusClass(isMine: boolean, prevSameCluster: boolean): string {
   if (isMine) {
-    if (!prevSameCluster && !nextSameCluster) {
-      return "rounded-2xl";
-    }
-    if (!prevSameCluster && nextSameCluster) {
-      return "rounded-2xl rounded-br-[4px]";
-    }
-    if (prevSameCluster && nextSameCluster) {
-      return "rounded-l-2xl rounded-r-[4px]";
-    }
-    return "rounded-2xl rounded-tr-[4px] rounded-br-2xl";
-  } else {
-    if (!prevSameCluster && !nextSameCluster) {
-      return "rounded-2xl";
-    }
-    if (!prevSameCluster && nextSameCluster) {
-      return "rounded-2xl rounded-bl-[4px]";
-    }
-    if (prevSameCluster && nextSameCluster) {
-      return "rounded-r-2xl rounded-l-[4px]";
-    }
-    return "rounded-2xl rounded-tl-[4px] rounded-bl-2xl";
+    return `rounded-[var(--r)] rounded-br-[var(--rt)] ${
+      prevSameCluster ? "rounded-tr-[var(--rt)]" : ""
+    }`;
   }
+  return `rounded-[var(--r)] rounded-bl-[var(--rt)] ${
+    prevSameCluster ? "rounded-tl-[var(--rt)]" : ""
+  }`;
 }
 
 function formatChatTimeHeader(timestamp?: number): string {
@@ -74,6 +65,11 @@ function formatChatTimeHeader(timestamp?: number): string {
     month: "short",
   });
   return `${dayStr} ${timeStr}`;
+}
+
+function formatBubbleTime(timestamp?: number): string {
+  if (!timestamp) return "";
+  return new Date(timestamp).toLocaleTimeString("tr-TR", { hour: "2-digit", minute: "2-digit" });
 }
 
 const INPUT_MAX_HEIGHT = 120;
@@ -139,6 +135,11 @@ export default function ChatRoomPage() {
   const [peerOnline, setPeerOnline] = useState(false);
   const [peerTyping, setPeerTyping] = useState(false);
 
+  // Sohbete özel görünüm ayarları (yalnızca frontend, localStorage adaptörü). draft != null: özelleştirme sayfası açık.
+  const [settings, setSettings] = useState<ChatSettings>(DEFAULT_CHAT_SETTINGS);
+  const [draft, setDraft] = useState<ChatSettings | null>(null);
+  const [customPhoto, setCustomPhoto] = useState<string | null>(null);
+
   const mainScrollRef = useRef<HTMLElement | null>(null);
   const listInnerRef = useRef<HTMLDivElement | null>(null);
   const listSnapshotRef = useRef<ListSnapshot | null>(null);
@@ -165,6 +166,49 @@ export default function ChatRoomPage() {
     setMounted(true);
     preloadServerPublicKey();
   }, []);
+
+  // Sohbet değişince (ve ilk istemci render'ında) ayarları yükle: render sırasında "prop değişti" deseni (effect içinde setState yok).
+  const [prefsFor, setPrefsFor] = useState("");
+  if (mounted && chatId && prefsFor !== chatId) {
+    setPrefsFor(chatId);
+    setSettings(chatSettingsStore.get(chatId));
+    setCustomPhoto(chatSettingsStore.getPhoto(chatId));
+    setDraft(null);
+  }
+  useEffect(() => {
+    if (!chatId) return;
+    return chatSettingsStore.subscribe(chatId, setSettings);
+  }, [chatId]);
+
+  const openSheet = () => setDraft(settings);
+  const closeSheet = () => {
+    setDraft(null);
+    setCustomPhoto(chatSettingsStore.getPhoto(chatId));
+  };
+  const saveSheet = () => {
+    if (!draft) return;
+    let next = draft;
+    if (draft.bg.photo === "custom" && customPhoto) {
+      if (!chatSettingsStore.setPhoto(chatId, customPhoto)) {
+        showError("Fotoğraf çok büyük, kaydedilemedi");
+        next = { ...draft, bg: { ...draft.bg, photo: "p1" } };
+        setCustomPhoto(null);
+      }
+    } else {
+      chatSettingsStore.setPhoto(chatId, null);
+      if (draft.bg.photo === "custom") next = { ...draft, bg: { ...draft.bg, photo: "p1" } };
+    }
+    chatSettingsStore.set(chatId, next);
+    setDraft(next);
+  };
+  const resetSheet = () => {
+    chatSettingsStore.reset(chatId);
+    setCustomPhoto(null);
+    setDraft(DEFAULT_CHAT_SETTINGS);
+  };
+
+  const view = draft ?? settings;
+  const cssVars = useMemo(() => settingsToVars(view), [view]);
 
   const peerUid =
     profile?.uid && chatId
@@ -352,11 +396,13 @@ export default function ChatRoomPage() {
     }
   };
 
-  const handleSend = () => {
-    inputRef.current?.focus();
+  // textOverride: hızlı tepki düğmesi emojiyi mevcut gönderim yolundan normal mesaj olarak yollar (yazı kutusuna dokunmaz).
+  const handleSend = (textOverride?: string) => {
+    if (textOverride === undefined) inputRef.current?.focus();
 
     if (!peerUid || !profile?.uid) return;
-    const rawValue = inputRef.current ? inputRef.current.value : inputText;
+    const rawValue =
+      textOverride ?? (inputRef.current ? inputRef.current.value : inputText);
     const clean = rawValue.trim();
     if (!clean) return;
 
@@ -366,7 +412,7 @@ export default function ChatRoomPage() {
       return;
     }
     lastSendTimestampRef.current = now;
-    ignoreInputUntilRef.current = now + 80;
+    if (textOverride === undefined) ignoreInputUntilRef.current = now + 80;
 
     listSnapshotRef.current = takeListSnapshot(
       mainScrollRef.current,
@@ -374,11 +420,13 @@ export default function ChatRoomPage() {
     );
 
     // Input alanını hem React state hem de DOM üzerinden kesin olarak temizle
-    setInputText("");
-    if (inputRef.current) {
-      inputRef.current.value = "";
-      fitTextarea(inputRef.current);
-      inputRef.current.focus();
+    if (textOverride === undefined) {
+      setInputText("");
+      if (inputRef.current) {
+        inputRef.current.value = "";
+        fitTextarea(inputRef.current);
+        inputRef.current.focus();
+      }
     }
 
     const tempId = `optimistic_${now}_${Math.random()
@@ -431,10 +479,41 @@ export default function ChatRoomPage() {
     );
   }
 
+  const nickname = view.nickname.trim();
+  const realName = peerProfile?.displayName || "Sohbet";
+  const headerName = nickname || realName;
+  const statusText = peerTyping
+    ? "Yazıyor..."
+    : peerOnline
+    ? "Çevrimiçi"
+    : peerProfile?.username
+    ? `@${peerProfile.username}`
+    : "";
+  const subLine = nickname
+    ? [realName, statusText].filter(Boolean).join(" · ")
+    : statusText;
+  const canSend = Boolean(inputText.trim());
+
+  const peerAvatar = (
+    <div className="w-7 h-7 rounded-full overflow-hidden shrink-0 flex items-center justify-center bg-[var(--recv-bg)] text-[var(--recv-t)]">
+      {peerProfile?.photoURL ? (
+        <img src={peerProfile.photoURL} alt="" className="w-full h-full object-cover" />
+      ) : (
+        <UserIcon className="w-3.5 h-3.5" strokeWidth={1.5} />
+      )}
+    </div>
+  );
+
   return (
-    <div className="h-[100dvh] bg-zinc-950 text-zinc-100 flex flex-col overflow-hidden">
+    <div
+      data-chat-root=""
+      data-chat-theme={view.theme}
+      style={{ ...cssVars, background: "var(--bg1)", color: "var(--recv-t)" }}
+      className="chat-root relative isolate h-[100dvh] flex flex-col overflow-hidden"
+    >
       {/* Yalnızca Mesaj Kutucuğunun Aşağıdan Yukarı Çıkma (Slide-Up) Animasyonu */}
       <style>{`
+        ${CHAT_CSS}
         @keyframes sigalBubbleSlideUp {
           0% {
             opacity: 0;
@@ -451,27 +530,40 @@ export default function ChatRoomPage() {
         }
       `}</style>
 
+      <ChatBackground settings={view} customPhoto={customPhoto} />
+
       {errorToast && (
-        <div className="fixed top-5 left-1/2 -translate-x-1/2 z-50 bg-red-950/90 text-red-200 text-xs font-semibold px-4 py-2 rounded-full shadow-xl border border-red-800/60 select-none">
+        <div className="fixed top-5 left-1/2 -translate-x-1/2 z-[60] bg-red-950/90 text-red-200 text-xs font-semibold px-4 py-2 rounded-full shadow-xl border border-red-800/60 select-none">
           {errorToast}
         </div>
       )}
 
       {/* Üst Bar */}
-      <header className="border-b border-zinc-900 bg-zinc-950/90 backdrop-blur-md shrink-0 z-30 pt-safe">
-        <div className="max-w-md mx-auto px-3 h-14 flex items-center gap-2.5">
+      <header
+        className="relative shrink-0 z-30 pt-safe"
+        style={{
+          color: "var(--panel-t)",
+          background:
+            "linear-gradient(180deg, var(--panel), color-mix(in srgb, var(--panel) 70%, transparent))",
+        }}
+      >
+        <div className="max-w-md lg:max-w-2xl mx-auto px-1.5 h-[60px] flex items-center gap-2">
           <button
             type="button"
             onClick={() => router.push("/messages")}
             title="Geri"
             aria-label="Geri"
-            className="p-2 -ml-1 text-zinc-400 hover:text-white hover:bg-zinc-900 rounded-xl transition-colors btn-press-subtle"
+            className="w-11 h-11 grid place-items-center rounded-xl shrink-0 hover:bg-[var(--panel-line)] transition-colors btn-press-subtle"
           >
-            <ChevronLeft className="w-6 h-6" />
+            <ChevronLeft className="w-[22px] h-[22px]" strokeWidth={1.5} />
           </button>
 
           <div className="relative shrink-0">
-            <div className="w-9 h-9 rounded-full bg-zinc-900 border border-zinc-800 flex items-center justify-center overflow-hidden">
+            <span
+              aria-hidden="true"
+              className="absolute -inset-[3px] rounded-full border-2 border-[var(--acc)] opacity-90"
+            />
+            <div className="relative w-[38px] h-[38px] rounded-full bg-[var(--recv-bg)] text-[var(--recv-t)] flex items-center justify-center overflow-hidden">
               {peerProfile?.photoURL ? (
                 <img
                   src={peerProfile.photoURL}
@@ -479,38 +571,42 @@ export default function ChatRoomPage() {
                   className="w-full h-full object-cover"
                 />
               ) : (
-                <UserIcon className="w-4 h-4 text-zinc-500" />
+                <UserIcon className="w-4 h-4" strokeWidth={1.5} />
               )}
             </div>
             {peerOnline && (
-              <span className="absolute bottom-0 right-0 w-2.5 h-2.5 rounded-full bg-emerald-500 ring-2 ring-zinc-950" />
+              <span className="absolute -bottom-px -right-px w-[11px] h-[11px] rounded-full bg-[#3DDC97] border-2 border-[var(--panel)]" />
             )}
           </div>
 
-          <div className="min-w-0 flex-1">
-            <h1 className="text-sm font-bold text-white truncate">
-              {peerProfile?.displayName || "Sohbet"}
+          <div className="min-w-0 flex-1 ml-0.5">
+            <h1 data-testid="chat-title" className="text-[15px] font-semibold truncate">
+              {headerName}
             </h1>
-            <p className="text-[11px] text-zinc-400 truncate">
-              {peerTyping
-                ? "Yazıyor..."
-                : peerOnline
-                ? "Çevrimiçi"
-                : peerProfile?.username
-                ? `@${peerProfile.username}`
-                : ""}
-            </p>
+            <p className="text-xs truncate text-[var(--sub)]">{subLine}</p>
           </div>
+
+          <button
+            type="button"
+            onClick={openSheet}
+            title="Sohbeti özelleştir"
+            aria-label="Sohbeti özelleştir"
+            aria-haspopup="dialog"
+            data-testid="chat-info-btn"
+            className="w-11 h-11 grid place-items-center rounded-xl shrink-0 hover:bg-[var(--panel-line)] transition-colors"
+          >
+            <Info className="w-[22px] h-[22px]" strokeWidth={1.5} />
+          </button>
         </div>
       </header>
 
       {/* Mesaj Akışı */}
       <main
         ref={mainScrollRef}
-        className="flex-1 max-w-md w-full mx-auto px-3 py-3 overflow-y-auto flex flex-col [overflow-anchor:none]"
+        className="relative z-10 flex-1 max-w-md lg:max-w-2xl w-full mx-auto px-3 py-3 overflow-y-auto flex flex-col [overflow-anchor:none]"
       >
         {displayedMessages.length === 0 && !peerTyping ? (
-          <div className="m-auto text-center text-xs text-zinc-500 select-none">
+          <div className="m-auto text-center text-xs select-none rounded-full px-3 py-1 bg-[var(--chip)] text-[var(--chip-t)]">
             Henüz mesaj yok.
           </div>
         ) : (
@@ -552,18 +648,14 @@ export default function ChatRoomPage() {
                     GROUP_TIME_THRESHOLD_MS
               );
 
-              const radiusClass = getBubbleRadiusClass(
-                isMine,
-                prevSameCluster,
-                nextSameCluster
-              );
+              const radiusClass = getBubbleRadiusClass(isMine, prevSameCluster);
 
               const marginTopClass =
                 idx === 0 || showTimeHeader
                   ? "mt-0"
                   : prevSameCluster
-                  ? "mt-[2px]"
-                  : "mt-1.5";
+                  ? "mt-[var(--gapc)]"
+                  : "mt-[var(--gap)]";
 
               const stableDomKey =
                 stableKeyMapRef.current.get(msg.id) || msg.id;
@@ -575,28 +667,43 @@ export default function ChatRoomPage() {
                 <div key={stableDomKey} data-mid={stableDomKey} className="flex flex-col">
                   {showTimeHeader && (
                     <div className="my-2 flex justify-center select-none">
-                      <span className="text-[11px] font-medium text-zinc-500">
+                      <span className="text-[11.5px] font-medium px-2.5 py-[3px] rounded-full bg-[var(--chip)] text-[var(--chip-t)]">
                         {formatChatTimeHeader(msg.timestamp)}
                       </span>
                     </div>
                   )}
 
                   <div
-                    className={`flex ${
+                    className={`flex items-end gap-[7px] ${
                       isMine ? "justify-end" : "justify-start"
                     } ${marginTopClass}`}
                   >
+                    {!isMine && !view.compact && (
+                      nextSameCluster ? (
+                        <div className="w-7 shrink-0" aria-hidden="true" />
+                      ) : (
+                        peerAvatar
+                      )
+                    )}
                     {/* Animasyon metinde değil doğrudan kutucuğun kendisinde (msg-bubble-slide-up) */}
                     <div
-                      className={`max-w-[78%] px-[11px] py-[9.5px] text-[15.5px] leading-[1.35] break-words transform-gpu ${
+                      className={`max-w-[78%] lg:max-w-[62%] px-0 text-[length:var(--fs)] leading-[1.35] break-words transform-gpu ${
                         isNewMessage ? "msg-bubble-slide-up" : ""
                       } ${radiusClass} ${
                         isMine
-                          ? "bg-emerald-600 text-white"
-                          : "bg-zinc-900 text-zinc-100 border border-zinc-800/80"
+                          ? "chat-sent"
+                          : "chat-recv"
                       }`}
+                      style={{ padding: "var(--pad)" }}
                     >
                       <span className="whitespace-pre-wrap">{msg.text}</span>
+                      <span
+                        className={`float-right ml-2.5 mt-[5px] font-mono text-[10.5px] leading-none select-none ${
+                          isMine ? "" : "opacity-75"
+                        }`}
+                      >
+                        {formatBubbleTime(msg.timestamp)}
+                      </span>
                     </div>
                   </div>
                 </div>
@@ -606,13 +713,17 @@ export default function ChatRoomPage() {
           </div>
         )}
 
-        {/* Mesaj Kutusu Kalınlığında ve Belirgin Yazıyor... Balonu */}
+        {/* Yazıyor göstergesi */}
         {peerTyping && (
-          <div className="mt-1.5 flex justify-start">
-            <div className="bg-zinc-900 border border-zinc-800/80 px-4 py-3 rounded-2xl rounded-bl-[4px] inline-flex items-center gap-2 transform-gpu msg-bubble-slide-up">
-              <span className="w-2 h-2 rounded-full bg-emerald-400 animate-bounce shadow-[0_0_8px_rgba(52,211,153,0.65)]" />
-              <span className="w-2 h-2 rounded-full bg-emerald-400 animate-bounce [animation-delay:150ms] shadow-[0_0_8px_rgba(52,211,153,0.65)]" />
-              <span className="w-2 h-2 rounded-full bg-emerald-400 animate-bounce [animation-delay:300ms] shadow-[0_0_8px_rgba(52,211,153,0.65)]" />
+          <div className="mt-[var(--gap)] flex items-end gap-[7px] justify-start">
+            {!view.compact && peerAvatar}
+            <div
+              aria-label="Yazıyor"
+              className="chat-recv px-3.5 py-3 rounded-[var(--r)] rounded-bl-[var(--rt)] inline-flex items-center gap-[5px] transform-gpu msg-bubble-slide-up"
+            >
+              <span className="chat-typing-dot w-[7px] h-[7px] rounded-full bg-[var(--acc)]" />
+              <span className="chat-typing-dot w-[7px] h-[7px] rounded-full bg-[var(--acc)] [animation-delay:150ms]" />
+              <span className="chat-typing-dot w-[7px] h-[7px] rounded-full bg-[var(--acc)] [animation-delay:300ms]" />
             </div>
           </div>
         )}
@@ -620,43 +731,79 @@ export default function ChatRoomPage() {
         <div ref={bottomRef} />
       </main>
 
-      {/* Giriş Çubuğu (Enter = Yeni Satır, Gönder Butonu = Klavyeyi Kapatmadan Tek Sefer Gönder) */}
-      <footer className="border-t border-zinc-900 bg-zinc-950 shrink-0 pb-[env(safe-area-inset-bottom,0px)]">
-        <div className="max-w-md mx-auto px-3 py-2.5 flex items-end gap-2">
-          <textarea
-            ref={inputRef}
-            rows={1}
-            enterKeyHint="enter"
-            value={inputText}
-            onChange={(e) => handleInputChange(e.target.value)}
-            placeholder="Mesaj yaz..."
-            className="flex-1 bg-zinc-900 border border-zinc-800 rounded-2xl px-3.5 py-2.5 text-[15.5px] text-zinc-100 placeholder:text-zinc-500 focus:outline-none focus:border-zinc-700 resize-none overflow-y-hidden max-h-[120px] leading-snug"
-          />
-
-          <button
-            type="button"
-            aria-disabled={!inputText.trim()}
-            onMouseDown={(e) => e.preventDefault()}
-            onPointerDown={(e) => e.preventDefault()}
-            onClick={() => {
-              if (inputText.trim() || inputRef.current?.value.trim()) {
-                handleSend();
-              } else {
-                inputRef.current?.focus();
-              }
+      {/* Yüzen yazma çubuğu (Enter = Yeni Satır, Gönder Butonu = Klavyeyi Kapatmadan Tek Sefer Gönder) */}
+      <footer className="relative z-20 shrink-0 pb-[env(safe-area-inset-bottom,0px)]">
+        <div className="max-w-md lg:max-w-2xl mx-auto px-2.5 pt-1.5 pb-3">
+          <div
+            className="flex items-end gap-0.5 rounded-[26px] border px-1 py-1 min-h-[52px] shadow-[0_6px_18px_rgba(0,0,0,.28)] focus-within:border-[var(--acc)] transition-colors"
+            style={{
+              background: "var(--panel)",
+              color: "var(--panel-t)",
+              borderColor: "var(--panel-line)",
             }}
-            aria-label="Gönder"
-            title="Gönder"
-            className={`w-10 h-10 rounded-full flex items-center justify-center shrink-0 transition-all select-none ${
-              inputText.trim()
-                ? "bg-emerald-500 text-zinc-950 hover:bg-emerald-400 active:scale-95 cursor-pointer"
-                : "bg-zinc-900 text-zinc-600 border border-zinc-800 cursor-not-allowed"
-            }`}
           >
-            <Send className="w-4 h-4" />
-          </button>
+            <textarea
+              ref={inputRef}
+              rows={1}
+              enterKeyHint="enter"
+              value={inputText}
+              onChange={(e) => handleInputChange(e.target.value)}
+              placeholder="Mesaj yaz..."
+              className="flex-1 min-w-0 bg-transparent border border-transparent rounded-2xl px-3 py-2.5 text-[15.5px] placeholder:text-[var(--sub)] focus:outline-none resize-none overflow-y-hidden max-h-[120px] leading-snug"
+              style={{ color: "var(--panel-t)" }}
+            />
+
+            <button
+              type="button"
+              onMouseDown={(e) => e.preventDefault()}
+              onPointerDown={(e) => e.preventDefault()}
+              onClick={() => handleSend(view.quickReaction)}
+              aria-label={`Hızlı tepki: ${view.quickReaction}`}
+              title="Hızlı tepki gönder"
+              data-testid="quick-react"
+              className="w-11 h-11 rounded-full text-[22px] leading-none grid place-items-center shrink-0 hover:bg-[var(--panel-line)] active:scale-95 transition-transform select-none"
+            >
+              {view.quickReaction}
+            </button>
+
+            <button
+              type="button"
+              aria-disabled={!canSend}
+              onMouseDown={(e) => e.preventDefault()}
+              onPointerDown={(e) => e.preventDefault()}
+              onClick={() => {
+                if (inputText.trim() || inputRef.current?.value.trim()) {
+                  handleSend();
+                } else {
+                  inputRef.current?.focus();
+                }
+              }}
+              aria-label="Gönder"
+              title="Gönder"
+              className={`w-11 h-11 rounded-full flex items-center justify-center shrink-0 transition-all select-none ${
+                canSend
+                  ? "chat-sent active:scale-95 cursor-pointer"
+                  : "text-[var(--sub)] cursor-not-allowed"
+              }`}
+            >
+              <Send className="w-[22px] h-[22px]" strokeWidth={1.5} />
+            </button>
+          </div>
         </div>
       </footer>
+
+      {draft && (
+        <ChatCustomizeSheet
+          draft={draft}
+          onChange={setDraft}
+          customPhoto={customPhoto}
+          onCustomPhoto={setCustomPhoto}
+          realName={realName === "Sohbet" ? "" : realName}
+          onSave={saveSheet}
+          onReset={resetSheet}
+          onClose={closeSheet}
+        />
+      )}
     </div>
   );
 }
