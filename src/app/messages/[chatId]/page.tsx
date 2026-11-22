@@ -243,6 +243,22 @@ export default function ChatRoomPage() {
     return chatSettingsStore.subscribe(chatId, setSettings);
   }, [chatId]);
 
+  // Push: drop this chat's stacked notification; ?reply=1 (notification reply without inline support) focuses the composer.
+  useEffect(() => {
+    if (!chatId) return;
+    try {
+      navigator.serviceWorker?.controller?.postMessage({ type: "clear-chat", tag: "chat-" + chatId });
+    } catch {}
+    if (new URLSearchParams(window.location.search).get("reply") !== "1") return;
+    // The composer mounts after the chat loads: retry briefly.
+    let tries = 0;
+    const t = setInterval(() => {
+      inputRef.current?.focus();
+      if (document.activeElement === inputRef.current || ++tries > 25) clearInterval(t);
+    }, 200);
+    return () => clearInterval(t);
+  }, [chatId]);
+
   // Ortak ayarlar (tema, arka plan, balon): karşı taraf değiştirince canlı gelir; yerel önbelleğe yazılır.
   useEffect(() => {
     if (!chatId || !profile?.uid) return;

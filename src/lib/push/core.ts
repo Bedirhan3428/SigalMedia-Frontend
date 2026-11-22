@@ -27,6 +27,14 @@ export function buildBody(text: string, kind: string = "text"): string {
   return trimBody(text) || "💬 Yeni mesaj";
 }
 
+/** Sender avatar for the notification icon: only absolute https URLs (or app paths); otherwise the SW falls back to the app icon. */
+export function safeIcon(url: unknown): string | undefined {
+  if (typeof url !== "string") return undefined;
+  const u = url.trim();
+  if (u.length > 1000) return undefined;
+  return /^https:\/\//.test(u) || /^\/[^/]/.test(u) ? u : undefined;
+}
+
 export interface StoredSub {
   endpoint: string;
   keys: { p256dh: string; auth: string };
@@ -74,7 +82,7 @@ export async function removeSubscription(db: DbLike, uid: string, endpoint: stri
 
 /** Sends a chat push to every device of the recipient. Never throws. */
 export async function sendChatPush(
-  deps: { db: DbLike; push: PushLike },
+  deps: { db: DbLike; push: PushLike; signReply?: (c: { from: string; to: string; chatId: string }) => string },
   p: PushParams
 ): Promise<{ sent: number; removed: number; total: number }> {
   const result = { sent: 0, removed: 0, total: 0 };
@@ -84,13 +92,15 @@ export async function sendChatPush(
       deps.db.collection("users").doc(p.senderUid).get(),
       deps.db.collection(PUSH_COLLECTION).where("uid", "==", p.recipientUid).get(),
     ]);
-    const u = (userSnap.exists ? userSnap.data() : {}) as { displayName?: string; username?: string };
+    const u = (userSnap.exists ? userSnap.data() : {}) as { displayName?: string; username?: string; photoURL?: string };
     const payload = JSON.stringify({
       title: u.displayName || u.username || "Yeni mesaj",
       body: buildBody(p.text, p.kind),
       chatId: p.chatId,
       senderUid: p.senderUid,
       url: `/messages/${p.chatId}`,
+      icon: safeIcon(u.photoURL),
+      replyToken: deps.signReply ? deps.signReply({ from: p.recipientUid, to: p.senderUid, chatId: p.chatId }) : undefined,
       tag: `chat-${p.chatId}`,
       ts: Date.now(),
     });

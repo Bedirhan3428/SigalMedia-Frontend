@@ -1,5 +1,7 @@
 import * as webpush from "web-push";
 import { adminDb } from "@/lib/firebase-admin";
+import { getServerPrivateKeyPem } from "@/lib/serverCrypto";
+import { deriveReplySecret, signReplyToken, verifyReplyToken } from "./replyToken";
 import {
   removeSubscription as removeSub,
   saveSubscription as saveSub,
@@ -10,6 +12,10 @@ import {
 } from "./core";
 
 const db = adminDb as unknown as DbLike;
+
+let replySecret: Buffer | null = null;
+const secret = () => (replySecret ??= deriveReplySecret(getServerPrivateKeyPem()));
+export const verifyReply = (token: unknown) => verifyReplyToken(secret(), token);
 
 let configured: boolean | null = null;
 function ensureConfigured(): boolean {
@@ -34,7 +40,7 @@ export async function notifyChatMessage(p: PushParams) {
     console.warn("[push] skipped: VAPID not configured");
     return { sent: 0, removed: 0, total: 0 };
   }
-  const r = await sendChatPush({ db, push: webpush }, p);
+  const r = await sendChatPush({ db, push: webpush, signReply: (c) => signReplyToken(secret(), c) }, p);
   console.log(`[push] chat=${p.chatId.slice(0, 8)} recipient=${p.recipientUid.slice(0, 6)} subs=${r.total} sent=${r.sent} removed=${r.removed}`);
   return r;
 }
