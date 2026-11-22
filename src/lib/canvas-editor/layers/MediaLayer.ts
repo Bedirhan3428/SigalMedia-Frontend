@@ -44,6 +44,33 @@ export class MediaLayer extends BaseLayer {
   public currentValues: FilterValues = { ...DEFAULT_FILTER_VALUES };
   public targetValues: FilterValues = { ...DEFAULT_FILTER_VALUES };
   public activeEffect: OverlayEffect = null;
+  /** WP-14: filtre yoğunluğu 0..1 (0 = filtresiz, 1 = tam preset). */
+  public filterIntensity = 1;
+  private lastPreset: FilterPreset | null = null;
+
+  /** Preset değerlerini yoğunluğa göre DEFAULT ile harmanlar. */
+  public blendPresetValues(preset: FilterPreset): FilterValues {
+    const t = Math.max(0, Math.min(1, this.filterIntensity));
+    const out = { ...DEFAULT_FILTER_VALUES };
+    (Object.keys(out) as (keyof FilterValues)[]).forEach((k) => {
+      out[k] = DEFAULT_FILTER_VALUES[k] + (preset.values[k] - DEFAULT_FILTER_VALUES[k]) * t;
+    });
+    return out;
+  }
+
+  /** Animasyonsuz preset uygulaması (klip filtresi / restore). */
+  public applyPresetImmediate(preset: FilterPreset) {
+    this.lastPreset = preset;
+    this.targetValues = this.blendPresetValues(preset);
+    this.currentValues = { ...this.targetValues };
+    this.activeEffect = this.filterIntensity > 0 ? preset.overlayEffect || null : null;
+  }
+
+  public setFilterIntensity(v: number, onRender?: () => void) {
+    this.filterIntensity = Math.max(0, Math.min(1, v));
+    if (this.lastPreset) this.applyPresetImmediate(this.lastPreset);
+    if (onRender) onRender();
+  }
 
   // [START] CREATED BY Bedirhan
   public trimStart: number = 0;
@@ -207,8 +234,9 @@ export class MediaLayer extends BaseLayer {
    * Hedef filtre presetine LERP ile pürüzsüz geçiş (Aktif = Aktif + (Hedef - Aktif) * 0.15)
    */
   public setPreset(preset: FilterPreset, onRender?: () => void) {
-    this.targetValues = { ...preset.values };
-    this.activeEffect = preset.overlayEffect || null;
+    this.lastPreset = preset;
+    this.targetValues = this.blendPresetValues(preset);
+    this.activeEffect = this.filterIntensity > 0 ? preset.overlayEffect || null : null;
     if (onRender) this.onRenderCallback = onRender;
 
     if (this.animFrameId !== null) {
