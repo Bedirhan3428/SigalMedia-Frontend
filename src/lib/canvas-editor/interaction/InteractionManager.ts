@@ -17,6 +17,13 @@ const DEFAULT_MEDIA_POLICY: MediaGesturePolicy = {
   filterSwipe: true,
 };
 
+/** Kenar tutamaçlı (kutu boyu ayarlanabilir) metin katmanı sözleşmesi. */
+interface TextBoxLayer {
+  style: { boxWidth?: number; boxHeight?: number };
+  getBoxMetrics(ctx: CanvasRenderingContext2D, w: number, h: number): { width: number; height: number; minWidth: number; minHeight: number; maxWidth: number; maxHeight: number };
+  setBoxSize(size: { width?: number; height?: number }): void;
+}
+
 interface ContentRect {
   left: number;
   top: number;
@@ -81,6 +88,9 @@ export class InteractionManager {
   private isMoved: boolean = false;
   private isSwipeTriggered: boolean = false;
   private isCornerResizeMode: boolean = false;
+  /** Kenar tutamacı (t/b/l/r) ile yalnız genişlik ya da yükseklik değiştirme jesti. */
+  private edgeHandle: 't' | 'b' | 'l' | 'r' | null = null;
+  private edgeStart: { w: number; h: number; pt: Point } | null = null;
   private candidateLayer: BaseLayer | null = null;
 
   // WP1: jest durumu
@@ -333,14 +343,33 @@ export class InteractionManager {
       this.isMoved = false;
       this.isSwipeTriggered = false;
       this.isCornerResizeMode = false;
+      this.edgeHandle = null;
+      this.edgeStart = null;
 
       const ctx = this.getContext();
-      if (
-        this.selectedLayer &&
-        this.selectedLayer.type !== 'media' &&
-        !this.selectedLayer.locked &&
-        this.selectedLayer.isCornerHandleHit(pt, ctx, this.lw(), this.lh())
-      ) {
+      // Dokunma alanı >= 44 CSS px (yarı boy 22 CSS px) — görsel tutamaç daha küçük olabilir
+      const cssToCanvas = this.lw() / (this.getRect().width || 1);
+      const hitHalf = Math.max(22 * cssToCanvas, 44);
+      const handle =
+        this.selectedLayer && this.selectedLayer.type !== 'media' && !this.selectedLayer.locked
+          ? this.selectedLayer.hitTestHandle(pt, ctx, this.lw(), this.lh(), hitHalf)
+          : null;
+      if (this.selectedLayer && handle && (handle === 't' || handle === 'b' || handle === 'l' || handle === 'r')) {
+        const layer = this.selectedLayer;
+        const m = (layer as unknown as TextBoxLayer).getBoxMetrics?.(ctx, this.lw(), this.lh());
+        if (m) {
+          this.candidateLayer = layer;
+          this.transformingLayer = layer;
+          this.edgeHandle = handle;
+          this.edgeStart = { w: m.width, h: m.height, pt: { x: pt.x, y: pt.y } };
+          layer.isInteracting = true;
+          this.startCenter = layer.getPixelPosition(this.lw(), this.lh());
+          this.startLayerTransform = { ...layer.transform };
+          this.notifyRender();
+          return;
+        }
+      }
+      if (this.selectedLayer && handle) {
         this.candidateLayer = this.selectedLayer;
         this.transformingLayer = this.selectedLayer;
         this.isCornerResizeMode = true;
@@ -393,6 +422,8 @@ export class InteractionManager {
       this.cancelTapTimer();
       this.isSwipeTriggered = true; // Filtre kaydırmayı kilitle
       this.isCornerResizeMode = false;
+      this.edgeHandle = null;
+      this.edgeStart = null;
       this.gestureHadMultiTouch = true;
       this.isMediaPan = false;
 
@@ -569,6 +600,45 @@ export class InteractionManager {
         }
       }
 
+      if (this.edgeHandle && this.edgeStart && this.transformingLayer && !this.transformingLayer.locked) {
+        const layer = this.transformingLayer as unknown as BaseLayer & TextBoxLayer;
+        const ctx = this.getContext();
+        const m = layer.getBoxMetrics(ctx, this.lw(), this.lh());
+        const rot = (this.startLayerTransform.rotation * Math.PI) / 180;
+        const ux = Math.cos(rot);
+        const uy = Math.sin(rot);
+        const dx = pt.x - this.edgeStart.pt.x;
+        const dy = pt.y - this.edgeStart.pt.y;
+        // 1 mantıksal px = scale * lw/1080 tuval px
+        const unit = Math.max(1e-6, this.startLayerTransform.scale * (this.lw() / 1080));
+        const isH = this.edgeHandle === 'l' || this.edgeHandle === 'r';
+        const sign = this.edgeHandle === 'r' || this.edgeHandle === 'b' ? 1 : -1;
+        let shiftLocal = 0;
+        if (isH) {
+          const dLocal = (dx * ux + dy * uy) / unit;
+          const newW = Math.max(m.minWidth, Math.min(m.maxWidth, this.edgeStart.w + sign * dLocal));
+          // Yükseklik sabit kalsın: ilk genişlik değişiminde mevcut yükseklik sabitlenir
+          if (layer.style.boxHeight === undefined) layer.setBoxSize({ height: this.edgeStart.h });
+          layer.setBoxSize({ width: newW });
+          shiftLocal = sign * ((layer.getBoxMetrics(ctx, this.lw(), this.lh()).width - this.edgeStart.w) / 2);
+        } else {
+          const dLocal = (-dx * uy + dy * ux) / unit;
+          const newH = Math.max(m.minHeight, Math.min(m.maxHeight, this.edgeStart.h + sign * dLocal));
+          // Genişlik sabit kalsın
+          if (layer.style.boxWidth === undefined) layer.setBoxSize({ width: this.edgeStart.w });
+          layer.setBoxSize({ height: newH });
+          shiftLocal = sign * ((layer.getBoxMetrics(ctx, this.lw(), this.lh()).height - this.edgeStart.h) / 2);
+        }
+        // Karşı kenar sabit: merkez, değişen yarım boy kadar döndürülmüş eksen boyunca kayar
+        const shiftPx = shiftLocal * unit;
+        const axX = isH ? ux : -uy;
+        const axY = isH ? uy : ux;
+        layer.transform.x = (this.startCenter.x + axX * shiftPx) / this.lw();
+        layer.transform.y = (this.startCenter.y + axY * shiftPx) / this.lh();
+        this.notifyTransform(layer);
+        return;
+      }
+
       if (this.isCornerResizeMode && this.transformingLayer && this.transformingLayer.type !== 'media' && !this.transformingLayer.locked) {
         const curDist = Math.max(8, Math.hypot(pt.x - this.startCenter.x, pt.y - this.startCenter.y));
         const scaleFactor = curDist / this.startDistance;
@@ -693,13 +763,15 @@ export class InteractionManager {
       // Çöp kutusu bırakma kontrolü: yalnızca jest boyunca tek parmakla gerçekten sürüklendiyse
       if (layer && layer.type !== 'media') {
         const deletable =
-          this.isMoved && !this.gestureHadMultiTouch && !this.isCornerResizeMode;
+          this.isMoved && !this.gestureHadMultiTouch && !this.isCornerResizeMode && !this.edgeHandle;
         const info = this.buildDragInfo(layer, deletable);
         info.isDragging = false;
         this.onDragEnd?.(info);
       }
 
       this.isCornerResizeMode = false;
+      this.edgeHandle = null;
+      this.edgeStart = null;
       this.isMediaPan = false;
       this.onSnapGuide?.({ x: false, y: false });
       if (layer) {
