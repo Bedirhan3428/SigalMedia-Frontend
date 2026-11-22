@@ -7,6 +7,7 @@ import { User, onAuthStateChanged, signOut as firebaseSignOut } from "firebase/a
 import { doc, getDoc } from "firebase/firestore";
 import { usePathname, useRouter } from "next/navigation";
 import { auth, db } from "@/lib/firebase";
+import { disablePush } from "@/lib/push/pushClient";
 import { UserProfile } from "@/types/user";
 
 interface AuthContextType {
@@ -112,6 +113,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const signOut = async () => {
     try {
+      await disablePush();
       if (typeof window !== "undefined") {
         localStorage.clear();
         sessionStorage.clear();

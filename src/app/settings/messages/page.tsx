@@ -12,6 +12,7 @@ import {
 } from "@/services/privacyService";
 import { syncPresenceVisibility } from "@/services/messageService";
 import type { MessageSettings } from "@/types/user";
+import PushToggle from "@/components/notifications/PushToggle";
 
 const WHO_CAN_MESSAGE_OPTIONS: {
   value: MessageSettings["whoCanMessage"];
@@ -148,6 +149,7 @@ export default function MessageSettingsPage() {
       </header>
 
       <main className="flex-1 max-w-md w-full mx-auto p-4 overflow-y-auto space-y-6 pb-[calc(2rem+env(safe-area-inset-bottom,0px))]">
+        <PushToggle />
         <section className="space-y-2">
           <h2 className="px-1 text-xs font-semibold uppercase tracking-wider text-zinc-500">
             Kimler Mesaj Gönderebilir

@@ -1,5 +1,6 @@
 // [START] CREATED BY Umut
-import { NextRequest, NextResponse } from "next/server";
+import { NextRequest, NextResponse, after } from "next/server";
+import { notifyChatMessage } from "@/lib/push/server";
 import { adminAuth, adminDb, adminRtdb } from "@/lib/firebase-admin";
 import { ServerValue } from "firebase-admin/database";
 import { decryptMessagePayload } from "@/lib/serverCrypto";
@@ -171,6 +172,9 @@ export async function POST(req: NextRequest) {
     };
 
     await adminRtdb.ref().update(updates);
+
+    // Fire-and-forget web push to the recipient; never blocks the response.
+    after(() => notifyChatMessage({ senderUid, recipientUid, chatId, text: cleanText, kind: "text" }));
 
     return NextResponse.json({
       status: "ok",
