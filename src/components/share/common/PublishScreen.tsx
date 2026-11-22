@@ -151,7 +151,7 @@ function PublishPanel({
         style={{ zIndex: EDITOR_Z.modal, ...frameStyle }}
       >
         {/* Başlık */}
-        <div className="shrink-0 pt-safe border-b border-white/5">
+        <div className="shrink-0 pt-safe border-b border-[var(--ed-line,#2a303a)]">
           <div className="h-14 px-2 flex items-center">
             <button
               type="button"
@@ -171,7 +171,7 @@ function PublishPanel({
         <div className="flex-1 min-h-0 overflow-y-auto overscroll-contain no-scrollbar">
           <div className="px-4 pt-4 pb-4 flex flex-col gap-4 max-w-lg mx-auto">
             <div
-              className="mx-auto rounded-2xl overflow-hidden bg-black border border-white/10 shadow-2xl"
+              className="mx-auto rounded-2xl overflow-hidden bg-black border border-[var(--ed-line,#2a303a)] shadow-2xl"
               style={previewBox}
             >
               {preview}
@@ -179,7 +179,7 @@ function PublishPanel({
 
             {coverPicker && (
               <div className="flex flex-col gap-2">
-                <span className="text-[13px] font-semibold text-zinc-300">{coverPickerLabel}</span>
+                <span className="text-[13px] font-semibold text-[var(--ed-tx,#e8ecf1)]">{coverPickerLabel}</span>
                 {coverPicker}
               </div>
             )}
@@ -193,12 +193,12 @@ function PublishPanel({
                 disabled={busy}
                 rows={4}
                 aria-label="Açıklama"
-                className="w-full min-h-28 resize-none rounded-2xl bg-white/5 border border-white/10 p-4 text-[15px] leading-relaxed text-white placeholder:text-zinc-500 outline-none focus:border-white/25 select-text disabled:opacity-60"
+                className="w-full min-h-28 resize-none rounded-2xl bg-[var(--ed-bg2,#1a1e25)] border border-[var(--ed-line,#2a303a)] p-4 text-[15px] leading-relaxed text-white placeholder:text-[var(--ed-tx3,#5b6574)] outline-none focus:border-white/25 select-text disabled:opacity-60"
               />
               <span
                 aria-live="polite"
                 className={`self-end text-[11px] tabular-nums ${
-                  nearLimit ? "text-rose-400 font-semibold" : "text-zinc-500"
+                  nearLimit ? "text-[var(--ed-danger,#ff5c6c)] font-semibold" : "text-[var(--ed-tx3,#5b6574)]"
                 }`}
               >
                 {count}/{CAPTION_MAX_LENGTH}
@@ -209,7 +209,7 @@ function PublishPanel({
 
         {/* Paylaş */}
         <div
-          className="shrink-0 px-4 pt-3 border-t border-white/5 bg-neutral-950"
+          className="shrink-0 px-4 pt-3 border-t border-[var(--ed-line,#2a303a)] bg-neutral-950"
           style={{ paddingBottom: vv?.keyboardOpen ? 10 : "calc(var(--sab) + 12px)" }}
         >
           <button

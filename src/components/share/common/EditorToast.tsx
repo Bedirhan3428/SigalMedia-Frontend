@@ -188,11 +188,11 @@ export function EditorToastProvider({ children, topOffset = 64, max = 3 }: Edito
           {toasts.map((t) => (
             <div
               key={t.id}
-              className="pointer-events-auto max-w-[min(92vw,420px)] flex items-center gap-2.5 rounded-full bg-neutral-900/95 backdrop-blur-xl border border-white/10 pl-4 pr-2 min-h-11 shadow-[0_10px_30px_rgba(0,0,0,0.5)] editor-anim-toast-in"
+              className="pointer-events-auto max-w-[min(92vw,420px)] flex items-center gap-2.5 rounded-full bg-neutral-900/95 backdrop-blur-xl border border-[var(--ed-line,#2a303a)] pl-4 pr-2 min-h-11 shadow-[0_10px_30px_rgba(0,0,0,0.5)] editor-anim-toast-in"
             >
-              {t.variant === "error" && <AlertCircle className="w-4 h-4 text-rose-400 shrink-0" />}
+              {t.variant === "error" && <AlertCircle className="w-4 h-4 text-[var(--ed-danger,#ff5c6c)] shrink-0" />}
               {t.variant === "success" && (
-                <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+                <CheckCircle2 className="w-4 h-4 text-[var(--ed-ac,#38d5c8)] shrink-0" />
               )}
               <button
                 type="button"
@@ -210,7 +210,7 @@ export function EditorToastProvider({ children, topOffset = 64, max = 3 }: Edito
                     api.dismiss(t.id);
                     t.action?.onClick();
                   }}
-                  className="shrink-0 min-h-11 px-3 rounded-full text-[13px] font-bold text-pink-400 active:bg-white/10"
+                  className="shrink-0 min-h-11 px-3 rounded-full text-[13px] font-bold text-[var(--ed-ac,#38d5c8)] active:bg-white/10"
                 >
                   {t.action.label}
                 </button>

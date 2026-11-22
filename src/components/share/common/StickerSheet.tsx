@@ -34,7 +34,7 @@ export interface StickerSheetAction {
   label: string;
   /** Icon element (~20 px). */
   icon: ReactNode;
-  /** Tailwind classes for the icon bubble, e.g. "bg-pink-500/20 text-pink-400". */
+  /** Tailwind classes for the icon bubble, e.g. "bg-[rgba(56,213,200,0.20)] text-[var(--ed-ac,#38d5c8)]". */
   accentClassName?: string;
   /** Called on tap. The sheet closes first when `closeOnSelect` is true. */
   onSelect: () => void;
@@ -200,7 +200,7 @@ function StickerGrid({
             id: "__mention",
             label: "@Bahset",
             icon: <AtSign className="w-5 h-5" />,
-            accentClassName: "bg-purple-500/20 text-purple-300",
+            accentClassName: "bg-[rgba(56,213,200,0.20)] text-[var(--ed-ac,#38d5c8)]",
             onSelect: () => {},
             onTap: onOpenMention,
           },
@@ -223,7 +223,7 @@ function StickerGrid({
               key={t.id}
               type="button"
               onClick={t.onTap}
-              className="flex flex-col items-center justify-center gap-1.5 min-h-[76px] rounded-2xl bg-white/5 border border-white/10 active:scale-95 active:bg-white/10 transition-transform text-white"
+              className="flex flex-col items-center justify-center gap-1.5 min-h-[76px] rounded-2xl bg-[var(--ed-bg2,#1a1e25)] border border-[var(--ed-line,#2a303a)] active:scale-95 active:bg-white/10 transition-transform text-white"
             >
               <span
                 className={`w-10 h-10 rounded-full flex items-center justify-center ${
@@ -239,7 +239,7 @@ function StickerGrid({
       )}
 
       {/* Kategori sekmeleri (yapışkan) */}
-      <div className="sticky top-0 z-10 bg-neutral-900/95 backdrop-blur-xl border-b border-white/5">
+      <div className="sticky top-0 z-10 bg-neutral-900/95 backdrop-blur-xl border-b border-[var(--ed-line,#2a303a)]">
         <div className="flex overflow-x-auto no-scrollbar px-2" role="tablist" aria-label="Emoji kategorileri">
           {categories.map((c) => (
             <button
@@ -269,7 +269,7 @@ function StickerGrid({
           className="px-3 pt-3 scroll-mt-12"
           aria-label={c.label}
         >
-          <h3 className="px-1 pb-1 text-[11px] font-semibold text-zinc-400">{c.label}</h3>
+          <h3 className="px-1 pb-1 text-[11px] font-semibold text-[var(--ed-tx2,#98a2b3)]">{c.label}</h3>
           <div className="grid grid-cols-[repeat(auto-fill,minmax(44px,1fr))]">
             {c.emojis.map((e, i) => (
               <button
@@ -353,8 +353,8 @@ function MentionView({
   return (
     <div className="px-4">
       <div className="sticky top-0 z-10 bg-neutral-900/95 pb-2">
-        <label className="flex items-center gap-2 h-11 rounded-xl bg-white/10 px-3 focus-within:ring-2 focus-within:ring-pink-400/60">
-          <Search className="w-4 h-4 text-zinc-400 shrink-0" />
+        <label className="flex items-center gap-2 h-11 rounded-xl bg-white/10 px-3 focus-within:ring-2 focus-within:ring-[var(--ed-ac,#38d5c8)]">
+          <Search className="w-4 h-4 text-[var(--ed-tx2,#98a2b3)] shrink-0" />
           <input
             ref={inputRef}
             value={query}
@@ -367,14 +367,14 @@ function MentionView({
             autoComplete="off"
             spellCheck={false}
             aria-label="Kullanıcı ara"
-            className="flex-1 min-w-0 bg-transparent outline-none text-[15px] text-white placeholder:text-zinc-500"
+            className="flex-1 min-w-0 bg-transparent outline-none text-[15px] text-white placeholder:text-[var(--ed-tx3,#5b6574)]"
           />
           {query && (
             <button
               type="button"
               onClick={() => setQuery("")}
               aria-label="Aramayı temizle"
-              className="-mr-2 w-10 h-10 flex items-center justify-center text-zinc-400"
+              className="-mr-2 w-10 h-10 flex items-center justify-center text-[var(--ed-tx2,#98a2b3)]"
             >
               <X className="w-4 h-4" />
             </button>
@@ -388,13 +388,13 @@ function MentionView({
 
       {status === "loading" && results.length === 0 && (
         <div className="flex justify-center py-8">
-          <Loader2 className="w-6 h-6 text-zinc-400 animate-spin" />
+          <Loader2 className="w-6 h-6 text-[var(--ed-tx2,#98a2b3)] animate-spin" />
         </div>
       )}
 
       {status === "error" && (
         <div className="flex flex-col items-center gap-2 py-8 text-center">
-          <p className="text-sm text-zinc-400">Kullanıcılar yüklenemedi</p>
+          <p className="text-sm text-[var(--ed-tx2,#98a2b3)]">Kullanıcılar yüklenemedi</p>
           <button
             type="button"
             onClick={() => setRetry((r) => r + 1)}
@@ -406,7 +406,7 @@ function MentionView({
       )}
 
       {status === "done" && results.length === 0 && (
-        <p className="py-8 text-center text-sm text-zinc-500">Kullanıcı bulunamadı</p>
+        <p className="py-8 text-center text-sm text-[var(--ed-tx3,#5b6574)]">Kullanıcı bulunamadı</p>
       )}
 
       {status !== "error" && results.length > 0 && (
@@ -435,7 +435,7 @@ function UserRow({
     <button
       type="button"
       onClick={() => onPick(user)}
-      className="w-full flex items-center gap-3 min-h-14 py-2 rounded-xl text-left active:bg-white/5"
+      className="w-full flex items-center gap-3 min-h-14 py-2 rounded-xl text-left active:bg-[var(--ed-bg2,#1a1e25)]"
     >
       <span className="w-10 h-10 rounded-full overflow-hidden bg-white/10 shrink-0 flex items-center justify-center">
         {user.photoURL ? (
@@ -449,12 +449,12 @@ function UserRow({
             draggable={false}
           />
         ) : (
-          <UserRound className="w-5 h-5 text-zinc-400" />
+          <UserRound className="w-5 h-5 text-[var(--ed-tx2,#98a2b3)]" />
         )}
       </span>
       <span className="flex-1 min-w-0">
         <span className="block text-sm font-semibold text-white truncate">{user.username}</span>
-        <span className="block text-xs text-zinc-400 truncate">{hint ?? user.displayName}</span>
+        <span className="block text-xs text-[var(--ed-tx2,#98a2b3)] truncate">{hint ?? user.displayName}</span>
       </span>
     </button>
   );

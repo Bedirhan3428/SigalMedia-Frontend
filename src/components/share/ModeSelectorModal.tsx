@@ -46,24 +46,24 @@ const MODES: ModeOption[] = [
     title: "Hikaye",
     badge: "9:16",
     icon: <MdHistoryEdu className="w-6 h-6" />,
-    activeClass: "bg-emerald-500/15 border-emerald-400/50",
-    iconClass: "bg-emerald-500/20 text-emerald-400",
+    activeClass: "bg-[var(--ed-ac-soft,rgba(56,213,200,0.14))] border-[var(--ed-ac,#38d5c8)]",
+    iconClass: "bg-[var(--ed-bg3,#232932)] text-[var(--ed-ac,#38d5c8)]",
   },
   {
     mode: "reels",
     title: "Reels",
     badge: "Video · 60 sn",
     icon: <FaPhotoFilm className="w-6 h-6" />,
-    activeClass: "bg-pink-500/15 border-pink-400/50",
-    iconClass: "bg-pink-500/20 text-pink-400",
+    activeClass: "bg-[var(--ed-ac-soft,rgba(56,213,200,0.14))] border-[var(--ed-ac,#38d5c8)]",
+    iconClass: "bg-[var(--ed-bg3,#232932)] text-[var(--ed-ac,#38d5c8)]",
   },
   {
     mode: "post",
     title: "Gönderi",
     badge: "Fotoğraf",
     icon: <IoCamera className="w-6 h-6" />,
-    activeClass: "bg-cyan-500/15 border-cyan-400/50",
-    iconClass: "bg-cyan-500/20 text-cyan-400",
+    activeClass: "bg-[var(--ed-ac-soft,rgba(56,213,200,0.14))] border-[var(--ed-ac,#38d5c8)]",
+    iconClass: "bg-[var(--ed-bg3,#232932)] text-[var(--ed-ac,#38d5c8)]",
   },
 ];
 
@@ -87,7 +87,7 @@ export default function ModeSelectorModal({
         role="dialog"
         aria-modal="true"
         aria-label="Oluştur"
-        className="fixed inset-0 h-[100dvh] bg-zinc-950/95 backdrop-blur-2xl flex flex-col pt-safe pb-safe px-safe select-none editor-anim-fade-in"
+        className="fixed inset-0 h-[100dvh] bg-[var(--ed-bg0,#0b0d10)]/95 backdrop-blur-2xl flex flex-col pt-safe pb-safe px-safe select-none editor-anim-fade-in"
         style={{ zIndex: EDITOR_Z.modal }}
       >
         <div className="h-14 px-3 flex items-center justify-between shrink-0">
@@ -95,7 +95,7 @@ export default function ModeSelectorModal({
             type="button"
             onClick={onBack}
             aria-label={overSession ? "Kapat" : "Geri"}
-            className="w-11 h-11 rounded-full bg-white/10 border border-white/10 text-white active:scale-90 transition-transform flex items-center justify-center"
+            className="w-11 h-11 rounded-full bg-[var(--ed-bg2,#1a1e25)] border border-[var(--ed-line,#2a303a)] text-[var(--ed-tx,#e8ecf1)] active:scale-90 transition-transform flex items-center justify-center"
           >
             {overSession ? <X className="w-5 h-5" /> : <ChevronLeft className="w-5 h-5" />}
           </button>
@@ -108,7 +108,7 @@ export default function ModeSelectorModal({
             {notice ? (
               <p
                 role="status"
-                className="rounded-2xl border border-amber-400/30 bg-amber-500/10 px-4 py-3 text-xs font-medium leading-snug text-amber-200"
+                className="rounded-md border border-[var(--ed-warn,#ffb020)]/40 bg-[var(--ed-bg2,#1a1e25)] px-4 py-3 text-xs font-medium leading-snug text-[var(--ed-warn,#ffb020)]"
               >
                 {notice}
               </p>
@@ -121,16 +121,16 @@ export default function ModeSelectorModal({
                   type="button"
                   onClick={() => onSelectMode(m.mode)}
                   aria-pressed={active}
-                  className={`w-full min-h-[76px] flex items-center gap-4 p-4 rounded-3xl border transition-transform active:scale-[0.98] text-left text-white ${
-                    active ? m.activeClass : "bg-white/5 border-white/10 active:bg-white/10"
+                  className={`w-full min-h-[76px] flex items-center gap-4 p-4 rounded-[10px] border transition-transform active:scale-[0.98] text-left text-white ${
+                    active ? m.activeClass : "bg-[var(--ed-bg2,#1a1e25)] border-[var(--ed-line,#2a303a)] active:bg-[var(--ed-bg3,#232932)]"
                   }`}
                 >
-                  <div className={`w-12 h-12 rounded-2xl flex items-center justify-center shrink-0 ${m.iconClass}`}>
+                  <div className={`w-12 h-12 rounded-md flex items-center justify-center shrink-0 ${m.iconClass}`}>
                     {m.icon}
                   </div>
                   <div className="flex-1 min-w-0 flex items-center justify-between gap-2">
                     <span className="text-base font-bold text-white">{m.title}</span>
-                    <span className="text-[11px] font-semibold px-2.5 py-0.5 rounded-full bg-white/10 text-zinc-300 whitespace-nowrap">
+                    <span className="text-[11px] font-semibold px-2.5 py-0.5 rounded-[3px] bg-[var(--ed-bg3,#232932)] text-[var(--ed-tx2,#98a2b3)] whitespace-nowrap">
                       {m.badge}
                     </span>
                   </div>

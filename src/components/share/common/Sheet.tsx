@@ -219,7 +219,7 @@ export function Sheet({
           aria-modal="true"
           aria-label={label}
           tabIndex={-1}
-          className={`relative w-full max-w-lg mx-auto flex flex-col min-h-0 rounded-t-3xl bg-neutral-900/95 backdrop-blur-2xl border-t border-white/10 shadow-[0_-12px_40px_rgba(0,0,0,0.55)] text-white outline-none pb-safe px-safe will-change-transform ${
+          className={`relative w-full max-w-lg mx-auto flex flex-col min-h-0 rounded-t-3xl bg-neutral-900/95 backdrop-blur-2xl border-t border-[var(--ed-line,#2a303a)] shadow-[0_-12px_40px_rgba(0,0,0,0.55)] text-white outline-none pb-safe px-safe will-change-transform ${
             closing ? "editor-anim-sheet-out" : "editor-anim-sheet-in"
           } ${className}`}
           style={panelStyle}
@@ -249,7 +249,7 @@ export function Sheet({
                     onClick={requestClose}
                     disabled={!dismissible}
                     aria-label="Kapat"
-                    className="w-11 h-11 shrink-0 rounded-full flex items-center justify-center text-zinc-300 active:scale-90 active:bg-white/10 transition-transform disabled:opacity-40"
+                    className="w-11 h-11 shrink-0 rounded-full flex items-center justify-center text-[var(--ed-tx,#e8ecf1)] active:scale-90 active:bg-white/10 transition-transform disabled:opacity-40"
                   >
                     <X className="w-5 h-5" />
                   </button>
