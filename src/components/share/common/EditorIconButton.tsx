@@ -21,7 +21,7 @@ export interface EditorIconButtonProps extends ButtonHTMLAttributes<HTMLButtonEl
 
 const VARIANTS: Record<NonNullable<EditorIconButtonProps["variant"]>, string> = {
   glass: "bg-black/45 backdrop-blur-md border border-white/15 text-white",
-  solid: "bg-[#1c1c1e] text-white",
+  solid: "bg-[var(--ed-bg2,#1a1e25)] text-white",
   light: "bg-white text-black",
   ghost: "bg-transparent text-white",
 };

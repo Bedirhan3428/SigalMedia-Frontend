@@ -1362,7 +1362,7 @@ export default function ShareStoryPage() {
   if (!mounted || loading) {
     return (
       <div className="fixed inset-0 bg-black flex items-center justify-center text-white">
-        <div className="w-8 h-8 border-2 border-emerald-500 border-t-transparent rounded-full animate-spin" />
+        <div className="w-8 h-8 border-2 border-[var(--ed-ac,#38d5c8)] border-t-transparent rounded-full animate-spin" />
       </div>
     );
   }
@@ -1486,7 +1486,7 @@ export default function ShareStoryPage() {
               onClick={handleBackClick}
               disabled={isPublishing}
               aria-label="Geri"
-              className="w-11 h-11 rounded-full bg-[#1c1c1e] hover:bg-[#28282c] active:scale-90 transition-all shadow-xl flex items-center justify-center text-white"
+              className="w-11 h-11 rounded-full bg-[var(--ed-bg2,#1a1e25)] hover:bg-[var(--ed-bg3,#232932)] active:scale-90 transition-all shadow-xl flex items-center justify-center text-white"
             >
               {shareMode === "reels" ? (
                 <ChevronDown className="w-6 h-6" />
@@ -1501,9 +1501,9 @@ export default function ShareStoryPage() {
                 onClick={handleDownloadImage}
                 disabled={isPublishing}
                 aria-label="İndir"
-                className="w-11 h-11 rounded-full bg-[#1c1c1e] hover:bg-[#28282c] active:scale-90 transition-all shadow-xl flex items-center justify-center text-white"
+                className="w-11 h-11 rounded-full bg-[var(--ed-bg2,#1a1e25)] hover:bg-[var(--ed-bg3,#232932)] active:scale-90 transition-all shadow-xl flex items-center justify-center text-white"
               >
-                <Download className="w-4 h-4 text-zinc-300" />
+                <Download className="w-4 h-4 text-[var(--ed-tx,#e8ecf1)]" />
               </button>
             )}
           </div>
@@ -1512,9 +1512,9 @@ export default function ShareStoryPage() {
             type="button"
             onClick={() => setIsModeSelectorOpen(true)}
             disabled={isPublishing}
-            className="h-11 px-4 rounded-2xl bg-[#1c1c1e] hover:bg-[#28282c] active:scale-95 transition-all shadow-xl flex items-center gap-2 text-sm font-semibold text-white"
+            className="h-11 px-4 rounded-2xl bg-[var(--ed-bg2,#1a1e25)] hover:bg-[var(--ed-bg3,#232932)] active:scale-95 transition-all shadow-xl flex items-center gap-2 text-sm font-semibold text-white"
           >
-            <span className="w-4 h-4 rounded-md bg-gradient-to-tr from-pink-500 via-purple-500 to-amber-400 inline-block shrink-0" />
+            <span className="w-4 h-4 rounded-md bg-[var(--ed-ac,#38d5c8)] inline-block shrink-0" />
             <span>{modeLabel}</span>
           </button>
 
@@ -1547,7 +1547,7 @@ export default function ShareStoryPage() {
             onClick={() => baseFileInputRef.current?.click()}
             className="pointer-events-auto flex items-center gap-2.5 px-6 py-3.5 rounded-2xl bg-white/10 hover:bg-white/15 active:scale-95 backdrop-blur-xl border border-white/20 text-white font-semibold text-sm shadow-2xl transition-all"
           >
-            <ImageIcon className="w-5 h-5 text-emerald-400" />
+            <ImageIcon className="w-5 h-5 text-[var(--ed-ac,#38d5c8)]" />
             <span>
               {shareMode === "post" ? "Fotoğraf Seç" : "Fotoğraf veya Video Seç"}
             </span>
@@ -1733,14 +1733,14 @@ export default function ShareStoryPage() {
 
       {/* 10. ALTTAN AÇILAN ÇIKARTMA & MEDYA PANELİ (STICKER SHEET) */}
       {activeDrawer === "sticker_sheet" && (
-        <div className="fixed inset-x-0 bottom-0 z-50 rounded-t-3xl backdrop-blur-2xl bg-neutral-900/95 border-t border-white/10 p-5 pb-8 flex flex-col max-h-[52vh] animate-in slide-in-from-bottom duration-200 shadow-2xl">
+        <div className="fixed inset-x-0 bottom-0 z-50 rounded-t-3xl backdrop-blur-2xl bg-neutral-900/95 border-t border-[var(--ed-line,#2a303a)] p-5 pb-8 flex flex-col max-h-[52vh] animate-in slide-in-from-bottom duration-200 shadow-2xl">
           <div className="w-10 h-1 rounded-full bg-white/20 mx-auto mb-4" />
           <div className="flex items-center justify-between mb-4 px-1">
             <h3 className="text-white font-semibold text-base">Çıkartmalar</h3>
             <button
               type="button"
               onClick={() => setActiveDrawer("none")}
-              className="p-1 rounded-full text-zinc-400 hover:text-white transition-colors"
+              className="p-1 rounded-full text-[var(--ed-tx2,#98a2b3)] hover:text-white transition-colors"
             >
               <X className="w-5 h-5" />
             </button>
@@ -1754,9 +1754,9 @@ export default function ShareStoryPage() {
                 setActiveDrawer("none");
                 overlayFileInputRef.current?.click();
               }}
-              className="flex flex-col items-center justify-center gap-2 p-3.5 rounded-2xl bg-white/5 hover:bg-white/10 border border-white/10 active:scale-95 transition-all text-white group"
+              className="flex flex-col items-center justify-center gap-2 p-3.5 rounded-2xl bg-[var(--ed-bg2,#1a1e25)] hover:bg-white/10 border border-[var(--ed-line,#2a303a)] active:scale-95 transition-all text-white group"
             >
-              <div className="w-11 h-11 rounded-full bg-emerald-500/20 text-emerald-400 flex items-center justify-center group-hover:scale-105 transition-transform">
+              <div className="w-11 h-11 rounded-full bg-[rgba(56,213,200,0.20)] text-[var(--ed-ac,#38d5c8)] flex items-center justify-center group-hover:scale-105 transition-transform">
                 <TbPhotoPlus className="w-5 h-5" />
               </div>
               <span className="text-xs font-medium">Fotoğraf</span>
@@ -1769,9 +1769,9 @@ export default function ShareStoryPage() {
                 setActiveDrawer("none");
                 handleAddTagSticker();
               }}
-              className="flex flex-col items-center justify-center gap-2 p-3.5 rounded-2xl bg-white/5 hover:bg-white/10 border border-white/10 active:scale-95 transition-all text-white group"
+              className="flex flex-col items-center justify-center gap-2 p-3.5 rounded-2xl bg-[var(--ed-bg2,#1a1e25)] hover:bg-white/10 border border-[var(--ed-line,#2a303a)] active:scale-95 transition-all text-white group"
             >
-              <div className="w-11 h-11 rounded-full bg-purple-500/20 text-purple-400 flex items-center justify-center group-hover:scale-105 transition-transform">
+              <div className="w-11 h-11 rounded-full bg-[rgba(56,213,200,0.20)] text-[var(--ed-ac,#38d5c8)] flex items-center justify-center group-hover:scale-105 transition-transform">
                 <AtSign className="w-5 h-5" />
               </div>
               <span className="text-xs font-medium">@Bahset</span>
@@ -1787,9 +1787,9 @@ export default function ShareStoryPage() {
                   openMusicPicker();
                 }
               }}
-              className="flex flex-col items-center justify-center gap-2 p-3.5 rounded-2xl bg-white/5 hover:bg-white/10 border border-white/10 active:scale-95 transition-all text-white group"
+              className="flex flex-col items-center justify-center gap-2 p-3.5 rounded-2xl bg-[var(--ed-bg2,#1a1e25)] hover:bg-white/10 border border-[var(--ed-line,#2a303a)] active:scale-95 transition-all text-white group"
             >
-              <div className="w-11 h-11 rounded-full bg-pink-500/20 text-pink-400 flex items-center justify-center group-hover:scale-105 transition-transform">
+              <div className="w-11 h-11 rounded-full bg-[rgba(56,213,200,0.20)] text-[var(--ed-ac,#38d5c8)] flex items-center justify-center group-hover:scale-105 transition-transform">
                 <Music className="w-5 h-5" />
               </div>
               <span className="text-xs font-medium">Müzik</span>
@@ -1810,7 +1810,7 @@ export default function ShareStoryPage() {
 
       {/* 11B. SEÇİLİ ŞARKI AYAR PANELİ (HİKAYE) */}
       {activeDrawer === "music_settings" && selectedMusic && (
-        <div className="fixed inset-x-0 bottom-0 z-50 rounded-t-3xl backdrop-blur-2xl bg-neutral-900/95 border-t border-white/10 p-5 pb-8 animate-in slide-in-from-bottom duration-200 shadow-2xl">
+        <div className="fixed inset-x-0 bottom-0 z-50 rounded-t-3xl backdrop-blur-2xl bg-neutral-900/95 border-t border-[var(--ed-line,#2a303a)] p-5 pb-8 animate-in slide-in-from-bottom duration-200 shadow-2xl">
           <div className="w-10 h-1 rounded-full bg-white/20 mx-auto mb-4" />
           <MusicSettingsPanel
             music={selectedMusic}
@@ -1826,14 +1826,14 @@ export default function ShareStoryPage() {
       )}
       {/* 12. ALTTAN AÇILAN ETİKETLEME PANELİ */}
       {activeDrawer === "tag" && (
-        <div className="fixed inset-x-0 bottom-0 z-50 rounded-t-3xl backdrop-blur-2xl bg-neutral-900/95 border-t border-white/10 p-5 pb-8 flex flex-col max-h-[52vh] animate-in slide-in-from-bottom duration-200 shadow-2xl">
+        <div className="fixed inset-x-0 bottom-0 z-50 rounded-t-3xl backdrop-blur-2xl bg-neutral-900/95 border-t border-[var(--ed-line,#2a303a)] p-5 pb-8 flex flex-col max-h-[52vh] animate-in slide-in-from-bottom duration-200 shadow-2xl">
           <div className="w-10 h-1 rounded-full bg-white/20 mx-auto mb-4" />
           <div className="flex items-center justify-between mb-4 px-1">
             <h3 className="text-white font-semibold text-base">Kişi Etiketle</h3>
             <button
               type="button"
               onClick={() => setActiveDrawer("none")}
-              className="p-1 rounded-full text-zinc-400 hover:text-white transition-colors"
+              className="p-1 rounded-full text-[var(--ed-tx2,#98a2b3)] hover:text-white transition-colors"
             >
               <X className="w-5 h-5" />
             </button>
@@ -1845,14 +1845,14 @@ export default function ShareStoryPage() {
               setActiveDrawer("none");
               handleAddTagSticker(`@${profile?.username || "kullanici"}`);
             }}
-            className="w-full flex items-center gap-3 p-3 rounded-xl bg-purple-500/10 border border-purple-500/20 hover:bg-purple-500/20 text-white transition-all text-left"
+            className="w-full flex items-center gap-3 p-3 rounded-xl bg-[rgba(56,213,200,0.10)] border border-[rgba(56,213,200,0.20)] hover:bg-[rgba(56,213,200,0.20)] text-white transition-all text-left"
           >
-            <div className="w-9 h-9 rounded-full bg-purple-500/20 text-purple-400 flex items-center justify-center shrink-0">
+            <div className="w-9 h-9 rounded-full bg-[rgba(56,213,200,0.20)] text-[var(--ed-ac,#38d5c8)] flex items-center justify-center shrink-0">
               <AtSign className="w-4 h-4" />
             </div>
             <div className="flex-1 min-w-0">
               <p className="text-xs font-semibold text-white">Profilini Etiketle</p>
-              <p className="text-[11px] text-purple-300 truncate">@{profile?.username || "kullanici"}</p>
+              <p className="text-[11px] text-[var(--ed-ac,#38d5c8)] truncate">@{profile?.username || "kullanici"}</p>
             </div>
           </button>
         </div>
@@ -1887,7 +1887,7 @@ export default function ShareStoryPage() {
             <button
               type="button"
               onClick={handleCycleFont}
-              className="px-4 py-1.5 rounded-full bg-white/10 hover:bg-white/20 border border-white/10 text-xs font-bold tracking-wide active:scale-95 transition-all"
+              className="px-4 py-1.5 rounded-full bg-white/10 hover:bg-white/20 border border-[var(--ed-line,#2a303a)] text-xs font-bold tracking-wide active:scale-95 transition-all"
             >
               {currentFontCfg.name}
             </button>
@@ -1945,7 +1945,7 @@ export default function ShareStoryPage() {
                     ? `0 0 24px ${activeTextColor}`
                     : "none",
               }}
-              className="w-full max-w-sm rounded-xl p-4 text-2xl font-bold border-none outline-none resize-none placeholder:text-zinc-500 shadow-2xl transition-all"
+              className="w-full max-w-sm rounded-xl p-4 text-2xl font-bold border-none outline-none resize-none placeholder:text-[var(--ed-tx3,#5b6574)] shadow-2xl transition-all"
             />
           </div>
 
