@@ -28,6 +28,8 @@ export interface InteractionManagerOptions {
   canvas: HTMLCanvasElement;
   getLayers: () => BaseLayer[];
   getContext: () => CanvasRenderingContext2D;
+  /** Mantıksal (1080-uzayı) boyut. Önizleme tuvalinin backing store'u daha küçük olabilir. */
+  getLogicalSize?: () => { width: number; height: number };
   /** @deprecated onTransform / onGestureEnd / onRenderRequest kullanın. Verilirse hepsinde çağrılır. */
   onStateChange?: () => void;
   /** Jest sırasında her pointermove'da (senkron) çağrılır; motor rAF ile kısar. */
@@ -102,10 +104,15 @@ export class InteractionManager {
   private pendingTapTimer: ReturnType<typeof setTimeout> | null = null;
   private pendingTapLayer: BaseLayer | null = null;
 
+  private getLogicalSizeCb?: () => { width: number; height: number };
+  private lw(): number { return this.getLogicalSizeCb ? this.getLogicalSizeCb().width : this.canvas.width; }
+  private lh(): number { return this.getLogicalSizeCb ? this.getLogicalSizeCb().height : this.canvas.height; }
+
   constructor(options: InteractionManagerOptions) {
     this.canvas = options.canvas;
     this.getLayers = options.getLayers;
     this.getContext = options.getContext;
+    this.getLogicalSizeCb = options.getLogicalSize;
     this.onStateChangeLegacy = options.onStateChange;
     this.onTransformCb = options.onTransform;
     this.onGestureEndCb = options.onGestureEnd;
@@ -173,8 +180,8 @@ export class InteractionManager {
   // ─────────────────────────────────────────────────────────────
   private computeContentRect(): ContentRect {
     const rect = this.canvas.getBoundingClientRect();
-    const cw = this.canvas.width || 1;
-    const ch = this.canvas.height || 1;
+    const cw = this.lw() || 1;
+    const ch = this.lh() || 1;
     let fit = '';
     try {
       fit = typeof getComputedStyle === 'function' ? getComputedStyle(this.canvas).objectFit : '';
@@ -207,8 +214,8 @@ export class InteractionManager {
 
   private getCanvasPoint(clientX: number, clientY: number): Point {
     const rect = this.getRect();
-    const scaleX = this.canvas.width / (rect.width || 1);
-    const scaleY = this.canvas.height / (rect.height || 1);
+    const scaleX = this.lw() / (rect.width || 1);
+    const scaleY = this.lh() / (rect.height || 1);
 
     return {
       x: (clientX - rect.left) * scaleX,
@@ -220,8 +227,8 @@ export class InteractionManager {
   public canvasToClient(pt: Point): Point {
     const rect = this.contentRect || this.computeContentRect();
     return {
-      x: rect.left + (pt.x * rect.width) / (this.canvas.width || 1),
-      y: rect.top + (pt.y * rect.height) / (this.canvas.height || 1),
+      x: rect.left + (pt.x * rect.width) / (this.lw() || 1),
+      y: rect.top + (pt.y * rect.height) / (this.lh() || 1),
     };
   }
 
@@ -229,7 +236,7 @@ export class InteractionManager {
     if (!deletable) {
       return { layer, clientX: Number.NaN, clientY: Number.NaN, isDragging: true, deletable: false };
     }
-    const centerPx = layer.getPixelPosition(this.canvas.width, this.canvas.height);
+    const centerPx = layer.getPixelPosition(this.lw(), this.lh());
     const c = this.canvasToClient(centerPx);
     return { layer, clientX: c.x, clientY: c.y, isDragging: true, deletable: true };
   }
@@ -240,14 +247,14 @@ export class InteractionManager {
 
     // 1. Önce üst katmanlar (Metin, çıkartma, ikincil görsel, müzik rozeti)
     for (const layer of layers) {
-      if (layer.type !== 'media' && layer.visible && !layer.locked && layer.containsPoint(pt, ctx, this.canvas.width, this.canvas.height)) {
+      if (layer.type !== 'media' && layer.visible && !layer.locked && layer.containsPoint(pt, ctx, this.lw(), this.lh())) {
         return layer;
       }
     }
 
     // 2. Taban medya katmanı
     const mediaLayer = this.getMediaLayer();
-    if (mediaLayer && mediaLayer.containsPoint(pt, ctx, this.canvas.width, this.canvas.height)) {
+    if (mediaLayer && mediaLayer.containsPoint(pt, ctx, this.lw(), this.lh())) {
       return mediaLayer;
     }
 
@@ -332,13 +339,13 @@ export class InteractionManager {
         this.selectedLayer &&
         this.selectedLayer.type !== 'media' &&
         !this.selectedLayer.locked &&
-        this.selectedLayer.isCornerHandleHit(pt, ctx, this.canvas.width, this.canvas.height)
+        this.selectedLayer.isCornerHandleHit(pt, ctx, this.lw(), this.lh())
       ) {
         this.candidateLayer = this.selectedLayer;
         this.transformingLayer = this.selectedLayer;
         this.isCornerResizeMode = true;
         this.selectedLayer.isInteracting = true;
-        const centerPx = this.selectedLayer.getPixelPosition(this.canvas.width, this.canvas.height);
+        const centerPx = this.selectedLayer.getPixelPosition(this.lw(), this.lh());
         this.startCenter = centerPx;
         this.startDistance = Math.max(12, Math.hypot(pt.x - centerPx.x, pt.y - centerPx.y));
         this.startAngle = Math.atan2(pt.y - centerPx.y, pt.x - centerPx.x) * (180 / Math.PI);
@@ -445,8 +452,8 @@ export class InteractionManager {
         y: (p1.y + p2.y) / 2
       };
       const PAN_SPEED = isMedia && policy.oneFingerPan ? 1.0 : 1.35;
-      const dx = ((currentCenter.x - this.startCenter.x) / this.canvas.width) * PAN_SPEED;
-      const dy = ((currentCenter.y - this.startCenter.y) / this.canvas.height) * PAN_SPEED;
+      const dx = ((currentCenter.x - this.startCenter.x) / this.lw()) * PAN_SPEED;
+      const dy = ((currentCenter.y - this.startCenter.y) / this.lh()) * PAN_SPEED;
       let newX = Math.max(-2.5, Math.min(3.5, this.startLayerTransform.x + dx));
       let newY = Math.max(-2.5, Math.min(3.5, this.startLayerTransform.y + dy));
 
@@ -582,8 +589,8 @@ export class InteractionManager {
       // A. Tek elle etiket / çıkartma / metin taşıma (1:1 anlık sürükleme)
       if (this.transformingLayer && this.transformingLayer.type !== 'media' && !this.transformingLayer.locked) {
         const layer = this.transformingLayer;
-        const dx = (pt.x - this.startCenter.x) / this.canvas.width;
-        const dy = (pt.y - this.startCenter.y) / this.canvas.height;
+        const dx = (pt.x - this.startCenter.x) / this.lw();
+        const dy = (pt.y - this.startCenter.y) / this.lh();
         let newX = Math.max(-1.5, Math.min(2.5, this.startLayerTransform.x + dx));
         let newY = Math.max(-1.5, Math.min(2.5, this.startLayerTransform.y + dy));
 
@@ -623,8 +630,8 @@ export class InteractionManager {
       ) {
         const layer = this.transformingLayer;
         layer.isInteracting = true;
-        const dx = (pt.x - this.startCenter.x) / this.canvas.width;
-        const dy = (pt.y - this.startCenter.y) / this.canvas.height;
+        const dx = (pt.x - this.startCenter.x) / this.lw();
+        const dy = (pt.y - this.startCenter.y) / this.lh();
         let newX = Math.max(-2.5, Math.min(3.5, this.startLayerTransform.x + dx));
         let newY = Math.max(-2.5, Math.min(3.5, this.startLayerTransform.y + dy));
         const SNAP_THRESHOLD = 0.0065;

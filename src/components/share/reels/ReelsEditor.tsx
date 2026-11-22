@@ -13,6 +13,7 @@ import {
   FlipHorizontal2,
   RotateCcw,
   Check,
+  Keyboard,
 } from "lucide-react";
 import {
   BaseLayer,
@@ -78,7 +79,76 @@ const HISTORY_LIMIT = 40;
 const MUSIC_PREVIEW_SEC = 30;
 // Alt panelin en büyük yüksekliği (ekranın ~%42si): timeline bunun içinde dikey kayar (A5)
 // Menü (136 px) + timeline için en az ~200 px veya ekranın %32'si; menü timeline'ın üstüne binmez
-const PANEL_MAX_HEIGHT = "calc(136px + max(200px, 32dvh))";
+type EditorLayout = "bottom" | "desk" | "side";
+const RAIL_W = 168; // sol araç rayı (2 sütun)
+const INSPECTOR_W = 320; // masaüstü sağ denetçi
+// Masaüstünde oynatma satırının (oynat/süre solda, yakınlaştır/geri al sağda) ortası boştur: önizleme bu satırın üstüne uzanabilir (N-04)
+const DESK_TRANSPORT_H = 46;
+const DESK_PANEL_MAX = 298; // dört şerit (V/T/FX/A) kaydırmadan görünür (N-03)
+const TOP_OFFSET = "calc(env(safe-area-inset-top, 0px) + 64px)"; // page.tsx sahne üst boşluğu
+
+/** Görünür alan ölçüsü: düzen (alt şerit / masaüstü ray / yatay yan sütun) buradan seçilir. */
+function useViewportBox() {
+  const [box, setBox] = useState({ w: 390, h: 844 });
+  useEffect(() => {
+    const read = () => setBox((b) => (b.w === window.innerWidth && b.h === window.innerHeight ? b : { w: window.innerWidth, h: window.innerHeight }));
+    read();
+    window.addEventListener("resize", read);
+    window.addEventListener("orientationchange", read);
+    return () => {
+      window.removeEventListener("resize", read);
+      window.removeEventListener("orientationchange", read);
+    };
+  }, []);
+  return box;
+}
+
+/** Klavye kısayolu uygun mu: metin girişi, kaydırıcı ya da düzenlenebilir alan odaktaysa devre dışı. */
+function isTypingTarget(t: EventTarget | null): boolean {
+  const el = t as HTMLElement | null;
+  if (!el || !el.tagName) return false;
+  if (el.isContentEditable) return true;
+  const tag = el.tagName;
+  if (tag === "TEXTAREA" || tag === "SELECT") return true;
+  if (tag === "INPUT") {
+    const type = (el as HTMLInputElement).type;
+    return type !== "button" && type !== "checkbox" && type !== "radio" && type !== "file" && type !== "range";
+  }
+  return false;
+}
+
+/** Videonun gerçek süresi (sn); okunamazsa 0. */
+function probeVideoDuration(file: File): Promise<number> {
+  if (!file.type.startsWith("video/")) return Promise.resolve(0);
+  return new Promise((resolve) => {
+    const url = URL.createObjectURL(file);
+    const v = document.createElement("video");
+    const done = (d: number) => {
+      v.removeAttribute("src");
+      v.load();
+      URL.revokeObjectURL(url);
+      resolve(Number.isFinite(d) ? d : 0);
+    };
+    v.preload = "metadata";
+    v.onloadedmetadata = () => done(v.duration);
+    v.onerror = () => done(0);
+    window.setTimeout(() => done(0), 4000);
+    v.src = url;
+  });
+}
+
+const SHORTCUTS: { group: string; rows: [string, string][] }[] = [
+  { group: "Oynatma", rows: [["Boşluk", "Oynat / duraklat"]] },
+  {
+    group: "Düzenleme",
+    rows: [
+      ["Ctrl/⌘ + Z", "Geri al"],
+      ["Ctrl/⌘ + Shift + Z", "Yinele"],
+      ["Ctrl + Y", "Yinele"],
+    ],
+  },
+  { group: "Görünüm", rows: [["?", "Kısayolları göster"], ["Esc", "Kapat"]] },
+];
 
 /** Fotoğraf katmanı dönüşümünü günceller (katman motor nesnesidir, React durumu değil). */
 function patchPhotoTransform(
@@ -118,6 +188,17 @@ function ReelsEditorInner({
   onLayout,
 }: ReelsEditorProps) {
   const toast = useEditorToast();
+  const vp = useViewportBox();
+  const layout: EditorLayout =
+    vp.w >= 1024 && vp.h >= 600 ? "desk" : vp.w > vp.h && vp.h < 600 && vp.w >= 560 ? "side" : "bottom";
+  const compact = layout === "bottom" && vp.h < 700;
+  const [showShortcuts, setShowShortcuts] = useState(false);
+  const [panelH, setPanelH] = useState(0);
+  // Yatay: sağ sütun genişliği = önizlemenin sağında kalan alan (önizleme 9:16, sahne üstten 64 + 2x12 boşluk)
+  const sideW = Math.max(
+    260,
+    Math.min(400, Math.round(vp.w - (vp.w / 2 + ((vp.h - 88) * 9) / 32) - 8))
+  );
   const [activeStrip, setActiveStrip] = useState<ActiveToolStrip>("none");
   const [quickEffectSeq, setQuickEffectSeq] = useState(0);
   // Metin düzenleyici (klavyeli): düzenleyiciyi unmount etmez, geçmiş korunur
@@ -129,6 +210,7 @@ function ReelsEditorInner({
     },
     [engine]
   );
+  const composerOpenRefHolder = composer !== null;
   const [seenTextRequest, setSeenTextRequest] = useState(0);
   if (textEditRequest && textEditRequest.seq !== seenTextRequest) {
     setSeenTextRequest(textEditRequest.seq);
@@ -245,6 +327,20 @@ function ReelsEditorInner({
   }, [engine]);
   const handlePause = useCallback(() => engine?.pauseVideo(), [engine]);
 
+  // 60 sn üstü video: kullanıcıya açıkça bildirilir (limit kalkmaz, yalnız bilgi)
+  const trimNotifiedRef = useRef<unknown>(null);
+  useEffect(() => {
+    const m = engine?.getMedia();
+    const d = m?.duration;
+    if (!engine || !m || !d || trimNotifiedRef.current === m || d <= MAX_VIDEO_SEC + 0.5) return;
+    // Düzenleyici görünür olunca (yükleme ekranı kapanınca) gösterilir; erken çağrı toast'ı düşürebilir
+    const t = window.setTimeout(() => {
+      trimNotifiedRef.current = m;
+      toast.info(`Video ${Math.round(d)} sn: ilk ${MAX_VIDEO_SEC} sn kullanılıyor`, { duration: 5000 });
+    }, 900);
+    return () => window.clearTimeout(t);
+  }, [engine, clips, toast]);
+
   // Kalan süre: MAX_VIDEO_SEC - toplam (B8)
   const remainingSec = Math.max(0, MAX_VIDEO_SEC - totalDuration);
 
@@ -260,9 +356,12 @@ function ReelsEditorInner({
     if (!el) return;
     const report = () => {
       const h = Math.ceil(el.getBoundingClientRect().height);
-      if (h === lastBottomRef.current) return;
-      lastBottomRef.current = h;
-      onLayoutRef.current?.({ bottom: h });
+      // Yatay düzende panel yan sütundur: önizleme alttan boşluk bırakmaz
+      const bottom = layout === "side" ? 0 : layout === "desk" ? Math.max(0, h - DESK_TRANSPORT_H) : h;
+      setPanelH((p) => (p === h ? p : h));
+      if (bottom === lastBottomRef.current) return;
+      lastBottomRef.current = bottom;
+      onLayoutRef.current?.({ bottom });
     };
     report();
     const ro = new ResizeObserver(report);
@@ -272,7 +371,7 @@ function ReelsEditorInner({
       lastBottomRef.current = -1;
       onLayoutRef.current?.({ bottom: 0 });
     };
-  }, []);
+  }, [layout]);
 
   // Otomatik oynatma sesi engellendiyse küçük "sesi aç" düğmesi (B5)
   const [soundBlocked, setSoundBlocked] = useState(() => Boolean(engine?.needsUserGestureForSound()));
@@ -302,6 +401,8 @@ function ReelsEditorInner({
   const burstTimerRef = useRef<number | null>(null);
   const restoreTimerRef = useRef<number | null>(null);
   const [historyInfo, setHistoryInfo] = useState({ undo: 0, redo: 0 });
+  // Geri al / yinele motoru geri yüklediğinde artar: Ayarla kaydırıcıları motor durumundan yeniden okunur (N-02)
+  const [restoreSeq, setRestoreSeq] = useState(0);
   const bumpHistory = useCallback(() => {
     setHistoryInfo({ undo: undoRef.current.length, redo: redoRef.current.length });
   }, []);
@@ -371,6 +472,7 @@ function ReelsEditorInner({
           setSelectedItemType(null);
           setActiveStrip("none");
           committedRef.current = engine.snapshot();
+          setRestoreSeq((n) => n + 1);
         }
       } finally {
         if (restoreTimerRef.current !== null) window.clearTimeout(restoreTimerRef.current);
@@ -387,6 +489,58 @@ function ReelsEditorInner({
   );
   const handleUndo = useCallback(() => stepHistory("undo"), [stepHistory]);
   const handleRedo = useCallback(() => stepHistory("redo"), [stepHistory]);
+
+  // Klavye kısayolları: metin girişi / düzenleyici açıkken devre dışı
+  const composerOpenRef = useRef(false);
+  composerOpenRef.current = composerOpenRefHolder;
+  const kbdRef = useRef({ togglePlay: handleTogglePlay, undo: handleUndo, redo: handleRedo });
+  useEffect(() => {
+    kbdRef.current = { togglePlay: handleTogglePlay, undo: handleUndo, redo: handleRedo };
+  });
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.defaultPrevented || composerOpenRef.current) return;
+      if (isTypingTarget(e.target)) return;
+      const mod = e.ctrlKey || e.metaKey;
+      const k = e.key;
+      if (k === "Escape") {
+        setShowShortcuts((v) => (v ? false : v));
+        return;
+      }
+      if (mod && (k === "z" || k === "Z")) {
+        e.preventDefault();
+        if (e.shiftKey) kbdRef.current.redo();
+        else kbdRef.current.undo();
+        return;
+      }
+      if (mod && (k === "y" || k === "Y")) {
+        e.preventDefault();
+        kbdRef.current.redo();
+        return;
+      }
+      if (mod || e.altKey) return;
+      if (k === " " || e.code === "Space") {
+        // Kaydırıcı odaktayken Boşluk bir şey yapmaz; oynat/duraklat tetiklenir
+        e.preventDefault();
+        if (!e.repeat) kbdRef.current.togglePlay();
+        return;
+      }
+      if (k === "?") {
+        e.preventDefault();
+        setShowShortcuts((v) => !v);
+      }
+    };
+    const onKeyUp = (e: KeyboardEvent) => {
+      // Odaktaki düğme Boşluk tuşunun keyup'ında tıklanır: oynat/duraklat ile çakışmasın
+      if ((e.key === " " || e.code === "Space") && !isTypingTarget(e.target) && !composerOpenRef.current) e.preventDefault();
+    };
+    window.addEventListener("keydown", onKey);
+    window.addEventListener("keyup", onKeyUp);
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      window.removeEventListener("keyup", onKeyUp);
+    };
+  }, []);
   // Geçmiş artık 'change' olaylarından otomatik oluşur; eski çağrı noktaları için boş kanca
   const commitHistory = useCallback(() => {}, []);
 
@@ -786,6 +940,8 @@ function ReelsEditorInner({
       if (clonedLayer) {
         syncFromEngine();
         setSelectedItemId(clonedLayer.id);
+      } else {
+        toast.error("Katman kopyalanamadı");
       }
       return;
     }
@@ -1043,12 +1199,16 @@ function ReelsEditorInner({
       return;
     }
     try {
+      const capBefore = engine.getRemainingTimelineCapacity();
+      const srcDur = await probeVideoDuration(file);
       const added = await engine.appendVideoClip(file);
       if (added) {
         syncFromEngine();
         setSelectedItemId(added.id);
         setSelectedItemType("video");
-        if (engine.getRemainingTimelineCapacity() < 0.5) {
+        if (srcDur > capBefore + 0.5) {
+          toast.info(`Klip ${Math.round(srcDur)} sn: ilk ${Math.round(capBefore)} sn eklendi (${MAX_VIDEO_SEC} sn sınırı)`);
+        } else if (engine.getRemainingTimelineCapacity() < 0.5) {
           toast.info(`${MAX_VIDEO_SEC} sn sınırına ulaşıldı`);
         }
       } else {
@@ -1112,6 +1272,68 @@ function ReelsEditorInner({
     if (key !== "effects") setEffectDraft(null);
   });
 
+  const menuNode = engine ? (
+        <ReelsMenu
+          restoreSeq={restoreSeq}
+          variant={layout === "bottom" ? "bottom" : "rail"}
+          compact={compact}
+          engine={engine}
+          selection={
+            selectedItemId && selectedItemType
+              ? { id: selectedItemId, type: selectedItemType }
+              : null
+          }
+          clip={selectedVideoClip}
+          clipCount={clips.length}
+          canSplit={canSplitSelected}
+          busy={pendingActionKey !== null}
+          selectedMusic={selectedMusic}
+          musicVolume={musicVolume}
+          activeFilterIndex={activeFilterIndex}
+          selectedEffectClip={selectedEffectClip}
+          quickEffectSeq={quickEffectSeq}
+          photo={
+            selectedPhotoLayer
+              ? {
+                  scale: selectedPhotoLayer.transform.scale,
+                  patch: (fn) => {
+                    patchPhotoTransform(selectedPhotoLayer, fn);
+                    engine.requestRender();
+                    syncFromEngine();
+                  },
+                  cycleShape: () => {
+                    selectedPhotoLayer.cycleShapeMode();
+                    engine.requestRender();
+                  },
+                }
+              : null
+          }
+          onSplit={() => runDelayedAction("split", handleSplitSelected)}
+          onDelete={() => runDelayedAction("delete", handleDeleteSelected)}
+          onDuplicate={() => runDelayedAction("duplicate", handleDuplicateSelected)}
+          onCrop={() => setActiveStrip("crop")}
+          onSelectClipAtPlayhead={handleSelectClipAtPlayhead}
+          onSelectVideoClip={(id) => handleSelectItem(id, "video")}
+          onOpenText={openComposer}
+          onOpenMusicPicker={onOpenMusicPicker}
+          onChangeMusicVolume={onChangeMusicVolume}
+          onChangeMusicMeta={(m) => onChangeMusicMeta?.(m)}
+          onSelectFilterIndex={onSelectFilterIndex}
+          onPickEffect={(id) => runDelayedAction(`fx_${id}`, () => handleSelectEffectPreset(id))}
+          onEffectIntensity={(v) => {
+            if (!selectedEffectClip || !onChangeEffectClips) return;
+            onChangeEffectClips(
+              effectClips.map((c) =>
+                c.id === selectedEffectClip.id ? { ...c, intensity: v } : c
+              )
+            );
+          }}
+          onAddMention={onAddMention}
+          onActiveToolChange={handleActiveToolChange}
+          onDeselect={() => handleSelectItem(null, null)}
+        />
+  ) : null;
+
   return (
     <>
       {/* Ana Bar Sonuna Klip Ekleme Gizli Dosya Seçici */}
@@ -1130,7 +1352,7 @@ function ReelsEditorInner({
           onClick={handleUnmute}
           aria-label="Sesi aç"
           style={{ top: "calc(env(safe-area-inset-top, 0px) + 76px)" }}
-          className="fixed right-4 z-30 h-11 px-4 rounded-full bg-black/70 backdrop-blur text-white text-xs font-semibold flex items-center gap-2 border border-white/20 active:scale-95 transition-transform"
+          className="fixed right-4 z-30 h-11 px-4 rounded-full bg-black/70 backdrop-blur text-white text-xs font-semibold flex items-center gap-2 border border-[var(--ed-line2,#3a4350)] active:scale-95 transition-transform"
         >
           <VolumeX className="w-4 h-4" />
           <span>Sesi aç</span>
@@ -1138,10 +1360,50 @@ function ReelsEditorInner({
       )}
 
       {/* TAM EKRAN 8 TUTAMAÇLI KIRPMA MODU (Timeline gizlenir, video büyür, kırpma kutusu en üstte) */}
+      {showShortcuts && layout === "desk" && <ShortcutPanel onClose={() => setShowShortcuts(false)} />}
+      {layout === "desk" && (
+        <button
+          type="button"
+          aria-label="Klavye kısayolları"
+          title="Klavye kısayolları (?)"
+          onClick={() => setShowShortcuts((v) => !v)}
+          style={{ left: RAIL_W + 12, bottom: panelH + 12 }}
+          className="fixed z-30 h-10 w-10 rounded-md bg-white/5 hover:bg-white/10 text-white flex items-center justify-center border border-[var(--ed-line,#2a303a)]"
+        >
+          <Keyboard className="w-5 h-5" strokeWidth={1.5} />
+        </button>
+      )}
+
+      {/* Sol araç rayı (masaüstü + yatay) ve sağ denetçi: ReelsMenu rail düzeninde */}
+      {layout !== "bottom" && engine && !(isFullScreenCrop && selectedVideoClip) && (
+        <div
+          onPointerDownCapture={() => engine.pauseVideo()}
+          style={
+            {
+              top: TOP_OFFSET,
+              bottom: layout === "desk" ? panelH : 0,
+              width: RAIL_W,
+              ["--rp-top"]: TOP_OFFSET,
+              ["--rp-bottom"]: layout === "desk" ? `${panelH}px` : "0px",
+              ["--rp-w"]: layout === "desk" ? `${INSPECTOR_W}px` : `${sideW}px`,
+            } as React.CSSProperties
+          }
+          className="fixed left-0 z-[45] bg-[var(--ed-bg1,#12151a)]/95 border-r border-[var(--ed-line,#2a303a)] pointer-events-auto select-none"
+        >
+          {menuNode}
+        </div>
+      )}
+
       <div
         ref={panelRef}
-        style={{ maxHeight: PANEL_MAX_HEIGHT }}
-        className="fixed inset-x-0 bottom-0 z-40 flex flex-col pointer-events-none"
+        style={
+          layout === "side"
+            ? { top: TOP_OFFSET, width: sideW }
+            : { maxHeight: layout === "desk" ? DESK_PANEL_MAX : Math.round(vp.h * (compact ? 0.40 : 0.46)) }
+        }
+        className={`fixed z-40 flex flex-col pointer-events-none no-scrollbar ${layout === "side" ? "overflow-y-auto" : "overflow-hidden"} ${
+          layout === "side" ? "right-0 bottom-0 border-l border-[var(--ed-line,#2a303a)] [&_button[aria-label='Uzaklaştır']]:hidden [&_button[aria-label='Yakınlaştır']]:hidden" : "inset-x-0 bottom-0"
+        }`}
       >
       {isFullScreenCrop && selectedVideoClip && engine ? (
         <>
@@ -1160,7 +1422,7 @@ function ReelsEditorInner({
           <div
             onPointerDownCapture={() => engine.pauseVideo()}
             onWheelCapture={() => engine.pauseVideo()}
-            className="relative shrink-0 z-50 bg-black/95 pb-safe min-h-28 border-t border-white/10 px-4 py-2.5 flex flex-col justify-between pointer-events-auto select-none"
+            className="relative shrink-0 z-50 bg-[var(--ed-bg1,#12151a)] pb-safe min-h-28 border-t border-[var(--ed-line,#2a303a)] px-4 py-2.5 flex flex-col justify-between pointer-events-auto select-none"
           >
             {/* Üst Satır: Oran Presetleri + Döndür + Aynala + Sıfırla */}
             <div className="flex items-center gap-1.5 overflow-x-auto no-scrollbar">
@@ -1169,7 +1431,7 @@ function ReelsEditorInner({
                   key={ratio}
                   type="button"
                   onClick={() => applyCropAspectPreset(ratio)}
-                  className="px-3 py-1.5 rounded-xl text-xs font-semibold shrink-0 bg-[#1c1c1e] hover:bg-[#28282d] text-zinc-200 border border-white/10 active:scale-95 transition-all"
+                  className="px-3 h-9 rounded-md text-xs font-semibold shrink-0 bg-[var(--ed-bg3,#232932)] hover:bg-[var(--ed-line,#2a303a)] text-[var(--ed-tx,#e8ecf1)] border border-[var(--ed-line,#2a303a)] active:scale-95 transition-all"
                 >
                   {ratio === "free" ? "Serbest" : ratio}
                 </button>
@@ -1186,16 +1448,16 @@ function ReelsEditorInner({
                   );
                   syncFromEngine();
                 }}
-                className="px-3 py-1.5 rounded-xl text-xs font-semibold flex items-center gap-1 shrink-0 bg-[#1c1c1e] text-zinc-200 border border-white/10 active:scale-95"
+                className="px-3 h-9 rounded-md text-xs font-semibold flex items-center gap-1 shrink-0 bg-[var(--ed-bg3,#232932)] text-[var(--ed-tx,#e8ecf1)] border border-[var(--ed-line,#2a303a)] active:scale-95"
               >
                 {activeClipFitMode === "cover" ? (
                   <>
-                    <Minimize2 className="w-3.5 h-3.5 text-amber-400" />
+                    <Minimize2 className="w-3.5 h-3.5 text-[var(--ed-ac,#38d5c8)]" />
                     <span>Sığdır</span>
                   </>
                 ) : (
                   <>
-                    <Maximize2 className="w-3.5 h-3.5 text-amber-400" />
+                    <Maximize2 className="w-3.5 h-3.5 text-[var(--ed-ac,#38d5c8)]" />
                     <span>Doldur</span>
                   </>
                 )}
@@ -1211,7 +1473,7 @@ function ReelsEditorInner({
                   });
                   syncFromEngine();
                 }}
-                className="px-3 py-1.5 rounded-xl text-xs font-semibold flex items-center gap-1 shrink-0 bg-[#1c1c1e] text-zinc-200 border border-white/10 active:scale-95"
+                className="px-3 h-9 rounded-md text-xs font-semibold flex items-center gap-1 shrink-0 bg-[var(--ed-bg3,#232932)] text-[var(--ed-tx,#e8ecf1)] border border-[var(--ed-line,#2a303a)] active:scale-95"
               >
                 <RotateCw className="w-3.5 h-3.5" />
                 <span>90°</span>
@@ -1227,10 +1489,10 @@ function ReelsEditorInner({
                   });
                   syncFromEngine();
                 }}
-                className={`px-3 py-1.5 rounded-xl text-xs font-semibold flex items-center gap-1 shrink-0 border transition-all active:scale-95 ${
+                className={`px-3 h-9 rounded-md text-xs font-semibold flex items-center gap-1 shrink-0 border transition-all active:scale-95 ${
                   selectedVideoClip.transform?.flipH
-                    ? "bg-amber-400 text-black border-amber-400"
-                    : "bg-[#1c1c1e] text-zinc-200 border-white/10"
+                    ? "bg-[var(--ed-ac-soft,rgba(56,213,200,.14))] text-[var(--ed-ac,#38d5c8)] border-[var(--ed-ac,#38d5c8)]"
+                    : "bg-[var(--ed-bg3,#232932)] text-[var(--ed-tx,#e8ecf1)] border-[var(--ed-line,#2a303a)]"
                 }`}
               >
                 <FlipHorizontal2 className="w-3.5 h-3.5" />
@@ -1244,7 +1506,7 @@ function ReelsEditorInner({
                   engine.resetClipTransform(selectedVideoClip.id);
                   syncFromEngine();
                 }}
-                className="px-3 py-1.5 rounded-xl text-xs font-semibold flex items-center gap-1 shrink-0 bg-[#1c1c1e] text-zinc-300 border border-white/10 active:scale-95"
+                className="px-3 h-9 rounded-md text-xs font-semibold flex items-center gap-1 shrink-0 bg-[var(--ed-bg3,#232932)] text-[var(--ed-tx,#e8ecf1)] border border-[var(--ed-line,#2a303a)] active:scale-95"
               >
                 <RotateCcw className="w-3.5 h-3.5" />
                 <span>Sıfırla</span>
@@ -1252,9 +1514,9 @@ function ReelsEditorInner({
             </div>
 
             {/* Alt Satır: Yakınlaştırma (Zoom) + [ ✓ Bitti ] Butonu */}
-            <div className="flex items-center gap-2.5">
-              <div className="flex-1 flex items-center gap-2.5 bg-[#16171b] rounded-xl px-3 py-1.5 border border-white/5">
-                <span className="text-[11px] font-medium text-zinc-400 shrink-0">
+            <div className="flex items-center gap-2.5 min-w-0">
+              <div className="flex-1 min-w-0 flex items-center gap-2.5 bg-[var(--ed-bg2,#1a1e25)] rounded-md px-3 py-0.5 border border-[var(--ed-line,#2a303a)]">
+                <span className="text-[11px] font-medium text-[var(--ed-tx2,#98a2b3)] shrink-0">
                   Yakınlaştır
                 </span>
                 <input
@@ -1271,7 +1533,7 @@ function ReelsEditorInner({
                     });
                     syncFromEngine();
                   }}
-                  className="flex-1 h-1.5 bg-white/15 rounded-lg appearance-none cursor-pointer accent-amber-400"
+                  className="editor-range flex-1 min-w-0 !h-9"
                 />
                 <span className="text-xs font-semibold text-white w-9 text-right tabular-nums">
                   {activeClipScale.toFixed(1)}x
@@ -1281,7 +1543,7 @@ function ReelsEditorInner({
               <button
                 type="button"
                 onClick={() => setActiveStrip("none")}
-                className="h-9 px-4 rounded-xl bg-amber-400 hover:bg-amber-300 text-black font-bold text-xs flex items-center gap-1.5 shrink-0 active:scale-95 transition-all shadow-lg"
+                className="h-9 px-4 rounded-md bg-[var(--ed-ac,#38d5c8)] text-[var(--ed-ac-tx,#04201e)] font-bold text-xs flex items-center gap-1.5 shrink-0 active:scale-95 transition-all"
               >
                 <Check className="w-4 h-4 stroke-[2.5]" />
                 <span>Bitti</span>
@@ -1291,10 +1553,18 @@ function ReelsEditorInner({
         </>
       ) : (
         <div
-          style={{ paddingBottom: "calc(env(safe-area-inset-bottom, 0px) + 8px)" }}
-          className="relative min-h-0 bg-black pt-1.5 flex flex-col gap-2 pointer-events-auto select-none"
+          style={{
+            paddingBottom: "calc(env(safe-area-inset-bottom, 0px) + 8px)",
+            // Masaüstü: oynatma satırı saydam, önizleme altından görünür; şeritler dolgulu
+            ...(layout === "desk"
+              ? { background: `linear-gradient(to bottom, transparent ${DESK_TRANSPORT_H}px, var(--ed-bg1,#12151a) ${DESK_TRANSPORT_H}px)` }
+              : { background: "var(--ed-bg1,#12151a)" }),
+          }}
+          className="relative min-h-0 pt-1.5 flex flex-col gap-2 pointer-events-auto select-none"
         >
           {/* 1. Sabit Merkez İbreli (Fixed Center Playhead) ve 60 FPS Analog Kayar NLE Zaman Çizelgesi */}
+          {/* Zaman çizelgesi kısa panelde kendi içinde dikey kayar; alt menü her zaman görünür kalır (N-03/N-06) */}
+          <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain no-scrollbar">
           <VideoTimelineNLE
             clips={clips}
             overlayItems={overlayItems}
@@ -1328,6 +1598,7 @@ function ReelsEditorInner({
             onOpenTextEditor={stableOpenText}
             onQuickAddEffect={stableQuickEffect}
           />
+          </div>
 
           {/* Alt menü: ana menü / Düzenle / araç paneli aynı sabit yükseklikte; dokunulduğunda video durur */}
           <div
@@ -1335,65 +1606,7 @@ function ReelsEditorInner({
             onWheelCapture={() => engine?.pauseVideo()}
             className="shrink-0"
           >
-            {engine && (
-              <ReelsMenu
-                engine={engine}
-                selection={
-                  selectedItemId && selectedItemType
-                    ? { id: selectedItemId, type: selectedItemType }
-                    : null
-                }
-                clip={selectedVideoClip}
-                clipCount={clips.length}
-                canSplit={canSplitSelected}
-                busy={pendingActionKey !== null}
-                selectedMusic={selectedMusic}
-                musicVolume={musicVolume}
-                activeFilterIndex={activeFilterIndex}
-                selectedEffectClip={selectedEffectClip}
-                quickEffectSeq={quickEffectSeq}
-                photo={
-                  selectedPhotoLayer
-                    ? {
-                        scale: selectedPhotoLayer.transform.scale,
-                        patch: (fn) => {
-                          patchPhotoTransform(selectedPhotoLayer, fn);
-                          engine.requestRender();
-                          syncFromEngine();
-                        },
-                        cycleShape: () => {
-                          selectedPhotoLayer.cycleShapeMode();
-                          engine.requestRender();
-                        },
-                      }
-                    : null
-                }
-                onSplit={() => runDelayedAction("split", handleSplitSelected)}
-                onDelete={() => runDelayedAction("delete", handleDeleteSelected)}
-                onDuplicate={() => runDelayedAction("duplicate", handleDuplicateSelected)}
-                onCrop={() => setActiveStrip("crop")}
-                onSelectClipAtPlayhead={handleSelectClipAtPlayhead}
-                onSelectVideoClip={(id) => handleSelectItem(id, "video")}
-                onOpenText={openComposer}
-                onOpenMusicPicker={onOpenMusicPicker}
-                onChangeMusicVolume={onChangeMusicVolume}
-                onChangeMusicMeta={(m) => onChangeMusicMeta?.(m)}
-                onSelectFilterIndex={onSelectFilterIndex}
-                onPickEffect={(id) => runDelayedAction(`fx_${id}`, () => handleSelectEffectPreset(id))}
-                onEffectIntensity={(v) => {
-                  if (!selectedEffectClip || !onChangeEffectClips) return;
-                  onChangeEffectClips(
-                    effectClips.map((c) =>
-                      c.id === selectedEffectClip.id ? { ...c, intensity: v } : c
-                    )
-                  );
-                }}
-                onAddMention={onAddMention}
-                onActiveToolChange={handleActiveToolChange}
-                onDeselect={() => handleSelectItem(null, null)}
-              />
-            )}
-            <div style={{ height: "calc(env(safe-area-inset-bottom, 0px) + 4px)" }} />
+            {layout === "bottom" && menuNode}
           </div>
         </div>
       )}
@@ -1406,6 +1619,50 @@ function ReelsEditorInner({
   );
 }
 // [END] CREATED BY Bedirhan
+
+function ShortcutPanel({ onClose }: { onClose: () => void }) {
+  return (
+    <div
+      role="dialog"
+      aria-label="Klavye kısayolları"
+      className="fixed inset-0 z-[60] flex items-center justify-center bg-black/60 backdrop-blur-sm"
+      onClick={onClose}
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        className="w-[min(720px,92vw)] rounded-[10px] border border-[var(--ed-line2,#3a4350)] bg-[var(--ed-bg1,#12151a)] p-5 shadow-[0_8px_24px_rgba(0,0,0,.55)]"
+      >
+        <div className="flex items-center justify-between mb-4">
+          <h2 className="text-[17px] font-semibold text-white">Klavye kısayolları</h2>
+          <button
+            type="button"
+            autoFocus
+            aria-label="Kapat"
+            onClick={onClose}
+            className="h-9 px-3 rounded-md bg-white/10 text-xs font-semibold text-white"
+          >
+            Kapat
+          </button>
+        </div>
+        <div className="grid grid-cols-3 gap-5">
+          {SHORTCUTS.map((g) => (
+            <div key={g.group}>
+              <div className="mb-2 font-mono text-[10px] uppercase tracking-widest text-[var(--ed-tx2,#98a2b3)]">{g.group}</div>
+              <ul className="flex flex-col gap-2">
+                {g.rows.map(([k, label]) => (
+                  <li key={label + k} className="flex items-center justify-between gap-2 text-[13px] text-[var(--ed-tx,#e8ecf1)]">
+                    <span>{label}</span>
+                    <kbd className="rounded border border-[var(--ed-line2,#3a4350)] bg-[var(--ed-bg3,#232932)] px-1.5 py-0.5 font-mono text-[11px] whitespace-nowrap">{k}</kbd>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
 
 /** Toast sağlayıcısını bu bileşenin içine alır: sayfa sağlayıcı sunmaz. */
 export default function ReelsEditor(props: ReelsEditorProps) {

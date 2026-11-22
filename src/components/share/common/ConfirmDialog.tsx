@@ -29,6 +29,9 @@ export interface ConfirmDialogProps {
   onCancel: () => void;
   /** Shows a spinner on the confirm button and blocks both buttons / dismissal. */
   busy?: boolean;
+  /** Optional third action between confirm and cancel (WP-09: "Sil" for the draft prompt). */
+  secondaryLabel?: string;
+  onSecondary?: () => void;
 }
 
 /**
@@ -45,6 +48,8 @@ export function ConfirmDialog({
   onConfirm,
   onCancel,
   busy = false,
+  secondaryLabel,
+  onSecondary,
 }: ConfirmDialogProps) {
   const { rendered, closing } = usePresence(open, 160);
   const cancelRef = useRef<HTMLButtonElement | null>(null);
@@ -84,30 +89,42 @@ export function ConfirmDialog({
           role="alertdialog"
           aria-modal="true"
           aria-label={typeof title === "string" ? title : undefined}
-          className={`relative w-full max-w-[300px] rounded-3xl bg-neutral-900 border border-white/10 p-5 pt-6 text-center shadow-2xl ${
+          className={`relative w-full max-w-[340px] rounded-[10px] bg-[var(--ed-bg1,#12151a)] border border-[var(--ed-line,#2a303a)] p-5 pt-6 text-center shadow-[0_8px_24px_rgba(0,0,0,0.55)] ${
             closing ? "editor-anim-pop-out" : "editor-anim-pop-in"
           }`}
         >
-          <h2 className="text-white font-bold text-base leading-snug">{title}</h2>
-          {message && <p className="mt-1.5 text-zinc-400 text-[13px] leading-snug">{message}</p>}
+          <h2 className="text-[var(--ed-tx,#e8ecf1)] font-semibold text-[17px] leading-snug">{title}</h2>
+          {message && <p className="mt-1.5 text-[var(--ed-tx2,#98a2b3)] text-[13px] leading-snug">{message}</p>}
           <div className="mt-5 flex flex-col gap-2">
             <button
               type="button"
               onClick={onConfirm}
               disabled={busy}
-              className={`w-full min-h-12 rounded-2xl font-bold text-sm flex items-center justify-center gap-2 active:scale-[0.97] transition-transform disabled:opacity-70 ${
-                destructive ? "bg-red-600 text-white" : "bg-white text-black"
+              className={`w-full min-h-12 rounded-md font-bold text-sm flex items-center justify-center gap-2 active:scale-[0.97] transition-transform disabled:opacity-70 ${
+                destructive
+                  ? "border border-[var(--ed-danger,#ff5c6c)] bg-transparent text-[var(--ed-danger,#ff5c6c)]"
+                  : "bg-[var(--ed-ac,#38d5c8)] text-[var(--ed-ac-tx,#04201e)]"
               }`}
             >
               {busy && <Loader2 className="w-4 h-4 animate-spin" />}
               {confirmLabel}
             </button>
+            {secondaryLabel && onSecondary && (
+              <button
+                type="button"
+                onClick={onSecondary}
+                disabled={busy}
+                className="w-full min-h-12 rounded-md border border-[var(--ed-danger,#ff5c6c)] text-[var(--ed-danger,#ff5c6c)] font-semibold text-sm active:scale-[0.97] transition-transform disabled:opacity-50"
+              >
+                {secondaryLabel}
+              </button>
+            )}
             <button
               ref={cancelRef}
               type="button"
               onClick={onCancel}
               disabled={busy}
-              className="w-full min-h-12 rounded-2xl bg-white/10 text-white font-semibold text-sm active:scale-[0.97] transition-transform disabled:opacity-50"
+              className="w-full min-h-12 rounded-md bg-[var(--ed-bg3,#232932)] text-[var(--ed-tx,#e8ecf1)] font-semibold text-sm active:scale-[0.97] transition-transform disabled:opacity-50"
             >
               {cancelLabel}
             </button>

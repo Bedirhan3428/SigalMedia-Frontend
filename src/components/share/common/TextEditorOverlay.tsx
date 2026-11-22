@@ -321,9 +321,16 @@ function TextEditorPanel({
                       ? "bg-white text-black border-white"
                       : "bg-black/35 text-white border-white/25"
                   }`}
-                  style={{ fontFamily: f.fontFamily, fontWeight: f.fontWeight, fontStyle: f.fontStyle }}
                 >
-                  {f.label}
+                  {/* Etiket sabit fontla (okunur); font önizlemesi ayrı "Aa" örneğinde */}
+                  <span
+                    aria-hidden="true"
+                    className="mr-2 text-[18px] leading-none opacity-80"
+                    style={{ fontFamily: f.fontFamily, fontWeight: f.fontWeight, fontStyle: f.fontStyle }}
+                  >
+                    Aa
+                  </span>
+                  <span className="font-semibold">{f.label}</span>
                 </button>
               );
             })}

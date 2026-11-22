@@ -40,6 +40,7 @@ import {
   type PostStudioFilterId,
 } from "@/lib/canvas-editor";
 import PreviewThumb from "../PreviewThumb";
+import { FilterIntensitySlider } from "../common";
 
 export interface PostEditorProps {
   engine: CanvasEngine;
@@ -53,6 +54,10 @@ export interface PostEditorProps {
 }
 
 type Step = "crop" | "edit";
+
+// E-03: sayfa metin düzenlerken PostEditor kaldırılıp yeniden bağlanır; adımı motor başına hatırla
+// (yeni oturum = yeni motor = Kırp). WeakMap motor ömrünü aşmaz.
+const stepByEngine = new WeakMap<object, Step>();
 type EditTab = "filters" | "adjust";
 type ToolKey = Exclude<keyof PostAdjustmentState, "filterPreset">;
 
@@ -84,7 +89,14 @@ const iconBtn =
   "min-w-11 h-11 rounded-full flex items-center justify-center text-white bg-white/10 active:scale-90 transition-transform disabled:opacity-30";
 
 export default function PostEditor({ engine, canvas, isPublishing, onPublish, onLayout }: PostEditorProps) {
-  const [step, setStep] = useState<Step>("crop");
+  const [step, setStepState] = useState<Step>(() => stepByEngine.get(engine) ?? "crop");
+  const setStep = useCallback(
+    (next: Step) => {
+      stepByEngine.set(engine, next);
+      setStepState(next);
+    },
+    [engine]
+  );
   const [tab, setTab] = useState<EditTab>("filters");
   const [aspect, setAspect] = useState<PostAspect>(() => engine.getPostAspect());
   const [adj, setAdj] = useState<PostAdjustmentState>(() => engine.getPostAdjustments());
@@ -125,6 +137,8 @@ export default function PostEditor({ engine, canvas, isPublishing, onPublish, on
       ro?.disconnect();
       offResize();
       onLayoutRef.current({ bottom: 0, ratio: lastLayout.current.ratio > 0 ? lastLayout.current.ratio : 4 / 5 });
+      // A-04: StrictMode yeniden bağlanmasında aynı değer "değişmedi" sayılıp bildirilmesin
+      lastLayout.current = { bottom: -1, ratio: -1 };
     };
   }, [engine, reportLayout]);
 
@@ -397,7 +411,7 @@ export default function PostEditor({ engine, canvas, isPublishing, onPublish, on
 
       <div
         ref={panelRef}
-        className="fixed inset-x-0 bottom-0 z-40 bg-neutral-950/95 backdrop-blur-xl border-t border-white/10 px-3 pt-2 pointer-events-auto select-none"
+        className="fixed inset-x-0 bottom-0 z-40 bg-neutral-950/95 backdrop-blur-xl border-t border-[var(--ed-line,#2a303a)] px-3 pt-2 pointer-events-auto select-none"
         style={{ paddingBottom: "max(0.75rem, env(safe-area-inset-bottom))" }}
       >
         {/* Üst satır: adım başlığı + birincil eylem */}
@@ -443,7 +457,7 @@ export default function PostEditor({ engine, canvas, isPublishing, onPublish, on
                   onPointerCancel={endCompare}
                   onLostPointerCapture={endCompare}
                   onContextMenu={(e) => e.preventDefault()}
-                  className={`${iconBtn} touch-none ${comparing ? "bg-pink-500" : ""}`}
+                  className={`${iconBtn} touch-none ${comparing ? "bg-[var(--ed-ac,#38d5c8)]" : ""}`}
                 >
                   <Eye className="w-4 h-4" />
                 </button>
@@ -484,8 +498,8 @@ export default function PostEditor({ engine, canvas, isPublishing, onPublish, on
                     onClick={() => chooseAspect(a.id)}
                     className={`h-11 min-w-[68px] px-3 rounded-full shrink-0 flex items-center justify-center gap-2 text-xs font-semibold border active:scale-95 transition-all ${
                       aspect === a.id
-                        ? "bg-white text-black border-white"
-                        : "bg-white/5 text-zinc-200 border-white/10"
+                        ? "bg-[var(--ed-ac,#38d5c8)] text-[var(--ed-ac-tx,#04201e)] border-[var(--ed-ac,#38d5c8)]"
+                        : "bg-[var(--ed-bg2,#1a1e25)] text-[var(--ed-tx,#e8ecf1)] border-[var(--ed-line,#2a303a)]"
                     }`}
                   >
                     <span
@@ -497,19 +511,19 @@ export default function PostEditor({ engine, canvas, isPublishing, onPublish, on
                 ))}
               </div>
               <div className="grid grid-cols-4 gap-2">
-                <button type="button" aria-label="90 derece döndür" onClick={() => geometry(() => engine.rotateMedia90())} className="h-11 rounded-xl bg-white/5 border border-white/10 text-white flex items-center justify-center gap-1 text-[11px] font-semibold active:scale-95 transition-transform">
+                <button type="button" aria-label="90 derece döndür" onClick={() => geometry(() => engine.rotateMedia90())} className="h-11 rounded-xl bg-[var(--ed-bg2,#1a1e25)] border border-[var(--ed-line,#2a303a)] text-white flex items-center justify-center gap-1 text-[11px] font-semibold active:scale-95 transition-transform">
                   <RotateCw className="w-4 h-4 shrink-0" />
                   <span className="truncate">Döndür</span>
                 </button>
-                <button type="button" aria-label="Yatay çevir" onClick={() => geometry(() => engine.flipMediaHorizontal())} className="h-11 rounded-xl bg-white/5 border border-white/10 text-white flex items-center justify-center gap-1 text-[11px] font-semibold active:scale-95 transition-transform">
+                <button type="button" aria-label="Yatay çevir" onClick={() => geometry(() => engine.flipMediaHorizontal())} className="h-11 rounded-xl bg-[var(--ed-bg2,#1a1e25)] border border-[var(--ed-line,#2a303a)] text-white flex items-center justify-center gap-1 text-[11px] font-semibold active:scale-95 transition-transform">
                   <FlipHorizontal2 className="w-4 h-4 shrink-0" />
                   <span className="truncate">Yatay</span>
                 </button>
-                <button type="button" aria-label="Dikey çevir" onClick={() => geometry(() => engine.flipMediaVertical())} className="h-11 rounded-xl bg-white/5 border border-white/10 text-white flex items-center justify-center gap-1 text-[11px] font-semibold active:scale-95 transition-transform">
+                <button type="button" aria-label="Dikey çevir" onClick={() => geometry(() => engine.flipMediaVertical())} className="h-11 rounded-xl bg-[var(--ed-bg2,#1a1e25)] border border-[var(--ed-line,#2a303a)] text-white flex items-center justify-center gap-1 text-[11px] font-semibold active:scale-95 transition-transform">
                   <FlipVertical2 className="w-4 h-4 shrink-0" />
                   <span className="truncate">Dikey</span>
                 </button>
-                <button type="button" aria-label="Sıfırla" onClick={() => geometry(() => engine.resetMediaGeometry())} className="h-11 rounded-xl bg-white/5 border border-white/10 text-zinc-300 flex items-center justify-center gap-1 text-[11px] font-semibold active:scale-95 transition-transform">
+                <button type="button" aria-label="Sıfırla" onClick={() => geometry(() => engine.resetMediaGeometry())} className="h-11 rounded-xl bg-[var(--ed-bg2,#1a1e25)] border border-[var(--ed-line,#2a303a)] text-[var(--ed-tx,#e8ecf1)] flex items-center justify-center gap-1 text-[11px] font-semibold active:scale-95 transition-transform">
                   <RotateCcw className="w-4 h-4 shrink-0" />
                   <span className="truncate">Sıfırla</span>
                 </button>
@@ -519,7 +533,7 @@ export default function PostEditor({ engine, canvas, isPublishing, onPublish, on
 
           {step === "edit" && (
             <div className="flex flex-col gap-1.5">
-              <div className="grid grid-cols-2 gap-1 p-0.5 rounded-full bg-white/5">
+              <div className="grid grid-cols-2 gap-1 p-0.5 rounded-full bg-[var(--ed-bg2,#1a1e25)]">
                 {(
                   [
                     ["filters", "Filtreler"],
@@ -531,8 +545,8 @@ export default function PostEditor({ engine, canvas, isPublishing, onPublish, on
                     type="button"
                     aria-pressed={tab === id}
                     onClick={() => setTab(id)}
-                    className={`h-9 rounded-full text-xs font-bold transition-colors ${
-                      tab === id ? "bg-white text-black" : "text-zinc-300"
+                    className={`relative h-9 rounded-full text-xs font-bold transition-colors after:absolute after:inset-x-0 after:-inset-y-[4px] after:content-[''] ${
+                      tab === id ? "bg-[var(--ed-ac,#38d5c8)] text-[var(--ed-ac-tx,#04201e)]" : "text-[var(--ed-tx,#e8ecf1)]"
                     }`}
                   >
                     {label}
@@ -541,6 +555,8 @@ export default function PostEditor({ engine, canvas, isPublishing, onPublish, on
               </div>
 
               {tab === "filters" && (
+                <div className="flex flex-col gap-1">
+                {adj.filterPreset !== "none" && <FilterIntensitySlider engine={engine} syncKey={adj.filterPreset} />}
                 <div className="flex items-start gap-2 overflow-x-auto no-scrollbar">
                   {POST_STUDIO_FILTERS.map((f) => (
                     <PreviewThumb
@@ -553,6 +569,7 @@ export default function PostEditor({ engine, canvas, isPublishing, onPublish, on
                       onClick={() => setAdjust({ filterPreset: f.id as PostStudioFilterId })}
                     />
                   ))}
+                </div>
                 </div>
               )}
 
@@ -568,13 +585,13 @@ export default function PostEditor({ engine, canvas, isPublishing, onPublish, on
                           type="button"
                           aria-pressed={selected}
                           onClick={() => setTool(t.key)}
-                          className={`relative h-9 px-3 rounded-full shrink-0 text-xs font-semibold border active:scale-95 transition-all ${
-                            selected ? "bg-white text-black border-white" : "bg-white/5 text-zinc-200 border-white/10"
+                          className={`relative h-9 px-3 rounded-full shrink-0 after:absolute after:inset-x-0 after:-inset-y-[4px] after:content-[''] text-xs font-semibold border active:scale-95 transition-all ${
+                            selected ? "bg-[var(--ed-ac,#38d5c8)] text-[var(--ed-ac-tx,#04201e)] border-[var(--ed-ac,#38d5c8)]" : "bg-[var(--ed-bg2,#1a1e25)] text-[var(--ed-tx,#e8ecf1)] border-[var(--ed-line,#2a303a)]"
                           }`}
                         >
                           {t.label}
                           {modified && (
-                            <span className="absolute top-1 right-1.5 w-1.5 h-1.5 rounded-full bg-pink-500" />
+                            <span className="absolute top-1 right-1.5 w-1.5 h-1.5 rounded-full bg-[var(--ed-ac,#38d5c8)]" />
                           )}
                         </button>
                       );
@@ -600,7 +617,7 @@ export default function PostEditor({ engine, canvas, isPublishing, onPublish, on
                       aria-label={`${cfg.label} sıfırla`}
                       disabled={value === 0}
                       onClick={() => setAdjust({ [cfg.key]: 0 })}
-                      className="h-11 px-2 text-xs font-semibold text-pink-400 disabled:opacity-30 shrink-0"
+                      className="h-11 px-2 text-xs font-semibold text-[var(--ed-ac,#38d5c8)] disabled:opacity-30 shrink-0"
                     >
                       Sıfırla
                     </button>

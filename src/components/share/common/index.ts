@@ -100,3 +100,4 @@ export { default as ExportProgress, type ExportProgressProps } from "../ExportPr
 export { default as ModeSelectorModal, type ModeSelectorModalProps } from "../ModeSelectorModal";
 export { default as MusicSettingsPanel, type MusicSettingsPanelProps } from "../MusicSettingsPanel";
 export { default as PreviewThumb, type PreviewThumbProps } from "../PreviewThumb";
+export { FilterIntensitySlider, supportsFilterIntensity } from "./FilterIntensitySlider";

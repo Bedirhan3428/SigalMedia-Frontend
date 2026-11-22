@@ -524,6 +524,7 @@ export interface EngineSnapshot {
   } | null;
   readonly clips: VideoTrackClip[];
   readonly filterIndex: number;
+  readonly filterIntensity?: number;
   readonly music: StoryAudioMeta | null;
   readonly selectedLayerId: string | null;
   readonly timelineTime: number;

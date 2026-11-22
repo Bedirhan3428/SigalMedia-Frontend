@@ -103,6 +103,7 @@ export class CanvasEngine {
 
   private isDirty = false;
   private activeFilterIndex: number = 0;
+  private filterIntensity = 1;
   private listeners: Map<EngineEvent, Set<(args: unknown) => void>> = new Map();
 
   // Merkez Mıknatısı Hizalama Çizgisi Durumu
@@ -148,6 +149,12 @@ export class CanvasEngine {
   private pendingTransformLayer: BaseLayer | null = null;
   private hasPendingTransform = false;
   private pendingDragMove: DragInfo | null = null;
+  /** Önizleme backing store / mantıksal boyut oranı (<=1). Çizim ctx.setTransform ile mantıksal uzayda kalır. */
+  private previewScaleX = 1;
+  private previewScaleY = 1;
+  private previewResizeObserver: ResizeObserver | null = null;
+  private previewDprMql: MediaQueryList | null = null;
+  private static readonly MAX_PREVIEW_DPR = 2;
   private loadToken = 0;
   private baseMediaKey: string | null = null;
   /** Otomatik oynatma sesli reddedildi (B5). Kullanıcı tercihi (muted) DEĞİŞMEZ. */
@@ -200,6 +207,7 @@ export class CanvasEngine {
 
     this.interactionManager = new InteractionManager({
       canvas: this.canvas,
+      getLogicalSize: () => ({ width: this.width, height: this.height }),
       getLayers: () => this.getAllLayers(),
       getContext: () => this.ctx,
       getMediaGesturePolicy: () => this.getMediaGesturePolicy(),
@@ -245,17 +253,89 @@ export class CanvasEngine {
       }
     });
 
+    this.setupPreviewSizing();
+    // QA kancası: yalnızca test betiği window.__QA_ENGINE_HOOK ayarlarsa motoru dışarı verir
+    if (typeof window !== "undefined" && (window as unknown as { __QA_ENGINE_HOOK?: boolean }).__QA_ENGINE_HOOK) {
+      const w = window as unknown as { __qaEngines?: WeakRef<CanvasEngine>[] };
+      (w.__qaEngines ||= []).push(new WeakRef(this));
+    }
     this.requestRender();
 
     this.canvas.addEventListener('pointerup', this.onCanvasPointerUp);
     if (typeof document !== 'undefined') {
-      document.addEventListener('visibilitychange', this.onVisibilityChange);
+      // capture: hedef (document) aşamasında diğer işleyicilerden ÖNCE çalışır
+      document.addEventListener('visibilitychange', this.onVisibilityChange, true);
     }
   }
 
   // ─────────────────────────────────────────────────────────────
   // WP1: Görünürlük, jest ve ses yönetimi
   // ─────────────────────────────────────────────────────────────
+  /**
+   * C-04: Önizleme tuvalinin backing store'u gösterim boyutu x min(DPR, 2) olur (mantıksal 1080-uzayından
+   * büyük olamaz). Katmanlar, hit-test ve export mantıksal koordinatlarla çalışır; render() ctx'e
+   * ölçek dönüşümü uygular. Export kendi tuvalinde tam çözünürlükte çizer.
+   */
+  private computePreviewBackingSize(): { w: number; h: number } {
+    const lw = this.width;
+    const lh = this.height;
+    const cw = this.canvas.clientWidth;
+    const ch = this.canvas.clientHeight;
+    if (!cw || !ch) return { w: this.canvas.width || lw, h: this.canvas.height || lh };
+    const dpr = Math.min(
+      CanvasEngine.MAX_PREVIEW_DPR,
+      (typeof window !== 'undefined' && window.devicePixelRatio) || 1
+    );
+    const fit = Math.min(cw / lw, ch / lh);
+    const scale = Math.min(1, Math.max(0.1, fit * dpr));
+    const even = (n: number) => Math.max(2, Math.round(n / 2) * 2);
+    return { w: Math.min(lw, even(lw * scale)), h: Math.min(lh, even(lh * scale)) };
+  }
+
+  /** Backing store'u hesaplanan boyuta getirir (sessiz). Boyut değiştiyse true (tuval silinmiş olur). */
+  private applyPreviewBackingSize(): boolean {
+    const { w, h } = this.computePreviewBackingSize();
+    const cur = this.canvas;
+    const same = cur.width === w && cur.height === h;
+    this.previewScaleX = w / this.width;
+    this.previewScaleY = h / this.height;
+    if (same) return false;
+    // Küçük titreşimlerde (<4px) yeniden boyutlandırma yapma; ama mantıksal boyut değiştiyse zorunlu
+    if (Math.abs(cur.width - w) < 4 && Math.abs(cur.height - h) < 4 && cur.width * this.height === cur.height * this.width) {
+      this.previewScaleX = cur.width / this.width;
+      this.previewScaleY = cur.height / this.height;
+      return false;
+    }
+    cur.width = w;
+    cur.height = h;
+    return true;
+  }
+
+  private setupPreviewSizing() {
+    if (typeof window === 'undefined') return;
+    const resync = () => {
+      if (this.destroyed) return;
+      if (this.applyPreviewBackingSize()) {
+        this.invalidateStaticCache();
+        this.requestRender();
+      }
+    };
+    if (typeof ResizeObserver !== 'undefined') {
+      this.previewResizeObserver = new ResizeObserver(resync);
+      this.previewResizeObserver.observe(this.canvas);
+    }
+    try {
+      // DPR değişimi (zoom / ekran değiştirme)
+      this.previewDprMql = window.matchMedia(`(resolution: ${window.devicePixelRatio}dppx)`);
+      this.previewDprMql.addEventListener('change', resync);
+      this.onPreviewDprChange = resync;
+    } catch {
+      this.previewDprMql = null;
+    }
+    resync();
+  }
+  private onPreviewDprChange: (() => void) | null = null;
+
   private onVisibilityChange = () => {
     if (this.destroyed || typeof document === 'undefined') return;
     if (document.hidden) {
@@ -597,14 +677,13 @@ export class CanvasEngine {
     const size = this.getLogicalSizeFor(this.shareMode, this.postAspect);
     const changed =
       size.width !== this.width ||
-      size.height !== this.height ||
-      this.canvas.width !== size.width ||
-      this.canvas.height !== size.height;
+      size.height !== this.height;
     if (!changed) return false;
     this.width = size.width;
     this.height = size.height;
     this.canvas.width = size.width;
     this.canvas.height = size.height;
+    this.applyPreviewBackingSize();
     this.invalidateStaticCache();
     this.requestRender();
     this.emit('resize', { width: this.width, height: this.height });
@@ -868,6 +947,7 @@ export class CanvasEngine {
     this.setSoundBlocked(false);
 
     this.mediaLayer = new MediaLayer(media, { fitMode: this.fitMode });
+    this.mediaLayer.filterIntensity = this.filterIntensity;
     this.applyModeToMediaLayer();
     const currentPreset = FILTER_PRESETS[this.activeFilterIndex];
     if (currentPreset) {
@@ -1102,6 +1182,20 @@ export class CanvasEngine {
     return preset.name;
   }
 
+  /** WP-14: filtre yoğunluğu 0..1 (varsayılan 1). Önizleme + export + snapshot. */
+  public setFilterIntensity(intensity: number): void {
+    const v = Number.isFinite(intensity) ? Math.max(0, Math.min(1, intensity)) : 1;
+    this.filterIntensity = v;
+    if (this.mediaLayer) this.mediaLayer.setFilterIntensity(v, () => this.requestRender());
+    this.invalidateStaticCache();
+    this.requestRender();
+    this.emit('change');
+  }
+
+  public getFilterIntensity(): number {
+    return this.filterIntensity;
+  }
+
   public getCurrentFilterName(): string {
     return FILTER_PRESETS[this.activeFilterIndex]?.name || 'Simple';
   }
@@ -1137,6 +1231,11 @@ export class CanvasEngine {
     this.requestRender();
     this.emit('change');
     return preset.name;
+  }
+
+  /** WP-09: taslak kaydı için bir çıkartma/fotoğraf katmanının kaynak medyası. */
+  public getOverlayLayerMedia(layer: BaseLayer): EditorMedia | null {
+    return this.overlayMedia.get(layer) ?? null;
   }
 
   public async addOverlayImage(
@@ -1852,6 +1951,7 @@ export class CanvasEngine {
       const v = this.mediaLayer?.getVideoElement();
       if (v && v.readyState >= 2 && !v.seeking) this.hasDrawnVideoFrame = true;
     }
+    this.ctx.setTransform(this.previewScaleX, 0, 0, this.previewScaleY, 0, 0);
     this.ctx.clearRect(0, 0, this.width, this.height);
 
     const ml = this.mediaLayer;
@@ -1972,6 +2072,8 @@ export class CanvasEngine {
     if (ml) {
       ml.timelineTime = t;
     }
+
+    if (ml && ml.visible && ml.renderFullFrameFast(targetCtx, width, height, externalFrame)) return;
 
     this.renderAmbientBackground(targetCtx, width, height);
 
@@ -2446,17 +2548,13 @@ export class CanvasEngine {
       const total = FILTER_PRESETS.length;
       const idx = ((clip.filterIndex % total) + total) % total;
       const preset = FILTER_PRESETS[idx];
-      ml.targetValues = { ...preset.values };
-      ml.currentValues = { ...preset.values };
-      ml.activeEffect = preset.overlayEffect || null;
+      ml.applyPresetImmediate(preset);
       if (!this.appliedClipFilter || this.lastClipFilterIdx !== idx) changed = true;
       this.appliedClipFilter = true;
       this.lastClipFilterIdx = idx;
     } else if (this.appliedClipFilter) {
       const preset = FILTER_PRESETS[this.activeFilterIndex];
-      ml.targetValues = { ...preset.values };
-      ml.currentValues = { ...preset.values };
-      ml.activeEffect = preset.overlayEffect || null;
+      ml.applyPresetImmediate(preset);
       this.appliedClipFilter = false;
       this.lastClipFilterIdx = -1;
       changed = true;
@@ -3345,6 +3443,38 @@ export class CanvasEngine {
     this.emit('video-progress', this.mediaLayer.getCurrentTime());
   }
 
+  /** C-01: son ısıtılan sonraki klip (id + hedef kaynak zamanı). */
+  private prewarmedClip: { id: string; video: HTMLVideoElement } | null = null;
+  private static readonly PREWARM_LEAD_S = 0.6;
+
+  /**
+   * C-01: Klip sınırından ~0.6 sn önce sıradaki klibin video elementini hazırlar (preload + giriş
+   * noktasına seek => ilk kare çözülür). Geçişte activateClipForPlayback zaten doğru konumda olan
+   * elementte yeniden seek yapmaz; böylece sınırda donma olmaz.
+   */
+  private prewarmNextClip(active: { clip: VideoTrackClip; clipTimelineEnd: number }): void {
+    const remaining = active.clipTimelineEnd - this.nleTimelineTime;
+    if (remaining > CanvasEngine.PREWARM_LEAD_S || remaining < 0) return;
+    const total = this.getTotalTimelineDuration();
+    const nextT = active.clipTimelineEnd >= total - 0.001 ? 0 : active.clipTimelineEnd + 0.001;
+    const next = this.getActiveClipAtTime(nextT);
+    if (!next || next.clip.id === active.clip.id || next.clip.isMotionPhoto) return;
+    const media = next.clip.media;
+    if (!media || media.type !== 'video' || !(media.element instanceof HTMLVideoElement)) return;
+    if (this.mediaLayer && media === this.mediaLayer.media) return;
+    if (this.prewarmedClip && this.prewarmedClip.id === next.clip.id) return;
+    const video = media.element;
+    this.prewarmedClip = { id: next.clip.id, video };
+    try {
+      video.preload = 'auto';
+      video.muted = true;
+      video.playbackRate = next.clip.playbackRate || 1.0;
+      if (Math.abs(video.currentTime - next.localSourceTime) > 0.05) {
+        video.currentTime = next.localSourceTime;
+      }
+    } catch {}
+  }
+
   private activateClipForPlayback(active: {
     clip: VideoTrackClip;
     localSourceTime: number;
@@ -3353,6 +3483,7 @@ export class CanvasEngine {
     if (!ml) return;
 
     this.activePlayingClipId = active.clip.id;
+    if (this.prewarmedClip && this.prewarmedClip.id === active.clip.id) this.prewarmedClip = null;
     this.applyClipTransformToMediaLayer(active.clip);
 
     if (ml.isMotionPhoto) {
@@ -3504,8 +3635,12 @@ export class CanvasEngine {
 
   /** Oynatmayı durdurur. Görünürlük dönüşünde otomatik devam etmez; playVideo() ile sürer. */
   public pauseVideo(): void {
+    // C-02: sayfa gizlenirken (page.tsx / BackgroundAudioGuard görünürlük işleyicileri bizden önce
+    // çalışıp pauseVideo çağırabilir) oynuyorduysak, görünür olunca devam etmek için işaretle.
+    const hiddenAutoPause =
+      typeof document !== 'undefined' && document.hidden && this.isPlaying() && !this.isExportingVideo;
     this.playIntent = false;
-    this.resumeOnVisible = false;
+    this.resumeOnVisible = hiddenAutoPause;
     this.resumeAfterExport = false;
     this.pauseInternal();
   }
@@ -3605,6 +3740,7 @@ export class CanvasEngine {
             this.applyClipTransformToMediaLayer(active.clip);
             const video = ml.getVideoElement();
             if (video) {
+              this.prewarmNextClip(active);
               const targetRate = active.clip.playbackRate || 1.0;
               if (Math.abs(video.playbackRate - targetRate) > 0.01) {
                 video.playbackRate = targetRate;
@@ -3734,6 +3870,7 @@ export class CanvasEngine {
   }
 
   private stopVideoLoop(): void {
+    this.prewarmedClip = null;
     if (this.videoLoopId !== null) {
       cancelAnimationFrame(this.videoLoopId);
       this.videoLoopId = null;
@@ -3805,6 +3942,8 @@ export class CanvasEngine {
       {
         mimeType: 'image/webp',
         quality: 0.92,
+        width: this.width,
+        height: this.height,
         ...(options || {})
       }
     );
@@ -3861,6 +4000,7 @@ export class CanvasEngine {
         : null,
       clips: this.videoClips.map((c) => CanvasEngine.cloneClip(c)),
       filterIndex: this.activeFilterIndex,
+      filterIntensity: this.filterIntensity,
       music: this.musicMeta ? { ...this.musicMeta } : null,
       selectedLayerId: sel && sel.type !== 'media' ? sel.id : null,
       timelineTime: this.nleTimelineTime,
@@ -3915,11 +4055,11 @@ export class CanvasEngine {
     // 3. Filtre (animasyonsuz)
     const total = FILTER_PRESETS.length;
     this.activeFilterIndex = ((snap.filterIndex % total) + total) % total;
+    this.filterIntensity = typeof snap.filterIntensity === 'number' ? Math.max(0, Math.min(1, snap.filterIntensity)) : 1;
     if (ml) {
+      ml.filterIntensity = this.filterIntensity;
       const preset = FILTER_PRESETS[this.activeFilterIndex];
-      ml.targetValues = { ...preset.values };
-      ml.currentValues = { ...preset.values };
-      ml.activeEffect = preset.overlayEffect || null;
+      ml.applyPresetImmediate(preset);
     }
 
     // 4. Klipler
@@ -4086,8 +4226,15 @@ export class CanvasEngine {
       this.snapGuideTimer = null;
     }
     this.canvas.removeEventListener('pointerup', this.onCanvasPointerUp);
+    this.previewResizeObserver?.disconnect();
+    this.previewResizeObserver = null;
+    if (this.previewDprMql && this.onPreviewDprChange) {
+      try { this.previewDprMql.removeEventListener('change', this.onPreviewDprChange); } catch {}
+    }
+    this.previewDprMql = null;
+    this.onPreviewDprChange = null;
     if (typeof document !== 'undefined') {
-      document.removeEventListener('visibilitychange', this.onVisibilityChange);
+      document.removeEventListener('visibilitychange', this.onVisibilityChange, true);
     }
     if (this.mediaLayer) {
       this.mediaLayer.destroy();

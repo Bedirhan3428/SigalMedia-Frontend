@@ -2,7 +2,7 @@
 /* Menü öğeleri render sırasında kurulur; tıklama işleyicileri ref okur (olay anında). */
 /* eslint-disable react-hooks/refs */
 
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { createContext, useContext, useEffect, useRef, useState, type ReactNode } from "react";
 import {
   AlignCenter,
   AlignLeft,
@@ -125,7 +125,19 @@ export interface ReelsMenuProps {
   onActiveToolChange: (key: string | null) => void;
   /** Geri (‹): seçimi kaldırır ve ana menüye döner. */
   onDeselect: () => void;
+  /** "rail": sol dikey araç rayı + sağ denetçi (masaüstü / yatay). Varsayılan "bottom": alt şerit. */
+  variant?: "bottom" | "rail";
+  /** Geri al / yinele sonrası artar; kaydırıcı değerleri motordan yeniden okunur. */
+  restoreSeq?: number;
+  /** Dar/kısa ekran: menü satırı 56 px. */
+  compact?: boolean;
 }
+
+interface MenuCtxValue {
+  variant: "bottom" | "rail";
+  compact: boolean;
+}
+const MenuCtx = createContext<MenuCtxValue>({ variant: "bottom", compact: false });
 
 interface MenuItem {
   key: string;
@@ -142,26 +154,30 @@ const ICON = "w-5 h-5";
 // ───────────────────────── küçük yapı taşları ─────────────────────────
 
 function MenuButton({ item }: { item: MenuItem }) {
+  const { variant, compact } = useContext(MenuCtx);
+  const rail = variant === "rail";
   return (
     <button
       type="button"
       onClick={item.onClick}
       disabled={item.disabled}
       aria-label={item.label}
-      className="flex flex-col items-center justify-center gap-1 h-16 min-w-[72px] rounded-2xl disabled:opacity-35 active:scale-95 transition-transform"
+      className={`flex flex-col items-center justify-center gap-1 rounded-md disabled:opacity-40 active:scale-95 transition-transform focus-visible:outline-2 focus-visible:outline-[var(--ed-sel,#38d5c8)] ${
+        rail ? "h-16 w-full min-w-0 hover:bg-white/5" : compact ? "h-14 min-w-[64px]" : "h-16 min-w-[72px]"
+      }`}
     >
       <span
-        className={`w-12 h-9 rounded-xl flex items-center justify-center ${
+        className={`rounded-md flex items-center justify-center ${compact && !rail ? "w-11 h-7" : "w-12 h-9"} ${
           item.danger
             ? "bg-red-500/15 text-red-400"
             : item.active
-              ? "bg-white text-black"
-              : "bg-[#1c1c1e] text-white"
+              ? "bg-[var(--ed-ac,#38d5c8)] text-[var(--ed-ac-tx,#04201e)]"
+              : "bg-[var(--ed-bg3,#232932)] text-white"
         }`}
       >
         {item.icon}
       </span>
-      <span className={`text-[11px] font-medium leading-none ${item.danger ? "text-red-300" : "text-zinc-200"}`}>
+      <span className={`${compact && !rail ? "text-[10px]" : "text-[11px]"} font-medium leading-none max-w-full truncate ${item.danger ? "text-red-300" : "text-[var(--ed-tx,#e8ecf1)]"}`}>
         {item.label}
       </span>
     </button>
@@ -169,23 +185,49 @@ function MenuButton({ item }: { item: MenuItem }) {
 }
 
 function ToolPanel({ title, onClose, children }: { title: string; onClose: () => void; children: ReactNode }) {
+  const { variant } = useContext(MenuCtx);
+  if (variant === "rail") {
+    // Denetçi: sağda sabit panel (geometri ReelsEditor'daki --rp-* değişkenlerinden)
+    return (
+      <div
+        role="region"
+        aria-label={title}
+        style={{ top: "var(--rp-top)", bottom: "var(--rp-bottom)", width: "var(--rp-w)" }}
+        className="fixed right-0 z-50 bg-[var(--ed-bg1,#12151a)] border-l border-[var(--ed-line,#2a303a)] flex flex-col pointer-events-auto"
+      >
+        <div className="flex items-center justify-between gap-2 px-3 h-12 shrink-0 border-b border-[var(--ed-line,#2a303a)]">
+          <span className="text-[15px] font-semibold text-white truncate">{title}</span>
+          <button
+            type="button"
+            aria-label="Tamam"
+            onClick={onClose}
+            className="h-9 px-3 rounded-md bg-[var(--ed-ac,#38d5c8)] text-[var(--ed-ac-tx,#04201e)] text-xs font-bold flex items-center gap-1.5 active:scale-95 transition-transform"
+          >
+            <Check className="w-4 h-4 stroke-[2.5]" />
+            Tamam
+          </button>
+        </div>
+        <div className="flex-1 min-h-0 overflow-y-auto px-3 py-3 flex flex-col gap-2">{children}</div>
+      </div>
+    );
+  }
   return (
     <div
       style={{ height: REELS_MENU_HEIGHT }}
-      className="absolute inset-x-0 bottom-0 z-20 bg-black border-t border-white/10 flex items-stretch gap-2 px-3 py-1.5"
+      className="absolute inset-x-0 bottom-0 z-20 bg-[var(--ed-bg1,#12151a)] border-t border-[var(--ed-line,#2a303a)] flex items-stretch gap-2 px-3 py-1.5"
     >
       <div className="flex flex-col items-center gap-1 shrink-0 w-12">
         <button
           type="button"
           aria-label="Tamam"
           onClick={onClose}
-          className="w-11 h-11 rounded-full bg-white text-black flex items-center justify-center active:scale-90 transition-transform"
+          className="w-11 h-11 rounded-full bg-[var(--ed-ac,#38d5c8)] text-[var(--ed-ac-tx,#04201e)] flex items-center justify-center active:scale-90 transition-transform"
         >
           <Check className="w-5 h-5 stroke-[2.5]" />
         </button>
-        <span className="text-[10px] font-semibold text-zinc-400 text-center leading-tight">{title}</span>
+        <span className="text-[10px] font-semibold text-[var(--ed-tx2,#98a2b3)] text-center leading-tight">{title}</span>
       </div>
-      <div className="flex-1 min-w-0 h-full overflow-y-auto no-scrollbar flex flex-col justify-center">{children}</div>
+      <div className="flex-1 min-w-0 h-full overflow-y-auto no-scrollbar flex flex-col [&>*]:my-auto">{children}</div>
     </div>
   );
 }
@@ -197,6 +239,7 @@ function RangeRow({
   max,
   suffix = "",
   onChange,
+  stacked = false,
 }: {
   label: string;
   value: number;
@@ -204,26 +247,52 @@ function RangeRow({
   max: number;
   suffix?: string;
   onChange: (v: number) => void;
+  /** Etiket + değer üstte, kaydırıcı tam genişlikte altta (Ayarla, denetçi). */
+  stacked?: boolean;
 }) {
   const [v, setV] = useState(value);
   const pct = ((v - min) / (max - min)) * 100;
+  const input = (
+    <input
+      type="range"
+      min={min}
+      max={max}
+      value={v}
+      aria-label={label}
+      aria-valuetext={`${label} ${v}${suffix}`}
+      style={{ ["--range-pct" as string]: `${pct}%` }}
+      onChange={(e) => {
+        const n = Number(e.target.value);
+        setV(n);
+        onChange(n);
+      }}
+      onDoubleClick={() => {
+        // çift tık: varsayılana (0 ya da en küçük değer) sıfırla
+        const def = min < 0 ? 0 : min;
+        setV(def);
+        onChange(def);
+      }}
+      className={`editor-range min-w-0 !h-11 ${stacked ? "w-full" : "flex-1"}`}
+    />
+  );
+  if (stacked) {
+    return (
+      <label className="flex flex-col min-w-0 w-full">
+        <span className="flex items-center justify-between text-[12px] text-[var(--ed-tx,#e8ecf1)] leading-none">
+          <span className="truncate">{label}</span>
+          <span className="font-mono font-medium tabular-nums text-white">
+            {v}
+            {suffix}
+          </span>
+        </span>
+        {input}
+      </label>
+    );
+  }
   return (
     <label className="flex items-center gap-2 min-w-0">
-      <span className="text-[11px] text-zinc-400 w-[60px] shrink-0 truncate">{label}</span>
-      <input
-        type="range"
-        min={min}
-        max={max}
-        value={v}
-        aria-label={label}
-        style={{ ["--range-pct" as string]: `${pct}%` }}
-        onChange={(e) => {
-          const n = Number(e.target.value);
-          setV(n);
-          onChange(n);
-        }}
-        className="editor-range flex-1 min-w-0"
-      />
+      <span className="text-[11px] text-[var(--ed-tx2,#98a2b3)] w-[60px] shrink-0 truncate">{label}</span>
+      {input}
       <span className="w-10 text-right text-[11px] font-semibold tabular-nums text-white">
         {v}
         {suffix}
@@ -249,8 +318,8 @@ function Chip({
       onClick={onClick}
       disabled={disabled}
       aria-pressed={active}
-      className={`h-11 px-3.5 rounded-xl text-xs font-semibold shrink-0 border flex items-center justify-center gap-1.5 active:scale-95 transition-all disabled:opacity-40 ${
-        active ? "bg-amber-400 text-black border-amber-400" : "bg-[#1c1c1e] text-zinc-100 border-white/10"
+      className={`h-11 px-3.5 rounded-md text-xs font-semibold shrink-0 border flex items-center justify-center gap-1.5 active:scale-95 transition-all disabled:opacity-40 ${
+        active ? "bg-[var(--ed-ac-soft,rgba(56,213,200,.14))] text-[var(--ed-ac,#38d5c8)] border-[var(--ed-ac,#38d5c8)]" : "bg-[var(--ed-bg3,#232932)] text-[var(--ed-tx,#e8ecf1)] border-[var(--ed-line,#2a303a)]"
       }`}
     >
       {children}
@@ -292,7 +361,7 @@ function Tile({
           height: h,
           background: src ? undefined : `radial-gradient(circle at 30% 30%, ${tint || "#3f3f46"}, #111827)`,
         }}
-        className={`relative rounded-xl overflow-hidden border-2 block ${active ? "border-white" : "border-transparent"}`}
+        className={`relative rounded-md overflow-hidden border-2 block ${active ? "border-white" : "border-transparent"}`}
       >
         {src && (
           // eslint-disable-next-line @next/next/no-img-element
@@ -306,7 +375,7 @@ function Tile({
         )}
         {tint && src && <span className="absolute inset-0" style={{ background: tint, opacity: 0.32 }} />}
       </span>
-      <span className={`text-[10px] leading-none truncate max-w-full ${active ? "text-white font-semibold" : "text-zinc-400"}`}>
+      <span className={`text-[10px] leading-none truncate max-w-full ${active ? "text-white font-semibold" : "text-[var(--ed-tx2,#98a2b3)]"}`}>
         {label}
       </span>
     </button>
@@ -335,11 +404,12 @@ function AdjustPanel({
 }) {
   const [resetKey, setResetKey] = useState(0);
   return (
-    <div key={resetKey} className="grid grid-cols-2 gap-x-3 gap-y-0.5 items-center">
+    <div key={resetKey} className="flex flex-col gap-0.5">
       {ADJUST_FIELDS.map((f) => (
         <RangeRow
           key={f.key}
           label={f.label}
+          stacked
           min={f.min}
           max={100}
           value={Math.round(Number(initial[f.key] ?? 0))}
@@ -352,7 +422,7 @@ function AdjustPanel({
           onReset();
           setResetKey((k) => k + 1);
         }}
-        className="col-span-2 h-7 -mt-1 text-[11px] font-semibold text-zinc-400 active:text-white"
+        className="h-11 text-xs font-semibold text-[var(--ed-tx,#e8ecf1)] active:text-white"
       >
         Sıfırla
       </button>
@@ -373,24 +443,42 @@ function FiltersPanel({
   onPick: (index: number | null) => void;
 }) {
   // Panel açılırken geçerli kare bir kez yakalanır; her kareye CSS filtresi uygulanır
-  const [frame] = useState(() => captureFramePreview(engine.getMedia()?.element, 72, 96));
+  // Yoğunluk: motor setFilterIntensity/getFilterIntensity sağlıyorsa gösterilir (BUG-28)
+  const ie = engine as unknown as { setFilterIntensity?: (v: number) => void; getFilterIntensity?: () => number };
+  const hasIntensity = typeof ie.setFilterIntensity === "function" && typeof ie.getFilterIntensity === "function";
+  const tw = hasIntensity ? 56 : 72;
+  const th = hasIntensity ? 64 : 96;
+  const [frame] = useState(() => captureFramePreview(engine.getMedia()?.element, tw, th));
+  const initialIntensity = hasIntensity ? Math.round((ie.getFilterIntensity?.() ?? 1) * 100) : 100;
   return (
-    <div className="flex items-start gap-2 overflow-x-auto no-scrollbar h-full py-0.5">
-      {inheritable && (
-        <Tile src={frame} label="Genel" active={activeIndex === null} w={72} h={96} onClick={() => onPick(null)} />
-      )}
-      {FILTER_PRESETS.map((p, i) => (
-        <Tile
-          key={p.id}
-          src={frame}
-          label={p.name}
-          active={activeIndex === i}
-          w={72}
-          h={96}
-          cssFilter={p.cssFilter}
-          onClick={() => onPick(i)}
+    <div className="flex flex-col gap-0.5 h-full min-w-0 py-0.5">
+      <div className="flex items-start gap-2 overflow-x-auto no-scrollbar">
+        {inheritable && (
+          <Tile src={frame} label="Genel" active={activeIndex === null} w={tw} h={th} onClick={() => onPick(null)} />
+        )}
+        {FILTER_PRESETS.map((p, i) => (
+          <Tile
+            key={p.id}
+            src={frame}
+            label={p.name}
+            active={activeIndex === i}
+            w={tw}
+            h={th}
+            cssFilter={p.cssFilter}
+            onClick={() => onPick(i)}
+          />
+        ))}
+      </div>
+      {hasIntensity && (
+        <RangeRow
+          label="Yoğunluk"
+          min={0}
+          max={100}
+          suffix="%"
+          value={initialIntensity}
+          onChange={(v) => ie.setFilterIntensity?.(v / 100)}
         />
-      ))}
+      )}
     </div>
   );
 }
@@ -470,7 +558,7 @@ function StickersPanel({
           type="button"
           onClick={() => setTab("stk")}
           className={`h-8 px-3 rounded-full text-[11px] font-semibold shrink-0 ${
-            tab === "stk" ? "bg-white text-black" : "bg-[#1c1c1e] text-zinc-200"
+            tab === "stk" ? "bg-[var(--ed-ac-soft,rgba(56,213,200,.14))] text-[var(--ed-ac,#38d5c8)]" : "bg-[var(--ed-bg3,#232932)] text-[var(--ed-tx,#e8ecf1)]"
           }`}
         >
           Çıkartma
@@ -482,7 +570,7 @@ function StickersPanel({
             aria-label={c.label}
             onClick={() => setTab(c.id)}
             className={`h-8 min-w-9 px-2 rounded-full text-base shrink-0 ${
-              tab === c.id ? "bg-white" : "bg-[#1c1c1e]"
+              tab === c.id ? "bg-[var(--ed-ac,#38d5c8)]" : "bg-[var(--ed-bg3,#232932)]"
             }`}
           >
             {c.icon}
@@ -565,6 +653,8 @@ export default function ReelsMenu(props: ReelsMenuProps) {
   } = props;
   const toast = useEditorToast();
   const clipId = clip?.id ?? null;
+  const rail = props.variant === "rail";
+  const compact = Boolean(props.compact);
 
   const [tool, setTool] = useState<ActiveTool | null>(null);
   const [backedOutFor, setBackedOutFor] = useState<string | null>(null);
@@ -899,6 +989,7 @@ export default function ReelsMenu(props: ReelsMenuProps) {
         panel = (
           <ToolPanel title="Filtre" onClose={closeTool}>
             <FiltersPanel
+              key={`flt:${props.restoreSeq ?? 0}`}
               engine={engine}
               inheritable={clipScope}
               activeIndex={clipScope ? (clip?.filterIndex ?? null) : activeFilterIndex}
@@ -915,7 +1006,7 @@ export default function ReelsMenu(props: ReelsMenuProps) {
           <ToolPanel title="Ayarla" onClose={closeTool}>
             {clipScope && clip ? (
               <AdjustPanel
-                key={clip.id}
+                key={`${clip.id}:${props.restoreSeq ?? 0}`}
                 initial={clip.adjustments ?? {}}
                 onChange={(k, v) => engine.updateClipAdjustments(clip.id, { [k]: v })}
                 onReset={() =>
@@ -931,6 +1022,7 @@ export default function ReelsMenu(props: ReelsMenuProps) {
               />
             ) : (
               <AdjustPanel
+                key={`post:${props.restoreSeq ?? 0}`}
                 initial={engine.getPostAdjustments()}
                 onChange={(k, v) => engine.setPostAdjustments({ [k]: v })}
                 onReset={() => engine.resetPostAdjustments()}
@@ -1070,7 +1162,7 @@ export default function ReelsMenu(props: ReelsMenuProps) {
             <div className="flex flex-col gap-2">
               <span className="text-xs font-semibold text-white">Klip ters çevriliyor… %{Math.round(reverseProgress * 100)}</span>
               <div className="h-2 rounded-full bg-white/15 overflow-hidden">
-                <div className="h-full bg-amber-400 transition-[width] duration-150" style={{ width: `${Math.round(reverseProgress * 100)}%` }} />
+                <div className="h-full bg-[var(--ed-ac,#38d5c8)] transition-[width] duration-150" style={{ width: `${Math.round(reverseProgress * 100)}%` }} />
               </div>
               <div>
                 <Chip onClick={() => reverseAbortRef.current?.abort()}>İptal</Chip>
@@ -1086,7 +1178,7 @@ export default function ReelsMenu(props: ReelsMenuProps) {
               <div className="flex flex-col gap-1.5">
                 <div className="flex items-center gap-2 overflow-x-auto no-scrollbar">
                   <Chip onClick={photo.cycleShape}>
-                    <Crop className="w-4 h-4 text-amber-400" />
+                    <Crop className="w-4 h-4 text-[var(--ed-ac,#38d5c8)]" />
                     Şekil
                   </Chip>
                   <Chip onClick={() => photo.patch((t) => ({ ...t, rotation: (t.rotation + 90) % 360 }))}>
@@ -1115,7 +1207,7 @@ export default function ReelsMenu(props: ReelsMenuProps) {
   }
 
   return (
-    <>
+    <MenuCtx.Provider value={{ variant: rail ? "rail" : "bottom", compact }}>
       <input ref={replaceInputRef} type="file" accept="image/*,video/*" className="hidden" onChange={handleReplaceFile} />
       <input ref={overlayInputRef} type="file" accept="image/*" className="hidden" onChange={handleOverlayFile} />
       <input ref={replaceOverlayInputRef} type="file" accept="image/*" className="hidden" onChange={handleReplaceOverlayFile} />
@@ -1123,12 +1215,18 @@ export default function ReelsMenu(props: ReelsMenuProps) {
 
       {/* Menüler tek satır (yatay kaydırma); yalnızca bir araç paneli açıkken alan büyür */}
       <div
-        style={{ height: REELS_MENU_ROW_HEIGHT }}
-        className="relative shrink-0 bg-black"
+        style={rail ? undefined : { height: compact ? REELS_MENU_ROW_HEIGHT - 20 : REELS_MENU_ROW_HEIGHT }}
+        className={rail ? "relative h-full bg-transparent" : "relative shrink-0 bg-[var(--ed-bg1,#12151a)]"}
       >
         {/* Ana menü */}
-        <div className="absolute inset-0 overflow-x-auto no-scrollbar touch-pan-x px-1 flex items-center">
-          <div className="flex items-center w-max">
+        <div
+          className={
+            rail
+              ? "absolute inset-0 overflow-y-auto no-scrollbar p-1"
+              : "absolute inset-0 overflow-x-auto no-scrollbar touch-pan-x px-1 flex items-center"
+          }
+        >
+          <div className={rail ? "grid grid-cols-2 gap-0.5 content-start" : "flex items-center w-max"}>
             {mainItems.map((it) => (
               <MenuButton key={it.key} item={it} />
             ))}
@@ -1137,7 +1235,7 @@ export default function ReelsMenu(props: ReelsMenuProps) {
 
         {/* Düzenle alt menüsü: ana menüyle aynı alanı kaplar */}
         {editOpen && (
-          <div className="absolute inset-0 z-10 bg-black flex items-stretch">
+          <div className={`absolute inset-0 z-10 flex items-stretch ${rail ? "flex-col bg-[var(--ed-bg1,#12151a)]" : "bg-[var(--ed-bg1,#12151a)]"}`}>
             <button
               type="button"
               aria-label="Geri"
@@ -1146,12 +1244,19 @@ export default function ReelsMenu(props: ReelsMenuProps) {
                 setBackedOutFor(null);
                 onDeselect();
               }}
-              className="w-11 shrink-0 flex items-center justify-center text-white bg-white/5 active:bg-white/10"
+              className={`shrink-0 flex items-center justify-center text-white bg-white/5 active:bg-white/10 ${rail ? "h-11 w-full gap-1 text-xs font-semibold" : "w-11"}`}
             >
               <ChevronLeft className="w-6 h-6" />
+              {rail && <span>Geri</span>}
             </button>
-            <div className="flex-1 min-w-0 overflow-x-auto no-scrollbar touch-pan-x px-1 flex items-center">
-              <div className="flex items-center w-max">
+            <div
+              className={
+                rail
+                  ? "flex-1 min-h-0 overflow-y-auto no-scrollbar p-1"
+                  : "flex-1 min-w-0 overflow-x-auto no-scrollbar touch-pan-x px-1 flex items-center"
+              }
+            >
+              <div className={rail ? "grid grid-cols-2 gap-0.5 content-start" : "flex items-center w-max"}>
                 {editItems.map((it) => (
                   <MenuButton key={it.key} item={it} />
                 ))}
@@ -1186,7 +1291,7 @@ export default function ReelsMenu(props: ReelsMenuProps) {
           />
         )}
       </Sheet>
-    </>
+    </MenuCtx.Provider>
   );
 }
 
@@ -1212,7 +1317,7 @@ function AnimationPanel({ engine, clip }: { engine: CanvasEngine; clip: VideoTra
         ] as const
       ).map(([label, value, setter, field]) => (
         <div key={field} className="flex items-center gap-2">
-          <span className="text-[11px] text-zinc-400 w-9 shrink-0">{label}</span>
+          <span className="text-[11px] text-[var(--ed-tx2,#98a2b3)] w-9 shrink-0">{label}</span>
           <div className="flex items-center gap-1.5 overflow-x-auto no-scrollbar">
             {ANIM_KINDS.map((k) => (
               <button
@@ -1224,7 +1329,7 @@ function AnimationPanel({ engine, clip }: { engine: CanvasEngine; clip: VideoTra
                   engine.updateClipAnimation(clip.id, { [field]: k.id });
                 }}
                 className={`h-8 px-3 rounded-full text-[11px] font-semibold shrink-0 ${
-                  value === k.id ? "bg-amber-400 text-black" : "bg-[#1c1c1e] text-zinc-200"
+                  value === k.id ? "bg-[var(--ed-ac-soft,rgba(56,213,200,.14))] text-[var(--ed-ac,#38d5c8)]" : "bg-[var(--ed-bg3,#232932)] text-[var(--ed-tx,#e8ecf1)]"
                 }`}
               >
                 {k.label}
@@ -1248,18 +1353,21 @@ function AnimationPanel({ engine, clip }: { engine: CanvasEngine; clip: VideoTra
 function VolumePanel({ engine, clip }: { engine: CanvasEngine; clip: VideoTrackClip }) {
   const [vol, setVol] = useState(clip.muted ? 0 : Math.round(clip.volume * 100));
   const [nonce, setNonce] = useState(0);
+  // Sessize alınırken önceki seviye saklanır; aç = o seviyeye dön (D-r11: %27 → mute → %27)
+  const prevVol = useRef(vol > 0 ? vol : 100);
+  if (vol > 0) prevVol.current = vol;
   return (
     <div className="flex items-center gap-2">
       <button
         type="button"
         aria-label={vol === 0 ? "Sesi aç" : "Sessize al"}
         onClick={() => {
-          const next = vol > 0 ? 0 : 100;
+          const next = vol > 0 ? 0 : prevVol.current;
           setVol(next);
           setNonce((n) => n + 1);
           engine.updateClipVolume(clip.id, next / 100, next === 0);
         }}
-        className="w-11 h-11 rounded-xl bg-[#1c1c1e] flex items-center justify-center shrink-0"
+        className="w-11 h-11 rounded-md bg-[var(--ed-bg3,#232932)] flex items-center justify-center shrink-0"
       >
         {vol === 0 ? <VolumeX className="w-5 h-5 text-red-400" /> : <Volume2 className="w-5 h-5 text-white" />}
       </button>
@@ -1311,7 +1419,7 @@ function ColorRow({ engine, layer }: { engine: CanvasEngine; layer: TextLayer })
           }}
           style={{ backgroundColor: c }}
           className={`w-9 h-9 rounded-full shrink-0 border-2 active:scale-90 transition-transform ${
-            color === c.toUpperCase() ? "border-amber-400" : "border-white/25"
+            color === c.toUpperCase() ? "border-[var(--ed-ac,#38d5c8)]" : "border-[var(--ed-line2,#3a4350)]"
           }`}
         />
       ))}

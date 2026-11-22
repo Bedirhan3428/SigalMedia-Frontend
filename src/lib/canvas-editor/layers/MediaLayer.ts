@@ -44,6 +44,33 @@ export class MediaLayer extends BaseLayer {
   public currentValues: FilterValues = { ...DEFAULT_FILTER_VALUES };
   public targetValues: FilterValues = { ...DEFAULT_FILTER_VALUES };
   public activeEffect: OverlayEffect = null;
+  /** WP-14: filtre yoğunluğu 0..1 (0 = filtresiz, 1 = tam preset). */
+  public filterIntensity = 1;
+  private lastPreset: FilterPreset | null = null;
+
+  /** Preset değerlerini yoğunluğa göre DEFAULT ile harmanlar. */
+  public blendPresetValues(preset: FilterPreset): FilterValues {
+    const t = Math.max(0, Math.min(1, this.filterIntensity));
+    const out = { ...DEFAULT_FILTER_VALUES };
+    (Object.keys(out) as (keyof FilterValues)[]).forEach((k) => {
+      out[k] = DEFAULT_FILTER_VALUES[k] + (preset.values[k] - DEFAULT_FILTER_VALUES[k]) * t;
+    });
+    return out;
+  }
+
+  /** Animasyonsuz preset uygulaması (klip filtresi / restore). */
+  public applyPresetImmediate(preset: FilterPreset) {
+    this.lastPreset = preset;
+    this.targetValues = this.blendPresetValues(preset);
+    this.currentValues = { ...this.targetValues };
+    this.activeEffect = this.filterIntensity > 0 ? preset.overlayEffect || null : null;
+  }
+
+  public setFilterIntensity(v: number, onRender?: () => void) {
+    this.filterIntensity = Math.max(0, Math.min(1, v));
+    if (this.lastPreset) this.applyPresetImmediate(this.lastPreset);
+    if (onRender) onRender();
+  }
 
   // [START] CREATED BY Bedirhan
   public trimStart: number = 0;
@@ -207,8 +234,9 @@ export class MediaLayer extends BaseLayer {
    * Hedef filtre presetine LERP ile pürüzsüz geçiş (Aktif = Aktif + (Hedef - Aktif) * 0.15)
    */
   public setPreset(preset: FilterPreset, onRender?: () => void) {
-    this.targetValues = { ...preset.values };
-    this.activeEffect = preset.overlayEffect || null;
+    this.lastPreset = preset;
+    this.targetValues = this.blendPresetValues(preset);
+    this.activeEffect = this.filterIntensity > 0 ? preset.overlayEffect || null : null;
     if (onRender) this.onRenderCallback = onRender;
 
     if (this.animFrameId !== null) {
@@ -317,6 +345,55 @@ export class MediaLayer extends BaseLayer {
       width: dims.width,
       height: dims.height
     };
+  }
+
+  /**
+   * Export hızlı yolu: tam kare medya (kimlik dönüşümü, kırpma/filtre/efekt/animasyon yok) ve tuvali
+   * eksiksiz kaplıyorsa tek drawImage ile basar; görsel çıktı render() ile aynıdır. Uygun değilse false.
+   */
+  public renderFullFrameFast(
+    ctx: CanvasRenderingContext2D,
+    canvasWidth: number,
+    canvasHeight: number,
+    externalSource?: CanvasImageSource
+  ): boolean {
+    const src = externalSource || this.media.element;
+    if (!this.visible || !src) return false;
+    const t = this.transform;
+    if (
+      this.activeEffect ||
+      this.reelsEffect !== 'none' ||
+      this.effectClips.length > 0 ||
+      this.clipRetouch > 0.01 ||
+      this.clipOpacity < 0.999 ||
+      this.clipAnimation ||
+      this.isInteracting ||
+      t.flipH || t.flipV ||
+      Math.abs(t.rotation) > 0.01 ||
+      Math.abs(t.scale - 1) > 0.001 ||
+      Math.abs(t.x - 0.5) > 0.0005 ||
+      Math.abs(t.y - 0.5) > 0.0005 ||
+      ctx.globalAlpha !== 1
+    ) return false;
+    const cr = this.cropRect;
+    if (cr && (cr.x > 0.002 || cr.y > 0.002 || cr.width < 0.998 || cr.height < 0.998)) return false;
+    if (!ImageAdjustmentsEngine.isDefaultAdjustments(this.getEffectiveAdjustments())) return false;
+    if (this.getFilterString() !== 'none') return false;
+    const center = this.getPixelPosition(canvasWidth, canvasHeight);
+    const dims = this.getBaseDimensions(canvasWidth, canvasHeight);
+    const l = center.x - dims.width / 2;
+    const tp = center.y - dims.height / 2;
+    // Tuvali tamamen kaplamalı (arka plan atlanır) ve köşe yuvarlama kırpması oluşmamalı
+    if (l > 0.01 || tp > 0.01 || l + dims.width < canvasWidth - 0.01 || tp + dims.height < canvasHeight - 0.01) return false;
+    const mediaAspect = (this.media.width || 1) / (this.media.height || 1);
+    const cornerFree =
+      !this.roundCornersWhenDetached ||
+      Math.abs(mediaAspect - canvasWidth / canvasHeight) < 0.025;
+    if (!cornerFree) return false;
+    this.lastCanvasW = canvasWidth;
+    this.lastCanvasH = canvasHeight;
+    ctx.drawImage(src, l, tp, dims.width, dims.height);
+    return true;
   }
 
   public override render(

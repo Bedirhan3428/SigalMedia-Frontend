@@ -29,15 +29,25 @@ import {
   FILTER_PRESETS,
   getMusicFadeGain,
   getMusicTimelineRange,
+  isMediaLoadError,
 } from "@/lib/canvas-editor";
 import MusicPickerDrawer from "@/components/share/MusicPickerDrawer";
 import MusicSettingsPanel from "@/components/share/MusicSettingsPanel";
 // [START] CREATED BY Bedirhan
 import ExportProgress from "@/components/share/ExportProgress";
 import ModeSelectorModal from "@/components/share/ModeSelectorModal";
+import {
+  ConfirmDialog,
+  EditorBackStackProvider,
+  useBackLayer,
+  useEditorBackStack,
+} from "@/components/share/common";
 import StoryEditor from "@/components/share/story/StoryEditor";
 import ReelsEditor from "@/components/share/reels/ReelsEditor";
 import PostEditor from "@/components/share/post/PostEditor";
+import { DraftAutosaver } from "@/lib/drafts/DraftAutosaver";
+import { deleteDraft, listDrafts, loadDraftFiles, requestPersistence, type DraftMode, type DraftRecord } from "@/lib/drafts/DraftStore";
+import { adoptBlobKey, applyDraft, baseMediaKeyOf, type DraftState } from "@/lib/drafts/serialize";
 // [END] CREATED BY Bedirhan
 // [MODIFIED BY Bedirhan]
 import {
@@ -99,6 +109,28 @@ const INITIAL_VIDEO_STATE: VideoState = {
 // [END] CREATED BY Bedirhan
 
 let hasHandledShareReload = false;
+
+// F-03: sayfanın kendi içinde açtığı katmanları (çekmeceler, metin odak modu) geri yığınına kaydeder
+function PageBackLayer({ open, onClose }: { open: boolean; onClose: () => void }) {
+  useBackLayer(open, onClose);
+  return null;
+}
+
+// F-05: "en az bir düzenleme" tespiti. Medya yüklendikten sonraki belge durumunun imzası; ilk
+// imzadan farklıysa düzenleme vardır (yalnız medya yüklemek kirli sayılmaz).
+function editSignature(engine: CanvasEngine, music: StoryAudioMeta | null): string {
+  const s = engine.snapshot();
+  return JSON.stringify([
+    s.mode,
+    s.postAspect,
+    s.layers.map(({ layer, state }) => [layer.id, state]),
+    s.media,
+    s.clips.map((c) => ({ ...c, thumbnails: undefined })),
+    s.filterIndex,
+    s.music,
+    music,
+  ]);
+}
 
 export default function ShareStoryPage() {
   const [mounted, setMounted] = useState(false);
@@ -172,6 +204,20 @@ export default function ShareStoryPage() {
   // İşlem Durumları
   const [isPublishing, setIsPublishing] = useState(false);
   const [showExitConfirm, setShowExitConfirm] = useState(false);
+  // F-01/F-02: medya yüklüyken seçilen farklı mod, onay bekler
+  const [pendingMode, setPendingMode] = useState<ShareMode | null>(null);
+  // WP-09: bulunan taslak (geri yükle / sil teklifi)
+  const [draftOffer, setDraftOffer] = useState<DraftRecord<DraftState> | null>(null);
+  const [draftBusy, setDraftBusy] = useState(false);
+  const autosaverRef = useRef<DraftAutosaver | null>(null);
+  const isDirtyRef = useRef<() => boolean>(() => false);
+  const musicVolumeRef = useRef(0.85);
+  // F-05: medya yüklendiği andaki belge imzası; farklıysa "düzenleme var"
+  const baselineSigRef = useRef<string | null>(null);
+  const selectedMusicRef = useRef<StoryAudioMeta | null>(null);
+  useEffect(() => {
+    selectedMusicRef.current = selectedMusic;
+  }, [selectedMusic]);
 
   const openTextEditorRef = useRef<(layer?: TextLayer) => void>(() => {});
 
@@ -183,7 +229,8 @@ export default function ShareStoryPage() {
       sessionStorage.removeItem("sigal_editor_reloaded");
       sessionStorage.removeItem("sigal_editor_active");
 
-      // Yalnızca /share üzerinde tarayıcı yenilemesi (F5 / Reload) yapılmışsa ana sayfaya yönlendir
+      // Yalnızca /share üzerinde tarayıcı yenilemesi (F5 / Reload) yapılmışsa ve taslak yoksa ana sayfaya yönlendir
+      let redirectIfNoDraft = false;
       if (!hasHandledShareReload) {
         hasHandledShareReload = true;
         const navEntries = performance.getEntriesByType("navigation") as PerformanceNavigationTiming[];
@@ -191,10 +238,19 @@ export default function ShareStoryPage() {
         const wasOnShare = navEntries.length > 0 && (navEntries[0].name.endsWith("/share") || navEntries[0].name.includes("/share?"));
 
         if (isReload && wasOnShare) {
-          router.replace("/");
-          return;
+          redirectIfNoDraft = true;
         }
       }
+      // WP-09: kayıtlı taslak varsa geri yükle / sil teklif et; yenilemede taslak yoksa eski yönlendirme
+      listDrafts()
+        .then((drafts) => {
+          if (drafts.length > 0) setDraftOffer(drafts[0] as DraftRecord<DraftState>);
+          else if (redirectIfNoDraft) router.replace("/");
+        })
+        .catch(() => {
+          if (redirectIfNoDraft) router.replace("/");
+        });
+      void requestPersistence();
     }
 
     // Tuvali ve arkaplanı kesin olarak sıfırla, yeni bir tuval anahtarı üret
@@ -230,9 +286,24 @@ export default function ShareStoryPage() {
     };
   }, [router]);
 
+  // F-11: önizleme sesini bırak (durdur, kaynağı kaldır, ref'i boşalt). Aksi halde ayrılmış Audio
+  // öğesi resetEditor kapanışındaki previewAudioRef üzerinden yaşar ve her editör açılışında sızar.
+  const releasePreviewAudio = useCallback(() => {
+    const audio = previewAudioRef.current;
+    previewAudioRef.current = null;
+    if (!audio) return;
+    audio.pause();
+    audio.removeAttribute("src");
+    audio.load();
+  }, []);
+
   // [MODIFIED BY Bedirhan]
   // Editörü Tamamen Temizleme Fonksiyonu
   const resetEditor = useCallback(() => {
+    // WP-09: kullanıcı düzenlemeleri bilerek siliyor -> taslak da silinir (düzenleme yoksa eski taslağa dokunma)
+    if (engineRef.current && isDirtyRef.current()) {
+      void autosaverRef.current?.discard(shareModeRef.current as DraftMode);
+    }
     if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
     exportAbortRef.current?.abort();
     thumbAbortRef.current?.abort();
@@ -275,24 +346,20 @@ export default function ShareStoryPage() {
     setActiveFilterIndex(0);
     setActiveReelsEffect("none");
     setEffectClips([]);
-    if (previewAudioRef.current) {
-      previewAudioRef.current.pause();
-      previewAudioRef.current.src = "";
-    }
+    releasePreviewAudio();
+    baselineSigRef.current = null;
+    setPendingMode(null);
     setShowExitConfirm(false);
-  }, []);
+  }, [releasePreviewAudio]);
 
   // Sayfadan çıkışta sesi tamamen durdur
   useEffect(() => {
     return () => {
       exportAbortRef.current?.abort();
       thumbAbortRef.current?.abort();
-      if (previewAudioRef.current) {
-        previewAudioRef.current.pause();
-        previewAudioRef.current.src = "";
-      }
+      releasePreviewAudio();
     };
-  }, []);
+  }, [releasePreviewAudio]);
 
   // [START] CREATED BY Bedirhan
   // Arka plana geçildiğinde (document.hidden) oynatmayı ve sesleri derhal duraklat, Android bildirim çubuğunda medya çaları gizle
@@ -328,18 +395,19 @@ export default function ShareStoryPage() {
   // Canlı Önizleme Ses Senkronizasyonu: Timeline üzerindeki şarkı kesimi (timelineStart..timelineEnd) ile birebir senkronize çalar
   useEffect(() => {
     if (typeof window === "undefined") return;
+    // Story önizleme sesi story/StoryEditor içinde yönetilir (B12)
+    if (shareMode === "story" || !selectedMusic?.streamUrl || !hasMedia || isExportingVideo || isMusicDrawerOpen) {
+      const idle = previewAudioRef.current;
+      if (idle && !idle.paused) idle.pause();
+      return;
+    }
+    // Audio yalnız gerçekten çalınacağı zaman oluşturulur (boşta ayrılmış öğe tutulmaz)
     if (!previewAudioRef.current) {
       previewAudioRef.current = new Audio();
       previewAudioRef.current.crossOrigin = "anonymous";
       previewAudioRef.current.preload = "auto";
     }
     const audio = previewAudioRef.current;
-
-    // Story önizleme sesi story/StoryEditor içinde yönetilir (B12)
-    if (shareMode === "story" || !selectedMusic?.streamUrl || !hasMedia || isExportingVideo || isMusicDrawerOpen) {
-      if (!audio.paused) audio.pause();
-      return;
-    }
 
     if (audio.src !== selectedMusic.streamUrl) {
       audio.src = selectedMusic.streamUrl;
@@ -448,42 +516,56 @@ export default function ShareStoryPage() {
   // [END] CREATED BY Bedirhan
   
 
-  // Geri Butonu Tıklaması
-  const handleBackClick = () => {
-    if (hasMedia) {
-      setShowExitConfirm(true);
-    } else {
-      router.back();
+  // F-05: en az bir düzenleme var mı (yalnız medya yüklemek kirli sayılmaz)
+  const isDirty = useCallback((): boolean => {
+    const engine = engineRef.current;
+    const base = baselineSigRef.current;
+    if (!engine || base === null) return false;
+    try {
+      return editSignature(engine, selectedMusicRef.current) !== base;
+    } catch {
+      return true;
     }
+  }, []);
+
+  // F-03: tarayıcı/donanım Geri tuşu önce en üstteki katmanı kapatır; katman yoksa çıkış istenir
+  const exitRequestRef = useRef<() => void>(() => {});
+  const backStack = useEditorBackStack({ onExitRequest: () => exitRequestRef.current() });
+
+  // Editörden ayrıl: önce geri koruma girdisini kaldır (history.back() tuzağı), sonra sıfırla ve git
+  const leaveEditor = useCallback(
+    async (dest: "back" | "home") => {
+      await backStack.release();
+      resetEditor();
+      if (dest === "home") router.replace("/");
+      else router.back();
+    },
+    [backStack, resetEditor, router]
+  );
+
+  // Çıkış isteği (Geri butonu veya Geri tuşu): düzenleme varsa onay, yoksa doğrudan çık
+  const requestExit = () => {
+    if (isPublishing) return;
+    if (isDirty()) setShowExitConfirm(true);
+    else void leaveEditor("back");
   };
+  useEffect(() => {
+    exitRequestRef.current = requestExit;
+  });
+
+  const handleBackClick = requestExit;
 
   // Çıkışı Onaylama: Editörü Temizle ve Ana Sayfaya Dön
   const handleConfirmExit = () => {
-    resetEditor();
-    router.replace("/");
+    void leaveEditor("home");
   };
 
-  // Tarayıcı / Mobil Geri Tuşunda Onay Modalı Çıkarma
-  useEffect(() => {
-    if (!hasMedia) return;
-
-    window.history.pushState({ inEditor: true }, "");
-
-    const handlePopState = () => {
-      setShowExitConfirm(true);
-      window.history.pushState({ inEditor: true }, "");
-    };
-
-    window.addEventListener("popstate", handlePopState);
-    return () => {
-      window.removeEventListener("popstate", handlePopState);
-    };
-  }, [hasMedia]);
-
-  // Sayfa Kapatma / Yenileme Öncesi Tarayıcı Güvenlik Uyarısı
+  // Sayfa Kapatma / Yenileme Öncesi Tarayıcı Güvenlik Uyarısı (yalnız düzenleme varken)
   useEffect(() => {
     const handleBeforeUnload = (e: BeforeUnloadEvent) => {
-      if (hasMedia) {
+      const dirty = isDirty();
+      autosaverRef.current?.flush();
+      if (dirty) {
         e.preventDefault();
         e.returnValue = "";
       }
@@ -493,7 +575,42 @@ export default function ShareStoryPage() {
     return () => {
       window.removeEventListener("beforeunload", handleBeforeUnload);
     };
-  }, [hasMedia]);
+  }, [isDirty]);
+
+  // WP-09: otomatik taslak kaydı (debounce 1.5 sn); sekme gizlenirken / kapanırken hemen başlat
+  useEffect(() => {
+    isDirtyRef.current = isDirty;
+  }, [isDirty]);
+  useEffect(() => {
+    musicVolumeRef.current = musicVolume;
+    autosaverRef.current?.schedule();
+  }, [musicVolume, selectedMusic]);
+  useEffect(() => {
+    const a = new DraftAutosaver({
+      getEngine: () => engineRef.current,
+      getMode: () => shareModeRef.current as DraftMode,
+      isDirty: () => isDirtyRef.current(),
+      getMusicVolume: () => musicVolumeRef.current,
+      onError: (msg) => {
+        setFilterToast(msg);
+        if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
+        toastTimerRef.current = setTimeout(() => setFilterToast(null), 3500);
+      },
+    });
+    autosaverRef.current = a;
+    const onHide = () => {
+      if (document.visibilityState === "hidden") a.flush();
+    };
+    const onPageHide = () => a.flush();
+    document.addEventListener("visibilitychange", onHide);
+    window.addEventListener("pagehide", onPageHide);
+    return () => {
+      document.removeEventListener("visibilitychange", onHide);
+      window.removeEventListener("pagehide", onPageHide);
+      a.dispose();
+      autosaverRef.current = null;
+    };
+  }, []);
 
   // [MODIFIED BY Bedirhan]
   // Tuval Motorunu Başlatma (Moda Göre 9:16 Tam Ekran veya 4:3 Gönderi Boyutları)
@@ -515,6 +632,9 @@ export default function ShareStoryPage() {
       fitMode: currentMode === "post" ? "cover" : "contain",
     });
     engine.setShareMode(currentMode);
+
+    engine.on("change", () => autosaverRef.current?.schedule());
+    engine.on("music-change", () => autosaverRef.current?.schedule());
 
     // Katman Seçimi
     engine.on("select", (layer: BaseLayer | null) => {
@@ -640,6 +760,12 @@ export default function ShareStoryPage() {
   // 1. MOD SEÇİMİ VE TABAN MEDYA AKIŞI (HİKAYE / REELS / GÖNDERİ)
   const handleSelectMode = useCallback(
     (mode: ShareMode) => {
+      // F-01/F-02: medya yüklüyken mod değişimi mevcut çalışmayı siler; önce onay iste
+      if (hasMedia) {
+        if (mode === shareModeRef.current) setIsModeSelectorOpen(false);
+        else setPendingMode(mode);
+        return;
+      }
       shareModeRef.current = mode;
       setShareMode(mode);
       setIsModeSelectorOpen(false);
@@ -673,6 +799,19 @@ export default function ShareStoryPage() {
     [getOrCreateEngine, hasMedia]
   );
 
+  // Onaylandı: motor medyası, katmanlar, müzik ve geri alma geçmişi dahil tam sıfırlama + yeni mod
+  const confirmModeSwitch = () => {
+    const mode = pendingMode;
+    if (!mode) return;
+    resetEditor();
+    shareModeRef.current = mode;
+    setShareMode(mode);
+    setIsModeSelectorOpen(false);
+    setTimeout(() => {
+      baseFileInputRef.current?.click();
+    }, 60);
+  };
+
   const handleSelectFilterIndex = useCallback((index: number) => {
     const engine = engineRef.current;
     if (!engine) return;
@@ -701,16 +840,13 @@ export default function ShareStoryPage() {
   // [END] CREATED BY Bedirhan
 
   // [MODIFIED BY Bedirhan]
-  const handleBaseFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-
+  const processBaseFile = async (file: File) => {
     const MAX_FILE_BYTES = 100 * 1024 * 1024;
     if (file.size > MAX_FILE_BYTES) {
       setFilterToast("Maksimum 100 MB dosya seçilebilir");
       if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
       toastTimerRef.current = setTimeout(() => setFilterToast(null), 2200);
-      e.target.value = "";
+      if (baseFileInputRef.current) baseFileInputRef.current.value = "";
       return;
     }
 
@@ -718,7 +854,7 @@ export default function ShareStoryPage() {
       setFilterToast("Gönderi modunda yalnızca fotoğraf seçilebilir");
       if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
       toastTimerRef.current = setTimeout(() => setFilterToast(null), 2200);
-      e.target.value = "";
+      if (baseFileInputRef.current) baseFileInputRef.current.value = "";
       return;
     }
 
@@ -745,12 +881,13 @@ export default function ShareStoryPage() {
       setVideoThumbnails([]);
 
       const media = await engine.loadMedia(file, undefined, shareModeRef.current === "post");
+      baselineSigRef.current = editSignature(engine, selectedMusicRef.current);
       setHasMedia(true);
       setPostAdjustments(engine.getPostAdjustments());
       setActiveFilterIndex(engine.getCurrentFilterIndex());
       setActiveReelsEffect(engine.getReelsEffect());
       setEffectClips(engine.getEffectClips());
-      e.target.value = "";
+      if (baseFileInputRef.current) baseFileInputRef.current.value = "";
 
       if (media.type === "video") {
         setVideoState(engine.getVideoState());
@@ -771,10 +908,70 @@ export default function ShareStoryPage() {
         setVideoState(INITIAL_VIDEO_STATE);
       }
     } catch (err) {
+      if ((err as Error)?.name === "AbortError") return;
       console.error("Taban görsel yüklenemedi:", err);
-      if (!hasMedia) {
-        router.back();
-      }
+      const msg = isMediaLoadError(err)
+        ? "Bu dosya açılamadı. Dosya desteklenmiyor veya bozuk."
+        : "Dosya yüklenemedi, lütfen tekrar deneyin.";
+      setFilterToast(msg);
+      if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
+      toastTimerRef.current = setTimeout(() => setFilterToast(null), 3000);
+      if (baseFileInputRef.current) baseFileInputRef.current.value = "";
+    }
+  };
+
+  // WP-09: taslağı geri yükle (medya + katmanlar + klipler + müzik + filtreler), sonra React durumunu motorla eşle
+  const restoreDraft = async (rec: DraftRecord<DraftState>) => {
+    setDraftBusy(true);
+    try {
+      const st = rec.state;
+      const files = await loadDraftFiles(rec);
+      const baseKey = baseMediaKeyOf(st);
+      const baseFile = baseKey ? files.get(baseKey) : undefined;
+      if (!baseFile) throw new Error("draft-media-missing");
+      for (const [k, f] of files) adoptBlobKey(f, k);
+      shareModeRef.current = st.mode;
+      setShareMode(st.mode);
+      setIsModeSelectorOpen(false);
+      setActiveDrawer("none");
+      await processBaseFile(baseFile);
+      const engine = engineRef.current;
+      if (!engine || !engine.getMedia()) throw new Error("draft-base-load");
+      if (!(await applyDraft(engine, st, files))) throw new Error("draft-apply");
+      setPostAdjustments(engine.getPostAdjustments());
+      const fi = engine.getCurrentFilterIndex();
+      setActiveFilterIndex(fi);
+      const preset = FILTER_PRESETS[fi];
+      if (preset) setActiveFilterGradient(preset.backgroundGradient);
+      setActiveReelsEffect(engine.getReelsEffect());
+      setEffectClips(engine.getEffectClips());
+      setVideoState(engine.getVideoState());
+      setSelectedMusic(st.music ? engine.getMusic() : null);
+      setMusicVolume(st.musicVolume ?? 0.85);
+      setDraftOffer(null);
+    } catch (err) {
+      console.error("Taslak geri yüklenemedi:", err);
+      setDraftOffer(null);
+      setFilterToast("Taslak geri yüklenemedi.");
+      if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
+      toastTimerRef.current = setTimeout(() => setFilterToast(null), 3000);
+    } finally {
+      setDraftBusy(false);
+    }
+  };
+
+  const handleBaseFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = "";
+    if (!file) return;
+    await processBaseFile(file);
+  };
+
+  const handleRootDrop = (e: React.DragEvent) => {
+    e.preventDefault();
+    const file = e.dataTransfer.files?.[0];
+    if (file && !hasMedia) {
+      processBaseFile(file);
     }
   };
 
@@ -860,6 +1057,8 @@ export default function ShareStoryPage() {
     }
     setIsTextEditing(false);
   };
+
+  // F-04: Escape ve Geri tuşu metin editörünü geri yığınındaki katmanla kapatır (aşağıdaki PageBackLayer)
 
   const handleLiveTextChange = (text: string) => {
     setEditingText(text);
@@ -1006,6 +1205,14 @@ export default function ShareStoryPage() {
     engineRef.current?.playVideo().catch(() => {});
   };
   // [END] CREATED BY Bedirhan
+  // E-01: kodlayıcı 1080p desteklemiyorsa (WP-03 onWarning) kullanıcıyı bilgilendir
+  const handleExportWarning = (code: "downscaled-720p") => {
+    if (code !== "downscaled-720p") return;
+    setFilterToast("Cihaz 1080p kodlamayı desteklemiyor, 720p'ye düşürüldü");
+    if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
+    toastTimerRef.current = setTimeout(() => setFilterToast(null), 3200);
+  };
+
 
   // [MODIFIED BY Bedirhan]
   // Cihaza WebP veya MP4 İndir
@@ -1019,14 +1226,12 @@ export default function ShareStoryPage() {
         const abortCtrl = new AbortController();
         exportAbortRef.current = abortCtrl;
         const blob = await VideoExporter.exportToBlob(engine, {
-          resolution: "720p",
-          width: 720,
-          height: 1280,
           fps: 30,
           music: selectedMusic,
           musicVolume,
           onProgress: (p) => setExportProgress(p),
           signal: abortCtrl.signal,
+          onWarning: handleExportWarning,
         });
         setIsExportingVideo(false);
         const ext = blob.type.includes("webm") ? "webm" : "mp4";
@@ -1068,14 +1273,12 @@ export default function ShareStoryPage() {
         exportAbortRef.current = abortCtrl;
 
         blob = await VideoExporter.exportToBlob(engineRef.current, {
-          resolution: "720p",
-          width: 720,
-          height: 1280,
           fps: 30,
           music: selectedMusic,
           musicVolume,
           onProgress: (p) => setExportProgress(p),
           signal: abortCtrl.signal,
+          onWarning: handleExportWarning,
         });
         setIsExportingVideo(false);
         const isWebm = blob.type.includes("webm");
@@ -1139,6 +1342,11 @@ export default function ShareStoryPage() {
 
       await refreshProfile();
 
+      // WP-09: yayınlandı -> taslak silinir ve bir daha kaydedilmez
+      const autosaver = autosaverRef.current;
+      autosaver?.stop();
+      await autosaver?.discard(shareModeRef.current as DraftMode);
+
       setTimeout(() => {
         router.push("/profile");
       }, 400);
@@ -1154,7 +1362,7 @@ export default function ShareStoryPage() {
   if (!mounted || loading) {
     return (
       <div className="fixed inset-0 bg-black flex items-center justify-center text-white">
-        <div className="w-8 h-8 border-2 border-emerald-500 border-t-transparent rounded-full animate-spin" />
+        <div className="w-8 h-8 border-2 border-[var(--ed-ac,#38d5c8)] border-t-transparent rounded-full animate-spin" />
       </div>
     );
   }
@@ -1164,7 +1372,12 @@ export default function ShareStoryPage() {
     shareMode === "story" ? "Hikaye" : shareMode === "reels" ? "Reels" : "Gönderi";
 
   return (
-    <div className="fixed inset-0 w-screen h-[100dvh] bg-black text-white overflow-hidden select-none no-select touch-none">
+    <EditorBackStackProvider value={backStack}>
+    <div
+      onDragOver={(e) => e.preventDefault()}
+      onDrop={handleRootDrop}
+      className="fixed inset-0 w-screen h-[100dvh] bg-black text-white overflow-hidden select-none no-select touch-none"
+    >
       {/* 1. Görünmez Taban Medya Dosya Seçici */}
       <input
         type="file"
@@ -1194,7 +1407,7 @@ export default function ShareStoryPage() {
         }}
         className={
           shareMode === "reels" && hasMedia
-            ? "fixed inset-x-0 flex items-center justify-center p-3 overflow-hidden select-none bg-black z-20"
+            ? "fixed inset-x-0 [@media(min-width:1024px)_and_(min-height:600px)]:left-[168px] [@media(min-width:1024px)_and_(min-height:600px)]:right-[168px] flex items-center justify-center p-3 [@media(min-width:1024px)_and_(min-height:600px)]:p-1 overflow-hidden select-none bg-black z-20"
             : shareMode === "post"
               ? "fixed inset-x-0 flex items-center justify-center overflow-hidden select-none"
               : "fixed inset-0 w-full h-full flex items-center justify-center overflow-hidden select-none"
@@ -1252,9 +1465,14 @@ export default function ShareStoryPage() {
         </div>
       </div>
 
-      {/* 4. CANLI FİLTRE ROZETİ (0.5s Minimal Instagram Swipe Toast) */}
+      {/* 4. CANLI FİLTRE ROZETİ (0.5s Minimal Instagram Swipe Toast) / BİLDİRİM */}
       {filterToast && (
-        <div className="fixed top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 z-40 bg-black/60 backdrop-blur-md px-5 py-2 rounded-full text-sm font-bold text-white shadow-2xl pointer-events-none animate-in fade-in zoom-in-95 duration-150">
+        <div
+          data-testid="filter-toast"
+          className={`fixed left-1/2 -translate-x-1/2 z-40 bg-black/60 backdrop-blur-md px-5 py-2 rounded-full text-sm font-bold text-white shadow-2xl pointer-events-none animate-in fade-in zoom-in-95 duration-150 ${
+            hasMedia ? "top-1/2 -translate-y-1/2" : "top-20"
+          }`}
+        >
           {filterToast}
         </div>
       )}
@@ -1267,7 +1485,8 @@ export default function ShareStoryPage() {
               type="button"
               onClick={handleBackClick}
               disabled={isPublishing}
-              className="w-11 h-11 rounded-full bg-[#1c1c1e] hover:bg-[#28282c] active:scale-90 transition-all shadow-xl flex items-center justify-center text-white"
+              aria-label="Geri"
+              className="w-11 h-11 rounded-full bg-[var(--ed-bg2,#1a1e25)] hover:bg-[var(--ed-bg3,#232932)] active:scale-90 transition-all shadow-xl flex items-center justify-center text-white"
             >
               {shareMode === "reels" ? (
                 <ChevronDown className="w-6 h-6" />
@@ -1281,9 +1500,10 @@ export default function ShareStoryPage() {
                 type="button"
                 onClick={handleDownloadImage}
                 disabled={isPublishing}
-                className="w-11 h-11 rounded-full bg-[#1c1c1e] hover:bg-[#28282c] active:scale-90 transition-all shadow-xl flex items-center justify-center text-white"
+                aria-label="İndir"
+                className="w-11 h-11 rounded-full bg-[var(--ed-bg2,#1a1e25)] hover:bg-[var(--ed-bg3,#232932)] active:scale-90 transition-all shadow-xl flex items-center justify-center text-white"
               >
-                <Download className="w-4 h-4 text-zinc-300" />
+                <Download className="w-4 h-4 text-[var(--ed-tx,#e8ecf1)]" />
               </button>
             )}
           </div>
@@ -1292,9 +1512,9 @@ export default function ShareStoryPage() {
             type="button"
             onClick={() => setIsModeSelectorOpen(true)}
             disabled={isPublishing}
-            className="h-11 px-4 rounded-2xl bg-[#1c1c1e] hover:bg-[#28282c] active:scale-95 transition-all shadow-xl flex items-center gap-2 text-sm font-semibold text-white"
+            className="h-11 px-4 rounded-2xl bg-[var(--ed-bg2,#1a1e25)] hover:bg-[var(--ed-bg3,#232932)] active:scale-95 transition-all shadow-xl flex items-center gap-2 text-sm font-semibold text-white"
           >
-            <span className="w-4 h-4 rounded-md bg-gradient-to-tr from-pink-500 via-purple-500 to-amber-400 inline-block shrink-0" />
+            <span className="w-4 h-4 rounded-md bg-[var(--ed-ac,#38d5c8)] inline-block shrink-0" />
             <span>{modeLabel}</span>
           </button>
 
@@ -1303,6 +1523,7 @@ export default function ShareStoryPage() {
               type="button"
               onClick={handlePublish}
               disabled={isPublishing}
+              aria-label="İleri"
               className="w-11 h-11 rounded-full bg-white text-black hover:bg-zinc-200 active:scale-90 transition-all shadow-xl flex items-center justify-center disabled:opacity-50"
             >
               {isPublishing ? (
@@ -1322,10 +1543,11 @@ export default function ShareStoryPage() {
         <div className="fixed inset-0 flex flex-col items-center justify-center pointer-events-none z-30">
           <button
             type="button"
+            data-testid="media-picker-btn"
             onClick={() => baseFileInputRef.current?.click()}
             className="pointer-events-auto flex items-center gap-2.5 px-6 py-3.5 rounded-2xl bg-white/10 hover:bg-white/15 active:scale-95 backdrop-blur-xl border border-white/20 text-white font-semibold text-sm shadow-2xl transition-all"
           >
-            <ImageIcon className="w-5 h-5 text-emerald-400" />
+            <ImageIcon className="w-5 h-5 text-[var(--ed-ac,#38d5c8)]" />
             <span>
               {shareMode === "post" ? "Fotoğraf Seç" : "Fotoğraf veya Video Seç"}
             </span>
@@ -1412,14 +1634,16 @@ export default function ShareStoryPage() {
             <button
               type="button"
               onClick={() => openTextEditor()}
-              className="w-10 h-10 rounded-full bg-black/50 backdrop-blur-md border border-white/15 text-white hover:bg-black/70 active:scale-90 transition-all shadow-xl flex items-center justify-center font-bold text-xs"
+              aria-label="Metin ekle"
+              className="w-11 h-11 rounded-full bg-black/50 backdrop-blur-md border border-white/15 text-white hover:bg-black/70 active:scale-90 transition-all shadow-xl flex items-center justify-center font-bold text-xs"
             >
               Aa
             </button>
             <button
               type="button"
               onClick={() => setActiveDrawer("tag")}
-              className="w-10 h-10 rounded-full bg-black/50 backdrop-blur-md border border-white/15 text-white hover:bg-black/70 active:scale-90 transition-all shadow-xl flex items-center justify-center"
+              aria-label="Kişi etiketle"
+              className="w-11 h-11 rounded-full bg-black/50 backdrop-blur-md border border-white/15 text-white hover:bg-black/70 active:scale-90 transition-all shadow-xl flex items-center justify-center"
             >
               <AtSign className="w-5 h-5 text-cyan-400" />
             </button>
@@ -1446,10 +1670,42 @@ export default function ShareStoryPage() {
           if (hasMedia) {
             setIsModeSelectorOpen(false);
           } else {
-            router.back();
+            void leaveEditor("back");
           }
         }}
       />
+      <ConfirmDialog
+        open={pendingMode !== null}
+        title="Mevcut çalışma silinsin mi?"
+        message="Mod değiştirirseniz yüklediğiniz medya ve tüm düzenlemeler silinir."
+        confirmLabel="Sil ve Değiştir"
+        cancelLabel="Vazgeç"
+        destructive
+        onConfirm={confirmModeSwitch}
+        onCancel={() => setPendingMode(null)}
+      />
+      <ConfirmDialog
+        open={draftOffer !== null}
+        title="Kayıtlı taslak bulundu"
+        message={
+          draftOffer
+            ? `${draftOffer.mode === "story" ? "Hikaye" : draftOffer.mode === "reels" ? "Reels" : "Gönderi"} · ${new Date(draftOffer.savedAt).toLocaleString("tr-TR")}`
+            : undefined
+        }
+        confirmLabel="Taslağı geri yükle"
+        secondaryLabel="Sil"
+        cancelLabel="Şimdilik kapat"
+        busy={draftBusy}
+        onConfirm={() => draftOffer && void restoreDraft(draftOffer)}
+        onSecondary={() => {
+          const mode = draftOffer?.mode;
+          setDraftOffer(null);
+          if (mode) void deleteDraft(mode);
+        }}
+        onCancel={() => setDraftOffer(null)}
+      />
+      <PageBackLayer open={activeDrawer !== "none"} onClose={() => setActiveDrawer("none")} />
+      <PageBackLayer open={isTextEditing} onClose={closeTextEditor} />
       {/* [END] CREATED BY Bedirhan */}
 
       {/* 8. MIKNATISLI ÇÖP KUTUSU (MAGNETIC TRASH) */}
@@ -1477,14 +1733,14 @@ export default function ShareStoryPage() {
 
       {/* 10. ALTTAN AÇILAN ÇIKARTMA & MEDYA PANELİ (STICKER SHEET) */}
       {activeDrawer === "sticker_sheet" && (
-        <div className="fixed inset-x-0 bottom-0 z-50 rounded-t-3xl backdrop-blur-2xl bg-neutral-900/95 border-t border-white/10 p-5 pb-8 flex flex-col max-h-[52vh] animate-in slide-in-from-bottom duration-200 shadow-2xl">
+        <div className="fixed inset-x-0 bottom-0 z-50 rounded-t-3xl backdrop-blur-2xl bg-neutral-900/95 border-t border-[var(--ed-line,#2a303a)] p-5 pb-8 flex flex-col max-h-[52vh] animate-in slide-in-from-bottom duration-200 shadow-2xl">
           <div className="w-10 h-1 rounded-full bg-white/20 mx-auto mb-4" />
           <div className="flex items-center justify-between mb-4 px-1">
             <h3 className="text-white font-semibold text-base">Çıkartmalar</h3>
             <button
               type="button"
               onClick={() => setActiveDrawer("none")}
-              className="p-1 rounded-full text-zinc-400 hover:text-white transition-colors"
+              className="p-1 rounded-full text-[var(--ed-tx2,#98a2b3)] hover:text-white transition-colors"
             >
               <X className="w-5 h-5" />
             </button>
@@ -1498,9 +1754,9 @@ export default function ShareStoryPage() {
                 setActiveDrawer("none");
                 overlayFileInputRef.current?.click();
               }}
-              className="flex flex-col items-center justify-center gap-2 p-3.5 rounded-2xl bg-white/5 hover:bg-white/10 border border-white/10 active:scale-95 transition-all text-white group"
+              className="flex flex-col items-center justify-center gap-2 p-3.5 rounded-2xl bg-[var(--ed-bg2,#1a1e25)] hover:bg-white/10 border border-[var(--ed-line,#2a303a)] active:scale-95 transition-all text-white group"
             >
-              <div className="w-11 h-11 rounded-full bg-emerald-500/20 text-emerald-400 flex items-center justify-center group-hover:scale-105 transition-transform">
+              <div className="w-11 h-11 rounded-full bg-[rgba(56,213,200,0.20)] text-[var(--ed-ac,#38d5c8)] flex items-center justify-center group-hover:scale-105 transition-transform">
                 <TbPhotoPlus className="w-5 h-5" />
               </div>
               <span className="text-xs font-medium">Fotoğraf</span>
@@ -1513,9 +1769,9 @@ export default function ShareStoryPage() {
                 setActiveDrawer("none");
                 handleAddTagSticker();
               }}
-              className="flex flex-col items-center justify-center gap-2 p-3.5 rounded-2xl bg-white/5 hover:bg-white/10 border border-white/10 active:scale-95 transition-all text-white group"
+              className="flex flex-col items-center justify-center gap-2 p-3.5 rounded-2xl bg-[var(--ed-bg2,#1a1e25)] hover:bg-white/10 border border-[var(--ed-line,#2a303a)] active:scale-95 transition-all text-white group"
             >
-              <div className="w-11 h-11 rounded-full bg-purple-500/20 text-purple-400 flex items-center justify-center group-hover:scale-105 transition-transform">
+              <div className="w-11 h-11 rounded-full bg-[rgba(56,213,200,0.20)] text-[var(--ed-ac,#38d5c8)] flex items-center justify-center group-hover:scale-105 transition-transform">
                 <AtSign className="w-5 h-5" />
               </div>
               <span className="text-xs font-medium">@Bahset</span>
@@ -1531,9 +1787,9 @@ export default function ShareStoryPage() {
                   openMusicPicker();
                 }
               }}
-              className="flex flex-col items-center justify-center gap-2 p-3.5 rounded-2xl bg-white/5 hover:bg-white/10 border border-white/10 active:scale-95 transition-all text-white group"
+              className="flex flex-col items-center justify-center gap-2 p-3.5 rounded-2xl bg-[var(--ed-bg2,#1a1e25)] hover:bg-white/10 border border-[var(--ed-line,#2a303a)] active:scale-95 transition-all text-white group"
             >
-              <div className="w-11 h-11 rounded-full bg-pink-500/20 text-pink-400 flex items-center justify-center group-hover:scale-105 transition-transform">
+              <div className="w-11 h-11 rounded-full bg-[rgba(56,213,200,0.20)] text-[var(--ed-ac,#38d5c8)] flex items-center justify-center group-hover:scale-105 transition-transform">
                 <Music className="w-5 h-5" />
               </div>
               <span className="text-xs font-medium">Müzik</span>
@@ -1554,7 +1810,7 @@ export default function ShareStoryPage() {
 
       {/* 11B. SEÇİLİ ŞARKI AYAR PANELİ (HİKAYE) */}
       {activeDrawer === "music_settings" && selectedMusic && (
-        <div className="fixed inset-x-0 bottom-0 z-50 rounded-t-3xl backdrop-blur-2xl bg-neutral-900/95 border-t border-white/10 p-5 pb-8 animate-in slide-in-from-bottom duration-200 shadow-2xl">
+        <div className="fixed inset-x-0 bottom-0 z-50 rounded-t-3xl backdrop-blur-2xl bg-neutral-900/95 border-t border-[var(--ed-line,#2a303a)] p-5 pb-8 animate-in slide-in-from-bottom duration-200 shadow-2xl">
           <div className="w-10 h-1 rounded-full bg-white/20 mx-auto mb-4" />
           <MusicSettingsPanel
             music={selectedMusic}
@@ -1570,14 +1826,14 @@ export default function ShareStoryPage() {
       )}
       {/* 12. ALTTAN AÇILAN ETİKETLEME PANELİ */}
       {activeDrawer === "tag" && (
-        <div className="fixed inset-x-0 bottom-0 z-50 rounded-t-3xl backdrop-blur-2xl bg-neutral-900/95 border-t border-white/10 p-5 pb-8 flex flex-col max-h-[52vh] animate-in slide-in-from-bottom duration-200 shadow-2xl">
+        <div className="fixed inset-x-0 bottom-0 z-50 rounded-t-3xl backdrop-blur-2xl bg-neutral-900/95 border-t border-[var(--ed-line,#2a303a)] p-5 pb-8 flex flex-col max-h-[52vh] animate-in slide-in-from-bottom duration-200 shadow-2xl">
           <div className="w-10 h-1 rounded-full bg-white/20 mx-auto mb-4" />
           <div className="flex items-center justify-between mb-4 px-1">
             <h3 className="text-white font-semibold text-base">Kişi Etiketle</h3>
             <button
               type="button"
               onClick={() => setActiveDrawer("none")}
-              className="p-1 rounded-full text-zinc-400 hover:text-white transition-colors"
+              className="p-1 rounded-full text-[var(--ed-tx2,#98a2b3)] hover:text-white transition-colors"
             >
               <X className="w-5 h-5" />
             </button>
@@ -1589,14 +1845,14 @@ export default function ShareStoryPage() {
               setActiveDrawer("none");
               handleAddTagSticker(`@${profile?.username || "kullanici"}`);
             }}
-            className="w-full flex items-center gap-3 p-3 rounded-xl bg-purple-500/10 border border-purple-500/20 hover:bg-purple-500/20 text-white transition-all text-left"
+            className="w-full flex items-center gap-3 p-3 rounded-xl bg-[rgba(56,213,200,0.10)] border border-[rgba(56,213,200,0.20)] hover:bg-[rgba(56,213,200,0.20)] text-white transition-all text-left"
           >
-            <div className="w-9 h-9 rounded-full bg-purple-500/20 text-purple-400 flex items-center justify-center shrink-0">
+            <div className="w-9 h-9 rounded-full bg-[rgba(56,213,200,0.20)] text-[var(--ed-ac,#38d5c8)] flex items-center justify-center shrink-0">
               <AtSign className="w-4 h-4" />
             </div>
             <div className="flex-1 min-w-0">
               <p className="text-xs font-semibold text-white">Profilini Etiketle</p>
-              <p className="text-[11px] text-purple-300 truncate">@{profile?.username || "kullanici"}</p>
+              <p className="text-[11px] text-[var(--ed-ac,#38d5c8)] truncate">@{profile?.username || "kullanici"}</p>
             </div>
           </button>
         </div>
@@ -1612,13 +1868,14 @@ export default function ShareStoryPage() {
 
       {/* 13. CANLI METİN YAZMA & RENK MODU (INSTAGRAM STORY ODAK MODU) */}
       {isTextEditing && (
-        <div className="fixed inset-0 z-50 bg-black/55 backdrop-blur-md flex flex-col justify-between p-4 pt-safe pb-safe animate-in fade-in duration-150">
+        <div role="dialog" aria-modal="true" aria-label="Metin düzenle" className="fixed inset-0 z-50 bg-black/55 backdrop-blur-md flex flex-col justify-between p-4 pt-safe pb-safe animate-in fade-in duration-150">
           {/* Üst Düzenleme Çubuğu */}
           <div className="h-14 flex items-center justify-between">
             {/* Metin Hizalama */}
             <button
               type="button"
               onClick={handleToggleAlign}
+              aria-label="Hizalama"
               className="p-2.5 rounded-full bg-white/10 text-white active:scale-90 transition-all"
             >
               {activeTextAlign === "left" && <AlignLeft className="w-5 h-5" />}
@@ -1630,7 +1887,7 @@ export default function ShareStoryPage() {
             <button
               type="button"
               onClick={handleCycleFont}
-              className="px-4 py-1.5 rounded-full bg-white/10 hover:bg-white/20 border border-white/10 text-xs font-bold tracking-wide active:scale-95 transition-all"
+              className="px-4 py-1.5 rounded-full bg-white/10 hover:bg-white/20 border border-[var(--ed-line,#2a303a)] text-xs font-bold tracking-wide active:scale-95 transition-all"
             >
               {currentFontCfg.name}
             </button>
@@ -1639,6 +1896,7 @@ export default function ShareStoryPage() {
             <button
               type="button"
               onClick={handleCycleBg}
+              aria-label="Arka plan"
               className={`w-9 h-9 rounded-full flex items-center justify-center font-bold text-sm border transition-all active:scale-90 ${
                 activeBgPreset === "solid"
                   ? "bg-black text-white border-white/30"
@@ -1687,7 +1945,7 @@ export default function ShareStoryPage() {
                     ? `0 0 24px ${activeTextColor}`
                     : "none",
               }}
-              className="w-full max-w-sm rounded-xl p-4 text-2xl font-bold border-none outline-none resize-none placeholder:text-zinc-500 shadow-2xl transition-all"
+              className="w-full max-w-sm rounded-xl p-4 text-2xl font-bold border-none outline-none resize-none placeholder:text-[var(--ed-tx3,#5b6574)] shadow-2xl transition-all"
             />
           </div>
 
@@ -1712,35 +1970,18 @@ export default function ShareStoryPage() {
         </div>
       )}
 
-      {/* 14. ÇIKIŞ VE DEĞİŞİKLİKLERİ SİLME ONAY MODALI */}
-      {showExitConfirm && (
-        <div className="fixed inset-0 z-50 bg-black/75 backdrop-blur-md flex items-center justify-center p-6 animate-in fade-in duration-150 pointer-events-auto">
-          <div className="w-full max-w-xs rounded-3xl bg-neutral-900/95 border border-white/10 p-5 text-center shadow-2xl animate-in zoom-in-95 duration-150">
-            <h3 className="text-white font-bold text-base mb-1.5">
-              Değişiklikler silinsin mi?
-            </h3>
-            <p className="text-zinc-400 text-xs mb-5">
-              Şimdi çıkarsanız yaptığınız tüm değişiklikler kaybolacak.
-            </p>
-            <div className="flex flex-col gap-2">
-              <button
-                type="button"
-                onClick={handleConfirmExit}
-                className="w-full py-2.5 rounded-xl bg-red-600 hover:bg-red-500 active:scale-95 transition-all text-white text-xs font-bold shadow-lg shadow-red-600/30"
-              >
-                Değişiklikleri Sil
-              </button>
-              <button
-                type="button"
-                onClick={() => setShowExitConfirm(false)}
-                className="w-full py-2.5 rounded-xl bg-white/10 hover:bg-white/15 active:scale-95 transition-all text-white text-xs font-semibold"
-              >
-                Düzenlemeye Devam Et
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+      {/* 14. ÇIKIŞ VE DEĞİŞİKLİKLERİ SİLME ONAY MODALI (geri yığınına kayıtlı) */}
+      <ConfirmDialog
+        open={showExitConfirm}
+        title="Değişiklikler silinsin mi?"
+        message="Şimdi çıkarsanız yaptığınız tüm değişiklikler kaybolacak."
+        confirmLabel="Değişiklikleri Sil"
+        cancelLabel="Düzenlemeye Devam Et"
+        destructive
+        onConfirm={handleConfirmExit}
+        onCancel={() => setShowExitConfirm(false)}
+      />
     </div>
+    </EditorBackStackProvider>
   );
 }

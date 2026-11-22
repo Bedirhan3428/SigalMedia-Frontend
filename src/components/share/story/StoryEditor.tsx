@@ -17,6 +17,8 @@ import { useAuth } from "@/context/AuthContext";
 import {
   DEFAULT_TEXT_EDITOR_VALUE,
   EditorIconButton,
+  FilterIntensitySlider,
+  supportsFilterIntensity,
   MENTION_STICKER_TEXT_STYLE,
   MusicSettingsPanel,
   Sheet,
@@ -72,9 +74,45 @@ export default function StoryEditor({
 
   const [isVideo, setIsVideo] = useState(() => engine.getVideoState().isVideo);
   const [playing, setPlaying] = useState(() => engine.isPlaying());
+  const [videoVolume, setVideoVolume] = useState(() => {
+    const v = engine.getVideoState();
+    return v.muted ? 0 : v.volume;
+  });
   const [soundBlocked, setSoundBlocked] = useState(() => engine.needsUserGestureForSound());
   const [filterName, setFilterName] = useState<string | null>(null);
   const filterTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // BUG-28: filtreler yalnız yatay kaydırmayla açılır; ilk kullanımda kısa ipucu (bir kez)
+  const [filterHint, setFilterHint] = useState(false);
+  const [filterActive, setFilterActive] = useState(() => engine.getCurrentFilterIndex() > 0);
+  const hintDismissedRef = useRef(false);
+  const markHintSeen = useCallback(() => {
+    try {
+      window.localStorage.setItem("story-filter-hint", "1");
+    } catch {
+      /* depolama yok */
+    }
+  }, []);
+  // StrictMode güvenli: bayrak yalnız ipucu GERÇEKTEN gösterildiğinde yazılır; cleanup zamanlayıcıları
+  // temizler, ikinci çalışma bayrağı hâlâ boş görüp yeniden planlar.
+  useEffect(() => {
+    let seen = false;
+    try {
+      seen = window.localStorage.getItem("story-filter-hint") === "1";
+    } catch {
+      /* depolama yok: her açılışta göster */
+    }
+    if (seen || hintDismissedRef.current) return;
+    const show = setTimeout(() => {
+      setFilterHint(true);
+      markHintSeen();
+    }, 600);
+    const hide = setTimeout(() => setFilterHint(false), 4600);
+    return () => {
+      clearTimeout(show);
+      clearTimeout(hide);
+    };
+  }, [markHintSeen]);
 
   const [dragging, setDragging] = useState(false);
   const [trashHot, setTrashHot] = useState(false);
@@ -178,6 +216,10 @@ export default function StoryEditor({
     );
     offs.push(
       engine.on("filter-swipe", (_dir: string, name: string) => {
+        hintDismissedRef.current = true;
+        setFilterHint(false);
+        markHintSeen();
+        setFilterActive(engine.getCurrentFilterIndex() > 0);
         setFilterName(name);
         if (filterTimerRef.current) clearTimeout(filterTimerRef.current);
         filterTimerRef.current = setTimeout(() => setFilterName(null), 900);
@@ -187,7 +229,9 @@ export default function StoryEditor({
     offs.push(
       engine.on("video-time", () => {
         setPlaying(engine.isPlaying());
-        setIsVideo(engine.getVideoState().isVideo);
+        const vs = engine.getVideoState();
+        setIsVideo(vs.isVideo);
+        setVideoVolume(vs.muted ? 0 : vs.volume);
       })
     );
     offs.push(engine.on("music-change", (m: StoryAudioMeta | null) => onMusicChange(m)));
@@ -270,7 +314,7 @@ export default function StoryEditor({
       canvas?.removeEventListener("pointerup", onUp);
       canvas?.removeEventListener("pointercancel", onCancel);
     };
-  }, [engine, canvas, openText, onMusicChange]);
+  }, [engine, canvas, openText, onMusicChange, markHintSeen]);
 
   // Çıkartmalar
   const addEmoji = (emoji: string) => {
@@ -337,6 +381,12 @@ export default function StoryEditor({
     else openPicker("trim");
   };
 
+  // D-05: orijinal video sesi (0 = sessiz); motor önizlemeyi ve dışa aktarmayı bu değerle sürer
+  const handleVideoVolume = (v: number) => {
+    setVideoVolume(v);
+    engine.setVolume(v, v === 0);
+  };
+
   const unmute = () => {
     engine.unlockSound().catch(() => {});
     setSoundBlocked(engine.needsUserGestureForSound());
@@ -367,7 +417,7 @@ export default function StoryEditor({
             variant={selectedMusic ? "light" : "glass"}
             onClick={handleMusicButton}
           >
-            <Music className={`h-5 w-5 ${selectedMusic ? "text-pink-500" : "text-pink-400"}`} />
+            <Music className={`h-5 w-5 ${selectedMusic ? "text-[var(--ed-ac,#38d5c8)]" : "text-[var(--ed-ac,#38d5c8)]"}`} />
           </EditorIconButton>
         </div>
       )}
@@ -388,6 +438,23 @@ export default function StoryEditor({
           <div className="flex h-16 w-16 items-center justify-center rounded-full bg-black/45 backdrop-blur-md">
             <Play className="h-7 w-7 fill-white text-white" />
           </div>
+        </div>
+      )}
+
+      {/* Filtre ipucu (ilk kullanım) */}
+      {filterHint && !filterName && !overlayOpen && (
+        <div
+          role="status"
+          className="pointer-events-none fixed bottom-safe-20 left-1/2 z-chrome -translate-x-1/2 whitespace-nowrap rounded-full bg-black/60 px-4 py-2 text-xs font-semibold text-white backdrop-blur-md"
+        >
+          Filtreler için sağa veya sola kaydırın
+        </div>
+      )}
+
+      {/* Filtre yoğunluğu (yalnız bir filtre seçiliyken ve motor destekliyorsa) */}
+      {filterActive && !overlayOpen && supportsFilterIntensity(engine) && (
+        <div className="fixed bottom-safe-20 left-1/2 z-chrome w-[min(72vw,280px)] -translate-x-1/2 rounded-full border border-[var(--ed-line,#2a303a)] bg-[var(--ed-bg1,#12151a)]/85 px-4 backdrop-blur-md">
+          <FilterIntensitySlider engine={engine} syncKey={filterName ?? ""} />
         </div>
       )}
 
@@ -435,14 +502,14 @@ export default function StoryEditor({
             id: "photo",
             label: "Fotoğraf",
             icon: <TbPhotoPlus className="h-5 w-5" />,
-            accentClassName: "bg-emerald-500/20 text-emerald-400",
+            accentClassName: "bg-[rgba(56,213,200,0.20)] text-[var(--ed-ac,#38d5c8)]",
             onSelect: () => overlayInputRef.current?.click(),
           },
           {
             id: "music",
             label: "Müzik",
             icon: <Music className="h-5 w-5" />,
-            accentClassName: "bg-pink-500/20 text-pink-400",
+            accentClassName: "bg-[rgba(56,213,200,0.20)] text-[var(--ed-ac,#38d5c8)]",
             onSelect: handleMusicButton,
           },
         ]}
@@ -458,6 +525,8 @@ export default function StoryEditor({
             music={selectedMusic}
             volume={musicVolume}
             onChangeVolume={onMusicVolumeChange}
+            videoVolume={isVideo ? videoVolume : undefined}
+            onChangeVideoVolume={isVideo ? handleVideoVolume : undefined}
             onChangeMusic={(m) => {
               engine.setMusic(m);
               onMusicChange(m);

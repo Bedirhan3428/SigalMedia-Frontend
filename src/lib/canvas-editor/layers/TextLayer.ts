@@ -71,6 +71,56 @@ export const DEFAULT_TEXT_STYLE: TextStyle = {
   shadowBlur: 0,
 };
 
+/** Mantıksal tuval genişliği (1080) ve metin için güvenli alan oranı. */
+const LOGICAL_CANVAS_WIDTH = 1080;
+const SAFE_WIDTH_RATIO = 0.9;
+
+type GraphemeSegmenter = { segment(s: string): Iterable<{ segment: string }> };
+const graphemeSegmenter: GraphemeSegmenter | null =
+  typeof Intl !== 'undefined' && 'Segmenter' in Intl
+    ? new (Intl as unknown as { Segmenter: new (l?: string, o?: object) => GraphemeSegmenter }).Segmenter(undefined, { granularity: 'grapheme' })
+    : null;
+
+function splitGraphemes(word: string): string[] {
+  if (graphemeSegmenter) return Array.from(graphemeSegmenter.segment(word), (x) => x.segment);
+  return Array.from(word);
+}
+
+/**
+ * Tek satır yerleşim fonksiyonu: ölçüm, çizim, hit-test ve export aynı satırları kullanır.
+ * Kelime bazlı sarar; maxWidth'ten uzun tek kelime grafem (emoji/Türkçe güvenli) bazında kırılır.
+ * ctx.font çağırandan önce ayarlanmış olmalıdır.
+ */
+export function layoutTextLines(ctx: CanvasRenderingContext2D, text: string, maxWidth: number): string[] {
+  const out: string[] = [];
+  const w = (t: string) => ctx.measureText(t).width;
+  for (const para of text.split('\n')) {
+    if (para === '' || w(para) <= maxWidth) {
+      out.push(para);
+      continue;
+    }
+    let cur = '';
+    const flush = () => {
+      if (cur) out.push(cur.replace(/\s+$/, ''));
+      cur = '';
+    };
+    for (const word of para.split(/(?<=\s)/)) {
+      const trimmed = word.replace(/\s+$/, '');
+      if (cur && w(cur + trimmed) > maxWidth) flush();
+      if (w(trimmed) > maxWidth) {
+        for (const g of splitGraphemes(word)) {
+          if (cur && w(cur + g) > maxWidth) flush();
+          cur += g;
+        }
+      } else {
+        cur += word;
+      }
+    }
+    flush();
+  }
+  return out.length ? out : [''];
+}
+
 export class TextLayer extends BaseLayer {
   public override type = 'text';
   public style: TextStyle;
@@ -239,28 +289,60 @@ export class TextLayer extends BaseLayer {
   }
 
   private cachedBounds: Rect | null = null;
+  private cachedLines: string[] = [''];
+  private get layoutPadding(): number {
+    const hasBg = this.bgPreset === 'solid' || this.bgPreset === 'translucent';
+    return hasBg ? (this.style.backgroundPadding ?? 24) : 16;
+  }
   private cachedBoundsKey = '';
+  /** N-2: tuval yüksekliğine sığması için küçültülmüş yazı boyu (null = style.fontSize). */
+  private effFontSize: number | null = null;
 
   private getFontString(): string {
-    return `${this.style.fontStyle} ${this.style.fontWeight} ${this.style.fontSize}px ${this.style.fontFamily}`;
+    return `${this.style.fontStyle} ${this.style.fontWeight} ${this.effFontSize ?? this.style.fontSize}px ${this.style.fontFamily}`;
   }
 
-  public override getBoundingBox(ctx: CanvasRenderingContext2D, _canvasWidth: number, _canvasHeight: number): Rect {
-    const fontStr = this.getFontString();
+  /**
+   * Piksel uzayında sınırlar (BaseLayer seçim çerçevesi/hit-test bunu transform.scale ile çarpar).
+   * Çizim mantıksal 1080 genişliğinde yapılıp canvasWidth/1080 ile ölçeklendiği için sınırlar da aynı oranla ölçeklenir.
+   */
+  public override getBoundingBox(ctx: CanvasRenderingContext2D, canvasWidth: number, canvasHeight: number): Rect {
+    const b = this.getLogicalBounds(ctx, canvasWidth, canvasHeight);
+    const k = canvasWidth > 0 ? canvasWidth / LOGICAL_CANVAS_WIDTH : 1;
+    return { x: b.x * k, y: b.y * k, width: b.width * k, height: b.height * k };
+  }
+
+  private getLogicalBounds(ctx: CanvasRenderingContext2D, canvasWidth = 0, canvasHeight = 0): Rect {
+    // N-2: mantıksal (1080 genişlikli) tuval yüksekliği; çok uzun metin buna sığacak şekilde küçültülür
+    const logicalH = canvasWidth > 0 && canvasHeight > 0 ? Math.round((canvasHeight * LOGICAL_CANVAS_WIDTH) / canvasWidth) : 0;
+    const fontStr = `${this.style.fontStyle} ${this.style.fontWeight} ${this.style.fontSize}px ${this.style.fontFamily}`;
     const hasBg = this.bgPreset === 'solid' || this.bgPreset === 'translucent';
     const padding = hasBg ? (this.style.backgroundPadding ?? 24) : 16;
-    const key = `${fontStr}|${padding}|${this.style.text}`;
+    const key = `${fontStr}|${padding}|${logicalH}|${this.style.text}`;
 
     if (this.cachedBounds && this.cachedBoundsKey === key) {
       return this.cachedBounds;
     }
 
     ctx.save();
-    ctx.font = fontStr;
-
-    const lines = this.style.text.split('\n');
+    const maxBoxH = logicalH > 0 ? logicalH * 0.92 : Infinity;
+    const minFont = Math.min(this.style.fontSize, 28);
+    let fs = this.style.fontSize;
+    let lines: string[] = [];
+    for (let iter = 0; iter < 8; iter++) {
+      this.effFontSize = fs;
+      ctx.font = this.getFontString();
+      const maxContentWidth = Math.max(fs, LOGICAL_CANVAS_WIDTH * SAFE_WIDTH_RATIO - padding * 2);
+      lines = layoutTextLines(ctx, this.style.text, maxContentWidth);
+      const h = lines.length * fs * 1.25 + padding * 2;
+      if (h <= maxBoxH || fs <= minFont) break;
+      // Yükseklik ~ fs^2 ile büyür (satır sayısı x satır yüksekliği): karekök oranıyla küçült
+      fs = Math.max(minFont, Math.floor(fs * Math.min(0.95, Math.sqrt(maxBoxH / h))));
+    }
+    if (fs === this.style.fontSize) this.effFontSize = null;
+    this.cachedLines = lines;
     let maxLineWidth = 0;
-    const lineHeight = this.style.fontSize * 1.25;
+    const lineHeight = (this.effFontSize ?? this.style.fontSize) * 1.25;
 
     for (const line of lines) {
       const metrics = ctx.measureText(line || ' ');
@@ -289,7 +371,7 @@ export class TextLayer extends BaseLayer {
     if (!this.visible || !this.style.text) return;
 
     const center = this.getPixelPosition(canvasWidth, canvasHeight);
-    const bounds = this.getBoundingBox(ctx, canvasWidth, canvasHeight);
+    const bounds = this.getLogicalBounds(ctx, canvasWidth, canvasHeight);
     const resScale = canvasWidth / 1080;
     const interactionScale = this.isInteracting ? 1.015 : 1.0;
     const finalScale = this.transform.scale * interactionScale * this.pulseScale * resScale;
@@ -337,10 +419,10 @@ export class TextLayer extends BaseLayer {
 
   // Yerel koordinatlarda (merkez 0,0) arka plan + metin çizimi
   private drawContent(ctx: CanvasRenderingContext2D, bounds: Rect): void {
-    const lines = this.style.text.split('\n');
-    const lineHeight = this.style.fontSize * 1.25;
+    const lines = this.cachedLines;
+    const lineHeight = (this.effFontSize ?? this.style.fontSize) * 1.25;
     const hasBg = this.bgPreset === 'solid' || this.bgPreset === 'translucent';
-    const padding = hasBg ? (this.style.backgroundPadding ?? 18) : 8;
+    const padding = this.layoutPadding;
 
     // 1. Arka Plan Kutusu (Solid veya Translucent)
     if (hasBg && this.style.backgroundColor && this.style.backgroundColor !== 'transparent') {

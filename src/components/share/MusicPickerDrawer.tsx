@@ -672,7 +672,7 @@ export default function MusicPickerDrawer({
 
   return (
     <EditorPortal>
-    <div className="fixed inset-0 z-sheet flex flex-col bg-neutral-950/98 text-white backdrop-blur-2xl animate-in slide-in-from-bottom duration-300 ease-out pt-safe pb-safe">
+    <div role="dialog" aria-modal="true" aria-label="Müzik Seç" className="fixed inset-0 z-sheet flex flex-col bg-neutral-950/98 text-white backdrop-blur-2xl animate-in slide-in-from-bottom duration-300 ease-out pt-safe pb-safe">
       {/* Görünmez Canlı Ses Akışı Oynatıcısı */}
       <audio
         ref={audioRef}
@@ -767,20 +767,21 @@ export default function MusicPickerDrawer({
       />
 
       {/* 1. ÜST BAŞLIK BARI */}
-      <div className="flex items-center justify-between px-4 pt-4 pb-3 border-b border-white/10 shrink-0">
+      <div className="flex items-center justify-between px-4 pt-4 pb-3 border-b border-[var(--ed-line,#2a303a)] shrink-0">
         <button
           type="button"
           onClick={() => {
             if (audioRef.current) audioRef.current.pause();
             onClose();
           }}
-          className="w-9 h-9 rounded-full bg-white/10 hover:bg-white/15 active:scale-95 text-white flex items-center justify-center transition-all"
+          aria-label="Müzik seçiciyi kapat"
+          className="w-11 h-11 rounded-full bg-white/10 hover:bg-white/15 active:scale-95 text-white flex items-center justify-center transition-all"
         >
           <ChevronDown className="w-5 h-5" />
         </button>
 
         <div className="flex items-center gap-2">
-          <Music className="w-4 h-4 text-pink-400" />
+          <Music className="w-4 h-4 text-[var(--ed-ac,#38d5c8)]" />
           <h2 className="text-sm font-bold tracking-wide">Müzik Seç</h2>
         </div>
 
@@ -794,32 +795,33 @@ export default function MusicPickerDrawer({
             <Check className="w-3.5 h-3.5" />
           </button>
         ) : (
-          <div className="w-9 h-9" />
+          <div className="w-11 h-11" />
         )}
       </div>
 
       {/* 2. ARAMA KUTUSU */}
       <div className="p-4 pb-2 shrink-0">
-        <div className="flex items-center gap-2.5 px-3.5 py-2.5 rounded-2xl bg-white/5 border border-white/10 focus-within:border-pink-500/50 focus-within:bg-white/10 transition-all">
-          <Search className="w-4 h-4 text-zinc-400 shrink-0" />
+        <div className="flex items-center gap-2.5 px-3.5 py-2.5 rounded-2xl bg-[var(--ed-bg2,#1a1e25)] border border-[var(--ed-line,#2a303a)] focus-within:border-[var(--ed-ac,#38d5c8)] focus-within:bg-white/10 transition-all">
+          <Search className="w-4 h-4 text-[var(--ed-tx2,#98a2b3)] shrink-0" />
           <input
             type="text"
             value={searchQuery}
             onChange={(e) => handleSearchChange(e.target.value)}
             placeholder="Şarkı veya sanatçı ara..."
-            className="w-full bg-transparent text-sm text-white placeholder:text-zinc-500 outline-none"
+            className="w-full bg-transparent text-sm text-white placeholder:text-[var(--ed-tx3,#5b6574)] outline-none"
           />
           {searchQuery && (
             <button
               type="button"
               onClick={() => handleSearchChange("")}
-              className="p-1 rounded-full text-zinc-400 hover:text-white"
+              aria-label="Aramayı temizle"
+              className="p-1 rounded-full text-[var(--ed-tx2,#98a2b3)] hover:text-white"
             >
               <X className="w-3.5 h-3.5" />
             </button>
           )}
           {isSearching && (
-            <Loader2 className="w-4 h-4 text-pink-400 animate-spin shrink-0" />
+            <Loader2 className="w-4 h-4 text-[var(--ed-ac,#38d5c8)] animate-spin shrink-0" />
           )}
         </div>
       </div>
@@ -827,7 +829,7 @@ export default function MusicPickerDrawer({
       {/* 2b. SEKMELER (Arama yapılırken gizlenir) */}
       {!isSearchActive && (
         <div className="px-4 pb-1 shrink-0">
-          <div className="grid grid-cols-3 gap-1 bg-white/5 p-1 rounded-2xl border border-white/10">
+          <div className="grid grid-cols-3 gap-1 bg-[var(--ed-bg2,#1a1e25)] p-1 rounded-2xl border border-[var(--ed-line,#2a303a)]">
             {([
               ["discover", "Keşfet"],
               ["recent", "Son Kullanılanlar"],
@@ -837,10 +839,11 @@ export default function MusicPickerDrawer({
                 key={key}
                 type="button"
                 onClick={() => setActiveTab(key)}
+                aria-pressed={activeTab === key}
                 className={`py-1.5 rounded-xl text-[11px] font-bold transition-all truncate ${
                   activeTab === key
                     ? "bg-white text-black shadow-sm"
-                    : "text-zinc-400 hover:text-white"
+                    : "text-[var(--ed-tx2,#98a2b3)] hover:text-white"
                 }`}
               >
                 {label}
@@ -862,12 +865,12 @@ export default function MusicPickerDrawer({
               onClick={() => toggleListPreview(track)}
               className={`w-full flex items-center justify-between p-2.5 rounded-2xl border cursor-pointer transition-all active:scale-[0.99] ${
                 isSelected
-                  ? "bg-pink-500/15 border-pink-500/40 text-white shadow-xl shadow-pink-500/10"
-                  : "bg-white/5 hover:bg-white/10 border-white/5 text-white"
+                  ? "bg-[rgba(56,213,200,0.15)] border-[rgba(56,213,200,0.40)] text-white "
+                  : "bg-[var(--ed-bg2,#1a1e25)] hover:bg-white/10 border-[var(--ed-line,#2a303a)] text-white"
               }`}
             >
               <div className="flex items-center gap-3 min-w-0">
-                <div className="w-12 h-12 rounded-xl bg-zinc-800 overflow-hidden relative shrink-0 flex items-center justify-center shadow-md">
+                <div className="w-12 h-12 rounded-xl bg-[var(--ed-bg3,#232932)] overflow-hidden relative shrink-0 flex items-center justify-center shadow-md">
                   {track.thumbnail ? (
                     <img
                       src={track.thumbnail}
@@ -876,7 +879,7 @@ export default function MusicPickerDrawer({
                       crossOrigin="anonymous"
                     />
                   ) : (
-                    <Music className="w-5 h-5 text-pink-400" />
+                    <Music className="w-5 h-5 text-[var(--ed-ac,#38d5c8)]" />
                   )}
                   <div
                     className={`absolute inset-0 flex items-center justify-center transition-opacity ${
@@ -897,13 +900,13 @@ export default function MusicPickerDrawer({
                   <p className="text-xs font-bold text-white truncate">
                     {track.title}
                   </p>
-                  <p className="text-[11px] text-zinc-400 truncate mt-0.5">
+                  <p className="text-[11px] text-[var(--ed-tx2,#98a2b3)] truncate mt-0.5">
                     {track.artist}
                   </p>
                   {isPreviewing && !isPreviewLoading && (
                     <div className="mt-1.5 h-0.5 w-24 rounded-full bg-white/15 overflow-hidden">
                       <div
-                        className="h-full bg-pink-400 rounded-full"
+                        className="h-full bg-[var(--ed-ac,#38d5c8)] rounded-full"
                         style={{
                           animation: `musicPreviewBar ${LIST_PREVIEW_SEC}s linear forwards`,
                         }}
@@ -914,7 +917,7 @@ export default function MusicPickerDrawer({
               </div>
 
               <div className="shrink-0 flex items-center gap-1.5 pl-2">
-                <span className="text-[11px] text-zinc-400 font-mono">
+                <span className="text-[11px] text-[var(--ed-tx2,#98a2b3)] font-mono">
                   {track.durationFormatted}
                 </span>
                 <button
@@ -923,10 +926,12 @@ export default function MusicPickerDrawer({
                     e.stopPropagation();
                     toggleSavedTrack(track);
                   }}
-                  className="w-8 h-8 rounded-full flex items-center justify-center text-zinc-400 hover:text-white transition-all active:scale-90"
+                  aria-label={isSaved ? `Kaydedilenlerden çıkar: ${track.title}` : `Kaydet: ${track.title}`}
+                  aria-pressed={isSaved}
+                  className="w-11 h-11 rounded-full flex items-center justify-center text-[var(--ed-tx2,#98a2b3)] hover:text-white transition-all active:scale-90"
                 >
                   <Heart
-                    className={`w-4 h-4 ${isSaved ? "fill-pink-500 text-pink-500" : ""}`}
+                    className={`w-4 h-4 ${isSaved ? "fill-[var(--ed-ac,#38d5c8)] text-[var(--ed-ac,#38d5c8)]" : ""}`}
                   />
                 </button>
                 <button
@@ -935,9 +940,10 @@ export default function MusicPickerDrawer({
                     e.stopPropagation();
                     if (!isSelected) handleSelectTrack(track);
                   }}
-                  className={`h-8 px-3 rounded-full flex items-center justify-center gap-1 text-[11px] font-bold transition-all active:scale-95 ${
+                  aria-label={isSelected ? `Seçili: ${track.title}` : `Kullan: ${track.title}`}
+                  className={`h-11 min-w-11 px-3 rounded-full flex items-center justify-center gap-1 text-[11px] font-bold transition-all active:scale-95 ${
                     isSelected
-                      ? "bg-pink-500 text-white"
+                      ? "bg-[var(--ed-ac,#38d5c8)] text-[var(--ed-ac-tx,#04201e)]"
                       : "bg-white/10 text-white hover:bg-white/20"
                   }`}
                 >
@@ -949,7 +955,7 @@ export default function MusicPickerDrawer({
         })}
 
         {visibleTracks.length === 0 && !isSearching && (
-          <div className="py-16 text-center text-xs text-zinc-500">
+          <div className="py-16 text-center text-xs text-[var(--ed-tx3,#5b6574)]">
             Şarkı yok
           </div>
         )}
@@ -958,7 +964,7 @@ export default function MusicPickerDrawer({
 
       {/* 4. KIRPICI BAR (Hikaye 30 sn / Reels timeline süresi) */}
       {selectedTrack && (
-        <div className="shrink-0 p-4 pb-6 border-t border-white/10 bg-neutral-900/95 backdrop-blur-2xl flex flex-col gap-3.5 animate-in slide-in-from-bottom duration-200">
+        <div className="shrink-0 p-4 pb-6 border-t border-[var(--ed-line,#2a303a)] bg-neutral-900/95 backdrop-blur-2xl flex flex-col gap-3.5 animate-in slide-in-from-bottom duration-200">
           {/* Üst Satır: Şarkı Bilgisi & Canlı Saniye Göstergesi */}
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-2.5 min-w-0">
@@ -966,7 +972,7 @@ export default function MusicPickerDrawer({
                 {formatSeconds(selectedStartSec)} -{" "}
                 {formatSeconds(Math.min(selectedStartSec + windowSec, selectedTrack.duration))}
               </span>
-              <span className="text-[11px] text-zinc-400">
+              <span className="text-[11px] text-[var(--ed-tx2,#98a2b3)]">
                 / {selectedTrack.durationFormatted}
               </span>
             </div>
@@ -985,6 +991,7 @@ export default function MusicPickerDrawer({
             <button
               type="button"
               onClick={togglePlayPause}
+              aria-label={isPlaying ? "Duraklat" : "Oynat"}
               className="w-11 h-11 rounded-full bg-white text-black flex items-center justify-center shrink-0 shadow-xl hover:bg-neutral-100 active:scale-95 transition-all"
             >
               {isAudioLoading ? (
@@ -1004,7 +1011,7 @@ export default function MusicPickerDrawer({
               onPointerUp={handleWavePointerUp}
               onPointerCancel={handleWavePointerUp}
               onWheel={handleWaveWheel}
-              className={`flex-1 relative h-12 bg-black/60 rounded-2xl border border-white/10 overflow-hidden touch-none ${
+              className={`flex-1 relative h-12 bg-black/60 rounded-2xl border border-[var(--ed-line,#2a303a)] overflow-hidden touch-none ${
                 isDragging ? "cursor-grabbing" : "cursor-grab"
               }`}
             >
@@ -1051,7 +1058,7 @@ export default function MusicPickerDrawer({
                       return (
                         <div
                           key={idx}
-                          className="absolute top-1/2 -translate-y-1/2 rounded-full bg-gradient-to-t from-pink-500 via-rose-400 to-amber-300"
+                          className="absolute top-1/2 -translate-y-1/2 rounded-full bg-[var(--ed-ac,#38d5c8)]"
                           style={{
                             left: `${idx * barPitchPx}px`,
                             width: `${BAR_WIDTH_PX}px`,
@@ -1079,7 +1086,7 @@ export default function MusicPickerDrawer({
           <button
             type="button"
             onClick={handleConfirm}
-            className="w-full py-3.5 rounded-2xl bg-gradient-to-r from-pink-500 via-rose-500 to-amber-500 hover:opacity-95 active:scale-[0.98] text-white font-bold text-sm shadow-xl shadow-pink-500/25 transition-all flex items-center justify-center gap-2"
+            className="w-full py-3.5 rounded-2xl bg-[var(--ed-ac,#38d5c8)] hover:opacity-95 active:scale-[0.98] text-[var(--ed-ac-tx,#04201e)] font-bold text-sm transition-all flex items-center justify-center gap-2"
           >
             <span>{confirmLabel}</span>
             <Check className="w-4 h-4 stroke-[3]" />
