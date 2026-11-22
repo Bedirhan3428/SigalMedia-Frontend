@@ -541,6 +541,8 @@ export class CanvasEngine {
       this.applyMediaConstraints();
       this.syncActiveClipTransformFromMediaLayer();
     }
+    // Kenar tutamacıyla kutu boyu / ölçek değişti: overlay dokusu (önizleme + GPU export) yeniden çizilmeli
+    if (layer !== this.mediaLayer) this.invalidateStaticCache();
     this.pendingTransformLayer = layer;
     this.hasPendingTransform = true;
     this.requestRender();
@@ -551,6 +553,7 @@ export class CanvasEngine {
       this.applyMediaConstraints();
       this.syncActiveClipTransformFromMediaLayer();
     }
+    if (changed && layer !== this.mediaLayer) this.invalidateStaticCache();
     this.requestRender();
     if (changed) this.emit('change');
   }

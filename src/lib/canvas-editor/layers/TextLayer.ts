@@ -295,6 +295,39 @@ export class TextLayer extends BaseLayer {
     return hasBg ? (this.style.backgroundPadding ?? 24) : 16;
   }
   private cachedBoundsKey = '';
+  private cachedContentH = 0;
+
+  private clampBoxWidth(w: number, fs: number, padding: number): number {
+    return Math.max(this.minBoxWidthFor(fs, padding), Math.min(LOGICAL_CANVAS_WIDTH, w));
+  }
+
+  private minBoxWidthFor(fs: number, padding: number): number {
+    return Math.max(120, fs + padding * 2);
+  }
+
+  public override supportsEdgeHandles(): boolean {
+    return true;
+  }
+
+  /** Kenar tutamaçları için: mevcut kutu (mantıksal px) ve sınırlar. */
+  public getBoxMetrics(ctx: CanvasRenderingContext2D, canvasWidth: number, canvasHeight: number): { width: number; height: number; minWidth: number; minHeight: number; maxWidth: number; maxHeight: number } {
+    const b = this.getLogicalBounds(ctx, canvasWidth, canvasHeight);
+    const logicalH = canvasWidth > 0 && canvasHeight > 0 ? Math.round((canvasHeight * LOGICAL_CANVAS_WIDTH) / canvasWidth) : 4000;
+    return {
+      width: b.width,
+      height: b.height,
+      minWidth: this.minBoxWidthFor(this.effFontSize ?? this.style.fontSize, this.layoutPadding),
+      minHeight: this.cachedContentH,
+      maxWidth: LOGICAL_CANVAS_WIDTH,
+      maxHeight: logicalH,
+    };
+  }
+
+  /** Kutu boyunu ayarlar (yalnız verilen eksen). */
+  public setBoxSize(size: { width?: number; height?: number }): void {
+    if (typeof size.width === 'number') this.style.boxWidth = Math.ceil(size.width);
+    if (typeof size.height === 'number') this.style.boxHeight = Math.ceil(size.height);
+  }
   /** N-2: tuval yüksekliğine sığması için küçültülmüş yazı boyu (null = style.fontSize). */
   private effFontSize: number | null = null;
 
@@ -318,7 +351,7 @@ export class TextLayer extends BaseLayer {
     const fontStr = `${this.style.fontStyle} ${this.style.fontWeight} ${this.style.fontSize}px ${this.style.fontFamily}`;
     const hasBg = this.bgPreset === 'solid' || this.bgPreset === 'translucent';
     const padding = hasBg ? (this.style.backgroundPadding ?? 24) : 16;
-    const key = `${fontStr}|${padding}|${logicalH}|${this.style.text}`;
+    const key = `${fontStr}|${padding}|${logicalH}|${this.style.boxWidth ?? ''}|${this.style.boxHeight ?? ''}|${this.style.text}`;
 
     if (this.cachedBounds && this.cachedBoundsKey === key) {
       return this.cachedBounds;
@@ -332,7 +365,10 @@ export class TextLayer extends BaseLayer {
     for (let iter = 0; iter < 8; iter++) {
       this.effFontSize = fs;
       ctx.font = this.getFontString();
-      const maxContentWidth = Math.max(fs, LOGICAL_CANVAS_WIDTH * SAFE_WIDTH_RATIO - padding * 2);
+      const boxW = this.style.boxWidth;
+      const maxContentWidth = boxW
+        ? Math.max(fs, this.clampBoxWidth(boxW, fs, padding) - padding * 2)
+        : Math.max(fs, LOGICAL_CANVAS_WIDTH * SAFE_WIDTH_RATIO - padding * 2);
       lines = layoutTextLines(ctx, this.style.text, maxContentWidth);
       const h = lines.length * fs * 1.25 + padding * 2;
       if (h <= maxBoxH || fs <= minFont) break;
@@ -352,8 +388,15 @@ export class TextLayer extends BaseLayer {
     }
     ctx.restore();
 
-    const totalW = Math.max(180, maxLineWidth + padding * 2);
-    const totalH = Math.max(110, lines.length * lineHeight + padding * 2);
+    const contentH = lines.length * lineHeight + padding * 2;
+    const fsEff = this.effFontSize ?? this.style.fontSize;
+    const totalW = this.style.boxWidth
+      ? this.clampBoxWidth(this.style.boxWidth, fsEff, padding)
+      : Math.max(180, maxLineWidth + padding * 2);
+    const totalH = this.style.boxHeight
+      ? Math.max(contentH, this.style.boxHeight)
+      : Math.max(110, contentH);
+    this.cachedContentH = contentH;
 
     this.cachedBoundsKey = key;
     this.cachedBounds = {
@@ -388,6 +431,8 @@ export class TextLayer extends BaseLayer {
       this.style.backgroundColor,
       this.style.backgroundPadding,
       this.style.borderRadius,
+      bounds.width.toFixed(1),
+      bounds.height.toFixed(1),
       this.bgPreset,
       this.fontPreset,
       finalScale.toFixed(3),
@@ -465,7 +510,7 @@ export class TextLayer extends BaseLayer {
     }
 
     // 3. Her satırı çiz
-    const startY = -bounds.height / 2 + padding + lineHeight / 2;
+    const startY = -(lines.length * lineHeight) / 2 + lineHeight / 2;
 
     lines.forEach((line, index) => {
       const lineY = startY + index * lineHeight;

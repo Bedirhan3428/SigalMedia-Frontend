@@ -98,6 +98,9 @@ export interface TextStyle {
   strokeWidth?: number;
   shadowColor?: string;
   shadowBlur?: number;
+  /** Kullanıcının kenar tutamaçlarıyla verdiği kutu boyu (1080 genişlikli mantıksal px, dolgu dahil). Yoksa otomatik. */
+  boxWidth?: number;
+  boxHeight?: number;
 }
 
 export interface LayerTransform {
