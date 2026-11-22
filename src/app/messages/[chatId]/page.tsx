@@ -118,7 +118,6 @@ export default function ChatRoomPage() {
   const [peerTyping, setPeerTyping] = useState(false);
 
   const mainScrollRef = useRef<HTMLElement | null>(null);
-  const listContainerRef = useRef<HTMLDivElement | null>(null);
   const bottomRef = useRef<HTMLDivElement | null>(null);
   const inputRef = useRef<HTMLTextAreaElement | null>(null);
   const typingTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -129,7 +128,6 @@ export default function ChatRoomPage() {
   const lastSendTimestampRef = useRef<number>(0);
   // Mobil klavye IME/otomatik düzeltme tamponunun gönderimden hemen sonra eski metni input'a geri yazmasını engeller
   const ignoreInputUntilRef = useRef<number>(0);
-  const prevDisplayedCountRef = useRef<number>(0);
 
   const showError = (msg: string) => {
     setErrorToast(msg);
@@ -170,7 +168,6 @@ export default function ChatRoomPage() {
       if (!initialHistoryLoadedRef.current) {
         initialHistoryLoadedRef.current = true;
         initialMessageIdsRef.current = new Set(list.map((m) => m.id));
-        prevDisplayedCountRef.current = list.length;
       }
       setMessages(list);
       markChatAsRead(chatId, profile.uid, myReadReceipts, list);
@@ -224,31 +221,14 @@ export default function ChatRoomPage() {
     return [...messages, ...stillPending];
   }, [messages, pendingMessages]);
 
-  // Yeni mesaj eklendiğinde metinleri kesmeden tüm kutucukları aşağıdan yukarıya doğru akıcı şekilde kaydırır
-  useEffect(() => {
+  // Yeni mesaj eklendiğinde liste boyamadan ÖNCE (layout effect) en alta sabitlenir; ilk karede bile kayma
+  // olmaz. Liste kabını kaydıran animasyon yok: eski mesajlar yerinde kalır, yalnızca yeni kutucuk
+  // kendi slide-up animasyonunu oynatır (liste kabı overflow-y:clip, dönüşüm scrollHeight'ı şişirmez).
+  useLayoutEffect(() => {
     const el = mainScrollRef.current;
     if (el) {
       el.scrollTop = el.scrollHeight;
     }
-
-    if (
-      initialHistoryLoadedRef.current &&
-      displayedMessages.length > prevDisplayedCountRef.current &&
-      listContainerRef.current &&
-      typeof listContainerRef.current.animate === "function"
-    ) {
-      listContainerRef.current.animate(
-        [
-          { transform: "translate3d(0, 22px, 0)" },
-          { transform: "translate3d(0, 0, 0)" },
-        ],
-        {
-          duration: 260,
-          easing: "cubic-bezier(0.22, 1, 0.36, 1)",
-        }
-      );
-    }
-    prevDisplayedCountRef.current = displayedMessages.length;
   }, [displayedMessages.length, peerTyping]);
 
   useLayoutEffect(() => {
@@ -443,14 +423,14 @@ export default function ChatRoomPage() {
       {/* Mesaj Akışı */}
       <main
         ref={mainScrollRef}
-        className="flex-1 max-w-md w-full mx-auto px-3 py-3 overflow-y-auto flex flex-col"
+        className="flex-1 max-w-md w-full mx-auto px-3 py-3 overflow-y-auto flex flex-col [overflow-anchor:none]"
       >
         {displayedMessages.length === 0 && !peerTyping ? (
           <div className="m-auto text-center text-xs text-zinc-500 select-none">
             Henüz mesaj yok.
           </div>
         ) : (
-          <div ref={listContainerRef} className="mt-auto flex flex-col">
+          <div className="mt-auto flex flex-col [overflow-y:clip]">
             {displayedMessages.map((msg, idx) => {
               const isMine = msg.senderUid === profile?.uid;
               const prevMsg = idx > 0 ? displayedMessages[idx - 1] : null;
