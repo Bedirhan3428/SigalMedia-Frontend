@@ -41,14 +41,11 @@ export function normalizeSettings(raw: unknown): ChatSettings {
       photo: typeof bg.photo === "string" && bg.photo.length < 20 ? bg.photo : D.bg.photo,
       blur: clamp(bg.blur, 0, 20, 0),
       dim: clamp(bg.dim, 0, 80, 0),
+      ...(typeof bg.customAt === "number" && Number.isFinite(bg.customAt) ? { customAt: bg.customAt } : {}),
     },
     bubble: oneOf(r.bubble, ["round", "soft", "sharp"] as const, D.bubble),
     textSize: oneOf(r.textSize, ["S", "M", "L"] as const, D.textSize),
     compact: r.compact === true,
-    quickReaction:
-      typeof r.quickReaction === "string" && r.quickReaction && r.quickReaction.length <= 8
-        ? r.quickReaction
-        : D.quickReaction,
     nickname: typeof r.nickname === "string" ? r.nickname.slice(0, 24) : "",
   };
 }
