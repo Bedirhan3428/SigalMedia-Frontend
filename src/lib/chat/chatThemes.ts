@@ -97,7 +97,7 @@ export const BUBBLE_SHAPES: Record<BubbleShape, { r: string; rt: string }> = {
   sharp: { r: "6px", rt: "2px" },
 };
 
-export const QUICK_EMOJIS = ["❤️", "😂", "🔥", "👍", "😍", "🥹", "🎉", "😮"];
+export const QUICK_EMOJIS = ["❤️", "😂", "🔥", "👍", "😍", "🙏", "🎉", "😮"];
 
 export const DEFAULT_CHAT_SETTINGS: ChatSettings = {
   v: 1,
