@@ -91,6 +91,28 @@ function fitTextarea(el: HTMLTextAreaElement | null) {
   el.style.overflowY = needed > INPUT_MAX_HEIGHT ? "auto" : "hidden";
 }
 
+const LIST_SLIDE_MS = 420;
+const LIST_SLIDE_EASING = "cubic-bezier(0.22, 1, 0.36, 1)";
+
+type ListSnapshot = { mid: string; bottom: number };
+
+// Yeni mesaj state'e girmeden ÖNCE son kutucuğun (devam eden animasyon dahil) görsel konumunu kaydeder.
+// Liste en altta değilse kaydetmez (kullanıcı geçmişi okuyor, animasyon yok).
+function takeListSnapshot(
+  main: HTMLElement | null,
+  inner: HTMLElement | null
+): ListSnapshot | null {
+  if (!main || !inner) return null;
+  if (main.scrollHeight - main.scrollTop - main.clientHeight > 4) return null;
+  const nodes = inner.querySelectorAll<HTMLElement>("[data-mid]");
+  const last = nodes[nodes.length - 1];
+  if (!last) return null;
+  return {
+    mid: last.dataset.mid || "",
+    bottom: last.getBoundingClientRect().bottom,
+  };
+}
+
 export default function ChatRoomPage() {
   const params = useParams<{ chatId: string }>();
   const router = useRouter();
@@ -118,6 +140,9 @@ export default function ChatRoomPage() {
   const [peerTyping, setPeerTyping] = useState(false);
 
   const mainScrollRef = useRef<HTMLElement | null>(null);
+  const listInnerRef = useRef<HTMLDivElement | null>(null);
+  const listSnapshotRef = useRef<ListSnapshot | null>(null);
+  const prevListLenRef = useRef<number>(0);
   const bottomRef = useRef<HTMLDivElement | null>(null);
   const inputRef = useRef<HTMLTextAreaElement | null>(null);
   const typingTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -169,6 +194,10 @@ export default function ChatRoomPage() {
         initialHistoryLoadedRef.current = true;
         initialMessageIdsRef.current = new Set(list.map((m) => m.id));
       }
+      listSnapshotRef.current = takeListSnapshot(
+        mainScrollRef.current,
+        listInnerRef.current
+      );
       setMessages(list);
       markChatAsRead(chatId, profile.uid, myReadReceipts, list);
     });
@@ -221,19 +250,69 @@ export default function ChatRoomPage() {
     return [...messages, ...stillPending];
   }, [messages, pendingMessages]);
 
-  // Yeni mesaj eklendiğinde liste boyamadan ÖNCE (layout effect) en alta sabitlenir; ilk karede bile kayma
-  // olmaz. Liste kabını kaydıran animasyon yok: eski mesajlar yerinde kalır, yalnızca yeni kutucuk
-  // kendi slide-up animasyonunu oynatır (liste kabı overflow-y:clip, dönüşüm scrollHeight'ı şişirmez).
+  // Yeni mesaj eklendiğinde liste boyamadan ÖNCE (layout effect) en alta sabitlenir (ilk karede bile kayma
+  // yok). Eski mesajlar FLIP ile yumuşakça yukarı kayar: iç sarmalayıcıya +delta translateY verilip 0'a
+  // geçirilir. Dış kap overflow-y:clip olduğu için dönüşüm scrollHeight'ı şişirmez / scrollTop'u kıstırmaz.
   useLayoutEffect(() => {
     const el = mainScrollRef.current;
     if (el) {
       el.scrollTop = el.scrollHeight;
     }
+    const grew = displayedMessages.length > prevListLenRef.current;
+    const snap = listSnapshotRef.current;
+    listSnapshotRef.current = null;
+    prevListLenRef.current = displayedMessages.length;
+
+    const inner = listInnerRef.current;
+    if (!grew || !snap || !inner || typeof window === "undefined") return;
+    if (window.matchMedia?.("(prefers-reduced-motion: reduce)").matches) {
+      inner.style.transition = "none";
+      inner.style.transform = "";
+      return;
+    }
+    const anchor = Array.from(
+      inner.querySelectorAll<HTMLElement>("[data-mid]")
+    ).find((n) => n.dataset.mid === snap.mid);
+    if (!anchor) return;
+    // Devam eden geçişi iptal et, düzen konumunu ölç; delta = eski görsel konum - yeni düzen konumu
+    inner.style.transition = "none";
+    inner.style.transform = "none";
+    const delta = snap.bottom - anchor.getBoundingClientRect().bottom;
+    if (Math.abs(delta) < 0.5) {
+      inner.style.transform = "";
+      return;
+    }
+    inner.style.transform = `translateY(${delta}px)`;
+    void inner.offsetHeight;
+    inner.style.transition = `transform ${LIST_SLIDE_MS}ms ${LIST_SLIDE_EASING}`;
+    inner.style.transform = "translateY(0px)";
   }, [displayedMessages.length, peerTyping]);
 
   useLayoutEffect(() => {
     fitTextarea(inputRef.current);
   }, [inputText]);
+
+  // Liste en alttayken yazı kutusu büyür/küçülürse (main yüksekliği değişir) son mesajlar görünür kalsın.
+  useEffect(() => {
+    const el = mainScrollRef.current;
+    if (!el || typeof ResizeObserver === "undefined") return;
+    let atBottom = true;
+    let lastH = el.clientHeight;
+    const onScroll = () => {
+      atBottom = el.scrollHeight - el.scrollTop - el.clientHeight <= 4;
+    };
+    el.addEventListener("scroll", onScroll, { passive: true });
+    const ro = new ResizeObserver(() => {
+      if (el.clientHeight === lastH) return;
+      lastH = el.clientHeight;
+      if (atBottom) el.scrollTop = el.scrollHeight;
+    });
+    ro.observe(el);
+    return () => {
+      el.removeEventListener("scroll", onScroll);
+      ro.disconnect();
+    };
+  }, [mounted, loading]);
 
   const handleInputChange = (val: string) => {
     // Gönder butonuna basıldıktan hemen sonraki 80ms içinde mobil klavyenin eski kelimeyi geri basmasını engelle
@@ -288,6 +367,11 @@ export default function ChatRoomPage() {
     }
     lastSendTimestampRef.current = now;
     ignoreInputUntilRef.current = now + 80;
+
+    listSnapshotRef.current = takeListSnapshot(
+      mainScrollRef.current,
+      listInnerRef.current
+    );
 
     // Input alanını hem React state hem de DOM üzerinden kesin olarak temizle
     setInputText("");
@@ -354,7 +438,7 @@ export default function ChatRoomPage() {
         @keyframes sigalBubbleSlideUp {
           0% {
             opacity: 0;
-            transform: translate3d(0, 26px, 0) scale(0.95);
+            transform: translate3d(0, 0, 0) scale(0.95);
           }
           100% {
             opacity: 1;
@@ -431,6 +515,7 @@ export default function ChatRoomPage() {
           </div>
         ) : (
           <div className="mt-auto flex flex-col [overflow-y:clip]">
+            <div ref={listInnerRef} className="flex flex-col">
             {displayedMessages.map((msg, idx) => {
               const isMine = msg.senderUid === profile?.uid;
               const prevMsg = idx > 0 ? displayedMessages[idx - 1] : null;
@@ -487,7 +572,7 @@ export default function ChatRoomPage() {
                 !initialMessageIdsRef.current.has(msg.id);
 
               return (
-                <div key={stableDomKey} className="flex flex-col">
+                <div key={stableDomKey} data-mid={stableDomKey} className="flex flex-col">
                   {showTimeHeader && (
                     <div className="my-2 flex justify-center select-none">
                       <span className="text-[11px] font-medium text-zinc-500">
@@ -517,6 +602,7 @@ export default function ChatRoomPage() {
                 </div>
               );
             })}
+            </div>
           </div>
         )}
 
