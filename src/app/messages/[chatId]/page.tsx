@@ -85,9 +85,10 @@ function formatChatTimeHeader(timestamp?: number): string {
   return `${dayStr} ${timeStr}`;
 }
 
-// Reaction chip (Instagram style): a badge sitting on the bubble's bottom corner, 15% of its height over the
-// bubble. The row below the bubble reserves the remaining 85% plus the 2px background ring.
-const CHIP_H = 24;
+// Reaction: a bare emoji (no badge background) about as tall as a one-line bubble, sitting on the bubble's
+// bottom corner with 15% of its height over the bubble. The row below the bubble reserves the remaining 85%.
+const CHIP_H = 40;
+const CHIP_EMOJI_PX = 34;
 const CHIP_OVERHANG = CHIP_H * 0.85;
 const CHIP_RESERVE = CHIP_OVERHANG + 2;
 
@@ -1114,17 +1115,22 @@ export default function ChatRoomPage() {
                               key={c.emoji}
                               data-emoji={c.emoji}
                               aria-label={`${c.emoji} ${c.count}`}
-                              className="msg-chip inline-flex items-center justify-center gap-1 px-2 rounded-full text-[13px] leading-none border select-none whitespace-nowrap"
+                              className="msg-chip inline-flex items-end gap-0.5 leading-none select-none whitespace-nowrap"
                               style={{
                                 height: CHIP_H,
-                                background: isMine ? "var(--sent-b)" : "var(--recv-bg)",
-                                color: isMine ? "var(--sent-t)" : "var(--recv-t)",
-                                borderColor: "transparent",
-                                boxShadow: "0 0 0 2px var(--bg1)",
+                                fontSize: CHIP_EMOJI_PX,
+                                filter: "drop-shadow(0 1px 2px rgba(0,0,0,.35))",
                               }}
                             >
                               <span>{c.emoji}</span>
-                              {c.count > 1 && <span className="text-[11px]">{c.count}</span>}
+                              {c.count > 1 && (
+                                <span
+                                  className="text-[12px] font-semibold pb-0.5"
+                                  style={{ color: "var(--recv-t)" }}
+                                >
+                                  {c.count}
+                                </span>
+                              )}
                             </span>
                           ))}
                         </div>
