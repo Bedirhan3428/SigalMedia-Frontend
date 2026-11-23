@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo, useCallback } from "react";
 import { useAuth } from "@/context/AuthContext";
 import Link from "next/link";
 import {
@@ -26,6 +26,11 @@ import {
   Check,
 } from "lucide-react";
 import BottomNav from "@/components/BottomNav";
+import ProfileHeader, { profileRootClass } from "@/components/profile/ProfileHeader";
+import ProfileSongPlayer from "@/components/profile/ProfileSongPlayer";
+import ProfileCustomizeSheet from "@/components/profile/ProfileCustomizeSheet";
+import { parseProfileStyle, effectiveBanner, saveProfileStyle, type ProfileStyle } from "@/lib/profile/profileStyleStore";
+import { stopProfileAudio } from "@/lib/profile/profileAudio";
 import { FaPhotoFilm } from "react-icons/fa6";
 import { TbRepeat } from "react-icons/tb";
 
@@ -58,6 +63,39 @@ export default function ProfilePage() {
   useEffect(() => {
     setMounted(true);
   }, []);
+
+  // Profil stili (tema/banner/şarkı): iyimser güncelleme için yerel geçersiz kılma
+  const [styleOverride, setStyleOverride] = useState<ProfileStyle | null>(null);
+  const [sheetOpen, setSheetOpen] = useState(false);
+  const style = useMemo(
+    () => styleOverride ?? parseProfileStyle(profile?.profileStyle),
+    [styleOverride, profile?.profileStyle]
+  );
+  const themed = style.theme !== "sade";
+  const banner = effectiveBanner(style);
+
+  useEffect(() => {
+    if (sheetOpen) stopProfileAudio();
+  }, [sheetOpen]);
+
+  const closeSheet = useCallback(() => setSheetOpen(false), []);
+
+  const handleSaveStyle = async (next: ProfileStyle) => {
+    if (!profile?.uid) return;
+    const prev = style;
+    // İyimser: sayfa hemen güncellenir, kayıt arka planda yazılır
+    setStyleOverride(next);
+    setSheetOpen(false);
+    showToast("Profilin güncellendi");
+    try {
+      await saveProfileStyle(profile.uid, next);
+      void refreshProfile();
+    } catch (err) {
+      console.error("Profil stili kaydedilemedi:", err);
+      setStyleOverride(prev);
+      showToast("Profil kaydedilemedi, tekrar dene");
+    }
+  };
 
   // Gönderileri Firestore'dan Çek
   const fetchUserPosts = async () => {
@@ -187,7 +225,7 @@ export default function ProfilePage() {
   }
 
   return (
-    <div className="min-h-[100dvh] bg-zinc-950 text-zinc-100 flex flex-col pb-20">
+    <div className={`min-h-[100dvh] bg-zinc-950 text-zinc-100 flex flex-col pb-20 ${profileRootClass(style.theme)}`}>
       {/* Toast Bildirimi */}
       {toastMessage && (
         <div className="fixed top-5 left-1/2 -translate-x-1/2 z-50 bg-zinc-800 text-white text-xs font-semibold px-4 py-2 rounded-full shadow-xl border border-zinc-700 flex items-center gap-2 select-none animate-in fade-in duration-150">
@@ -227,92 +265,64 @@ export default function ProfilePage() {
       </header>
 
       {/* Profil İçerik Alanı */}
-      <main className="flex-1 max-w-md w-full mx-auto px-4 pt-4">
-        {/* Sol üstte profil fotoğrafı, yanında görünen adı ve altında istatistikler */}
-        <div className="flex items-center gap-4">
-          {/* Sol üst profil fotoğrafı (Fotoğraf varsa büyütür, yoksa düzenlemeye yönlendirir) */}
-          <button
-            type="button"
-            onClick={() => {
-              if (profile?.photoURL) {
-                setIsAvatarModalOpen(true);
-              }
-            }}
-            title={profile?.photoURL ? "Fotoğrafı Görüntüle" : "Profil"}
-            className="w-20 h-20 rounded-full bg-zinc-900 border border-zinc-800 flex items-center justify-center shrink-0 overflow-hidden cursor-pointer group relative hover:opacity-90 transition-opacity btn-press-subtle"
-          >
-            {profile?.photoURL ? (
-              <img
-                src={profile.photoURL}
-                alt={profile.displayName || "Profil"}
-                draggable={false}
-                onContextMenu={(e) => e.preventDefault()}
-                className="w-full h-full object-cover group-hover:scale-105 transition-transform select-none no-select"
-              />
+      <main className={`flex-1 max-w-md w-full mx-auto ${themed ? "" : "px-4 pt-4"}`}>
+        <ProfileHeader
+          theme={style.theme}
+          banner={banner}
+          photoURL={profile?.photoURL}
+          displayName={profile?.displayName || "Kullanıcı"}
+          username={profile?.username || "kullanici"}
+          bio={profile?.bio}
+          counts={{
+            posts: profile?.stats?.postsCount ?? posts.length,
+            followers: profile?.stats?.followersCount ?? 0,
+            following: profile?.stats?.followingCount ?? 0,
+          }}
+          onAvatarClick={() => {
+            if (profile?.photoURL) setIsAvatarModalOpen(true);
+          }}
+          avatarTitle={profile?.photoURL ? "Fotoğrafı Görüntüle" : "Profil"}
+          renderStat={(kind, cls, children) => (
+            <Link href={`/follow?tab=${kind}`} className={cls}>
+              {children}
+            </Link>
+          )}
+          songSlot={<ProfileSongPlayer song={style.song} isOwner onAdd={() => setSheetOpen(true)} />}
+          actions={
+            themed ? (
+              <>
+                <Link href="/profile/edit" className="pf-pr">Profili Düzenle</Link>
+                <button type="button" onClick={handleShareProfile} className="pf-ghost">Profili Paylaş</button>
+                <button type="button" onClick={() => setSheetOpen(true)} className="pf-ghost pf-wide">Profili Özelleştir</button>
+              </>
             ) : (
-              <UserIcon className="w-9 h-9 text-zinc-600 group-hover:text-zinc-400 transition-colors" />
-            )}
-          </button>
-
-          {/* Yanında görünen adı ve altında gönderi, takipçi, takip */}
-          <div className="flex-1 min-w-0 flex flex-col justify-center">
-            <h1 className="text-lg font-bold text-white truncate mb-2">
-              {profile?.displayName || "Kullanıcı"}
-            </h1>
-
-            <div className="flex items-center justify-between text-center">
-              <div className="flex flex-col items-center flex-1">
-                <span className="text-base font-bold text-white leading-none">
-                  {profile?.stats?.postsCount ?? posts.length}
-                </span>
-                <span className="text-[12px] text-zinc-400 mt-1">Gönderi</span>
+              <div className="grid grid-cols-2 gap-2">
+                <Link
+                  href="/profile/edit"
+                  className="w-full py-2 px-3 text-sm font-semibold text-white bg-zinc-900 hover:bg-zinc-800 border border-zinc-800 rounded-xl transition-all btn-press-subtle text-center flex items-center justify-center"
+                >
+                  Profili Düzenle
+                </Link>
+                <button
+                  type="button"
+                  onClick={handleShareProfile}
+                  className="w-full py-2 px-3 text-sm font-semibold text-white bg-zinc-900 hover:bg-zinc-800 border border-zinc-800 rounded-xl transition-all btn-press-subtle text-center"
+                >
+                  Profili Paylaş
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setSheetOpen(true)}
+                  className="col-span-2 w-full py-2 px-3 text-sm font-semibold text-white bg-zinc-900 hover:bg-zinc-800 border border-zinc-800 rounded-xl transition-all btn-press-subtle text-center"
+                >
+                  Profili Özelleştir
+                </button>
               </div>
-              <Link
-                href="/follow?tab=followers"
-                className="flex flex-col items-center flex-1 hover:opacity-80 transition-opacity btn-press-subtle"
-              >
-                <span className="text-base font-bold text-white leading-none">
-                  {profile?.stats?.followersCount ?? 0}
-                </span>
-                <span className="text-[12px] text-zinc-400 mt-1">Takipçi</span>
-              </Link>
-              <Link
-                href="/follow?tab=following"
-                className="flex flex-col items-center flex-1 hover:opacity-80 transition-opacity btn-press-subtle"
-              >
-                <span className="text-base font-bold text-white leading-none">
-                  {profile?.stats?.followingCount ?? 0}
-                </span>
-                <span className="text-[12px] text-zinc-400 mt-1">Takip</span>
-              </Link>
-            </div>
-          </div>
-        </div>
+            )
+          }
+        />
 
-        {/* Bu divin hemen altı biyografi */}
-        {profile?.bio && (
-          <p className="mt-3 text-sm text-zinc-200 whitespace-pre-line leading-relaxed">
-            {profile.bio}
-          </p>
-        )}
-
-        {/* Altında 2 button: Profili Düzenle ve Profili Paylaş */}
-        <div className="grid grid-cols-2 gap-2 mt-4">
-          <Link
-            href="/profile/edit"
-            className="w-full py-2 px-3 text-sm font-semibold text-white bg-zinc-900 hover:bg-zinc-800 border border-zinc-800 rounded-xl transition-all btn-press-subtle text-center flex items-center justify-center"
-          >
-            Profili Düzenle
-          </Link>
-          <button
-            type="button"
-            onClick={handleShareProfile}
-            className="w-full py-2 px-3 text-sm font-semibold text-white bg-zinc-900 hover:bg-zinc-800 border border-zinc-800 rounded-xl transition-all btn-press-subtle text-center"
-          >
-            Profili Paylaş
-          </button>
-        </div>
-
+        <div className={themed ? "px-4" : ""}>
         {/* Altında 3 tane ikondan oluşan butonlar: 1. Gönderiler, 2. Reelsler, 3. Repostlar */}
         <div className="flex border-b border-zinc-900 mt-6">
           <button
@@ -368,12 +378,12 @@ export default function ProfilePage() {
               <Loader2 className="w-6 h-6 text-zinc-500 animate-spin" />
             </div>
           ) : tabPosts.length > 0 ? (
-            <div className="grid grid-cols-3 gap-1">
+            <div className={themed ? "pf-grid" : "grid grid-cols-3 gap-1"}>
               {tabPosts.map((post) => (
                 <div
                   key={post.id}
                   onClick={() => setSelectedPost(post)}
-                  className="aspect-square bg-zinc-900 border border-zinc-850 rounded-lg overflow-hidden cursor-pointer relative group"
+                  className={themed ? "pf-tile" : "aspect-square bg-zinc-900 border border-zinc-850 rounded-lg overflow-hidden cursor-pointer relative group"}
                 >
                   {post.mediaType === "video" ? (
                     <video
@@ -422,6 +432,7 @@ export default function ProfilePage() {
               {activeTab === "reposts" && <p>Henüz repost yok</p>}
             </div>
           )}
+        </div>
         </div>
       </main>
 
@@ -550,6 +561,13 @@ export default function ProfilePage() {
           </div>
         </div>
       )}
+
+      <ProfileCustomizeSheet
+        open={sheetOpen}
+        initial={style}
+        onClose={closeSheet}
+        onSave={handleSaveStyle}
+      />
 
       {/* Alt Navigasyon Barı */}
       <BottomNav />
