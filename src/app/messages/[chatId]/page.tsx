@@ -91,8 +91,8 @@ const CHIP_H = 24;
 const CHIP_OVERHANG = CHIP_H * 0.85;
 const CHIP_RESERVE = CHIP_OVERHANG + 2;
 
-// A message made only of 1-3 emoji is shown without a bubble background, about as tall as a one-line bubble.
-const EMOJI_ONLY_CLASS = "text-[40px] leading-[1.1] bg-transparent";
+// A message made only of 1-3 emoji is shown at 30px without a bubble background, with a little space between emoji.
+const EMOJI_ONLY_CLASS = "text-[30px] leading-[1.2] tracking-[4px] bg-transparent";
 const EMOJI_RE = /^(?:\p{Extended_Pictographic}|\p{Emoji_Modifier}|\p{Regional_Indicator}|‍|️|⃣|[#*0-9]|\s)+$/u;
 const PICTO_RE = /\p{Extended_Pictographic}|\p{Regional_Indicator}/u;
 const graphemeSegmenter =
