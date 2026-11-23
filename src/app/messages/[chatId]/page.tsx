@@ -85,10 +85,10 @@ function formatChatTimeHeader(timestamp?: number): string {
   return `${dayStr} ${timeStr}`;
 }
 
-// Reaction chip (Instagram style): a badge sitting on the bubble's bottom corner, 60% of its height over the
-// bubble. The row below the bubble reserves the remaining 40% plus the 2px background ring.
+// Reaction chip (Instagram style): a badge sitting on the bubble's bottom corner, 15% of its height over the
+// bubble. The row below the bubble reserves the remaining 85% plus the 2px background ring.
 const CHIP_H = 24;
-const CHIP_OVERHANG = CHIP_H * 0.4;
+const CHIP_OVERHANG = CHIP_H * 0.85;
 const CHIP_RESERVE = CHIP_OVERHANG + 2;
 
 const LONG_PRESS_MS = 400;
