@@ -20,9 +20,9 @@
 .pf-bn{position:relative;overflow:hidden;height:132px;background:#111;isolation:isolate}
 .pf-bn *,.pf-bn *::before,.pf-bn *::after{animation-play-state:paused}
 .pf-bn.pf-on *,.pf-bn.pf-on *::before,.pf-bn.pf-on *::after{animation-play-state:running}
-.pf-bn.pf-still *{animation:none!important}
+.pf-bn.pf-still *,.pf-bn.pf-still *::before,.pf-bn.pf-still *::after{animation-play-state:paused!important}
 .pf-bn i,.pf-bn b,.pf-bn span,.pf-bn div,.pf-bn svg{position:absolute;display:block}
-@media (prefers-reduced-motion:reduce){.pf-bn *,.pf-bn *::before,.pf-bn *::after{animation:none!important}.pf-eq i{animation:none!important}.pf-ring{animation:none!important}}
+@media (prefers-reduced-motion:reduce){.pf-bn,.pf-bn *,.pf-bn *::before,.pf-bn *::after{animation-play-state:paused!important}.pf-eq i{animation:none!important}.pf-ring{animation:none!important}}
 /* yildiz */
 .pf-b-yildiz{background:linear-gradient(180deg,#070b24,#2a1b5c)}
 .pf-b-yildiz .pf-s1,.pf-b-yildiz .pf-s2{inset:0;background-image:radial-gradient(1.5px 1.5px at 20px 30px,#fff,transparent),radial-gradient(1px 1px at 70px 80px,#fff,transparent),radial-gradient(1.5px 1.5px at 130px 20px,#cfe8ff,transparent),radial-gradient(1px 1px at 160px 100px,#fff,transparent);background-size:180px 130px;animation:pf-tw 3s ease-in-out infinite alternate}
