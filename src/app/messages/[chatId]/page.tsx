@@ -91,6 +91,25 @@ const CHIP_H = 24;
 const CHIP_OVERHANG = CHIP_H * 0.85;
 const CHIP_RESERVE = CHIP_OVERHANG + 2;
 
+// A message made only of 1-3 emoji is shown without a bubble background, about as tall as a one-line bubble.
+const EMOJI_ONLY_CLASS = "text-[40px] leading-[1.1] bg-transparent";
+const EMOJI_RE = /^(?:\p{Extended_Pictographic}|\p{Emoji_Modifier}|\p{Regional_Indicator}|‍|️|⃣|[#*0-9]|\s)+$/u;
+const PICTO_RE = /\p{Extended_Pictographic}|\p{Regional_Indicator}/u;
+const graphemeSegmenter =
+  typeof Intl !== "undefined" && "Segmenter" in Intl
+    ? new Intl.Segmenter(undefined, { granularity: "grapheme" })
+    : null;
+
+function isEmojiOnly(text: string | undefined): boolean {
+  const t = (text || "").trim();
+  if (!t || t.length > 40 || !EMOJI_RE.test(t) || !PICTO_RE.test(t)) return false;
+  const compact = t.replace(/\s+/g, "");
+  const count = graphemeSegmenter
+    ? Array.from(graphemeSegmenter.segment(compact)).length
+    : Array.from(compact).length;
+  return count <= 3;
+}
+
 const LONG_PRESS_MS = 400;
 const LONG_PRESS_SLOP = 10;
 
@@ -1059,6 +1078,7 @@ export default function ChatRoomPage() {
               const stableDomKey =
                 stableKeyMapRef.current.get(msg.id) || msg.id;
               const chips = groupReactions(msg.reactions, myUid);
+              const emojiOnly = isEmojiOnly(msg.text);
               const isNewMessage =
                 Boolean(msg.optimistic) ||
                 !initialMessageIdsRef.current.has(msg.id);
@@ -1090,14 +1110,14 @@ export default function ChatRoomPage() {
                     <div
                       data-bubble-id={msg.id}
                       {...pressHandlers(msg, stableDomKey, isMine, radiusClass)}
-                      className={`relative max-w-[78%] lg:max-w-[62%] px-0 text-[length:var(--fs)] leading-[1.35] break-words transform-gpu select-none [-webkit-touch-callout:none] [-webkit-user-select:none] ${
+                      className={`relative max-w-[78%] lg:max-w-[62%] px-0 break-words transform-gpu select-none [-webkit-touch-callout:none] [-webkit-user-select:none] ${
                         isNewMessage ? "msg-bubble-slide-up" : ""
                       } ${radiusClass} ${
-                        isMine
-                          ? "chat-sent"
-                          : "chat-recv"
+                        emojiOnly
+                          ? EMOJI_ONLY_CLASS
+                          : `text-[length:var(--fs)] leading-[1.35] ${isMine ? "chat-sent" : "chat-recv"}`
                       }`}
-                      style={{ padding: "var(--pad)" }}
+                      style={emojiOnly ? undefined : { padding: "var(--pad)" }}
                     >
                       <span className="whitespace-pre-wrap">{msg.text}</span>
                       {chips.length > 0 && (
@@ -1226,10 +1246,12 @@ export default function ChatRoomPage() {
             canReact={!m.optimistic}
             bubble={
               <div
-                className={`w-full h-full text-[length:var(--fs)] leading-[1.35] break-words ${menu.radiusClass} ${
-                  menu.mine ? "chat-sent" : "chat-recv"
+                className={`w-full h-full break-words ${menu.radiusClass} ${
+                  isEmojiOnly(m.text)
+                    ? EMOJI_ONLY_CLASS
+                    : `text-[length:var(--fs)] leading-[1.35] ${menu.mine ? "chat-sent" : "chat-recv"}`
                 }`}
-                style={{ padding: "var(--pad)" }}
+                style={isEmojiOnly(m.text) ? undefined : { padding: "var(--pad)" }}
               >
                 <span className="whitespace-pre-wrap">{m.text}</span>
               </div>
