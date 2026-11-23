@@ -1,4 +1,5 @@
 import { Timestamp } from "firebase/firestore";
+import type { ProfileStyle } from "@/lib/profile/profileStyleStore";
 
 export interface UserStats {
   postsCount: number;
@@ -32,6 +33,8 @@ export interface UserProfile {
   // [START] CREATED BY Umut
   messageSettings?: MessageSettings;
   // [END] CREATED BY Umut
+  // WP-25: profil teması, banner ve şarkı (isteğe bağlı)
+  profileStyle?: ProfileStyle;
   role: "user" | "admin";
   onboardingCompleted: boolean;
   stats: UserStats;

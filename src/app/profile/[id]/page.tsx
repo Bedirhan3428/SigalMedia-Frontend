@@ -33,6 +33,9 @@ import {
   Check,
 } from "lucide-react";
 import BottomNav from "@/components/BottomNav";
+import ProfileHeader, { profileRootClass } from "@/components/profile/ProfileHeader";
+import ProfileSongPlayer from "@/components/profile/ProfileSongPlayer";
+import { parseProfileStyle, effectiveBanner } from "@/lib/profile/profileStyleStore";
 import { FaPhotoFilm } from "react-icons/fa6";
 import { TbRepeat } from "react-icons/tb";
 
@@ -311,6 +314,9 @@ export default function VisitedProfilePage() {
   }
 
   const isLocked = Boolean(targetProfile.isPrivate && !isFollowing);
+  const style = parseProfileStyle(targetProfile.profileStyle);
+  const themed = style.theme !== "sade";
+  const banner = effectiveBanner(style);
   const tabPosts = posts.filter((p) => {
     if (activeTab === "posts") return p.type === "post";
     if (activeTab === "reels") return p.type === "reels";
@@ -318,7 +324,7 @@ export default function VisitedProfilePage() {
   });
 
   return (
-    <div className="min-h-[100dvh] bg-zinc-950 text-zinc-100 flex flex-col pb-20">
+    <div className={`min-h-[100dvh] bg-zinc-950 text-zinc-100 flex flex-col pb-20 ${profileRootClass(style.theme)}`}>
       {/* Toast Bildirimi */}
       {toastMessage && (
         <div className="fixed top-5 left-1/2 -translate-x-1/2 z-50 bg-zinc-800 text-white text-xs font-semibold px-4 py-2 rounded-full shadow-xl border border-zinc-700 flex items-center gap-2 select-none animate-in fade-in duration-150">
@@ -381,100 +387,64 @@ export default function VisitedProfilePage() {
       </header>
 
       {/* Profil İçerik Alanı */}
-      <main className="flex-1 max-w-md w-full mx-auto px-4 pt-4">
-        <div className="flex items-center gap-4">
-          <div className="w-20 h-20 rounded-full bg-zinc-900 border border-zinc-800 flex items-center justify-center shrink-0 overflow-hidden">
-            {targetProfile.photoURL ? (
-              <img
-                src={targetProfile.photoURL}
-                alt={targetProfile.displayName}
-                className="w-full h-full object-cover"
-              />
-            ) : (
-              <UserIcon className="w-9 h-9 text-zinc-600" />
-            )}
-          </div>
+      <main className={`flex-1 max-w-md w-full mx-auto ${themed ? "" : "px-4 pt-4"}`}>
+        <ProfileHeader
+          theme={style.theme}
+          banner={banner}
+          photoURL={targetProfile.photoURL}
+          displayName={targetProfile.displayName}
+          username={targetProfile.username}
+          bio={targetProfile.bio}
+          counts={{
+            posts: targetProfile.stats?.postsCount ?? posts.length,
+            followers: targetProfile.stats?.followersCount ?? 0,
+            following: targetProfile.stats?.followingCount ?? 0,
+          }}
+          renderStat={(kind, cls, children) => (
+            // [START] NexusAI
+            <button
+              type="button"
+              disabled={Boolean(targetProfile.isPrivate)}
+              onClick={() =>
+                !targetProfile.isPrivate &&
+                router.push(`/follow?tab=${kind}&uid=${targetProfile.uid}`)
+              }
+              className={`${cls} ${
+                !targetProfile.isPrivate
+                  ? "cursor-pointer"
+                  : "cursor-default select-none"
+              }`}
+            >
+              {children}
+            </button>
+            // [END] NexusAI
+          )}
+          songSlot={style.song ? <ProfileSongPlayer song={style.song} /> : null}
+          actions={
+            <button
+              type="button"
+              disabled={followActionLoading}
+              onClick={handleFollowAction}
+              className={
+                themed
+                  ? "pf-pr disabled:opacity-50"
+                  : `w-full py-2.5 px-4 text-sm font-semibold rounded-xl transition-all btn-press-subtle disabled:opacity-50 ${
+                      isFollowing || hasRequested
+                        ? "bg-zinc-900 hover:bg-zinc-800 text-zinc-200 border border-zinc-800"
+                        : "bg-white hover:bg-zinc-200 text-zinc-950 font-bold"
+                    }`
+              }
+            >
+              {isFollowing
+                ? "Takip Ediliyor"
+                : hasRequested
+                ? "İstek Gönderildi"
+                : "Takip Et"}
+            </button>
+          }
+        />
 
-          <div className="flex-1 min-w-0 flex flex-col justify-center">
-            <h1 className="text-lg font-bold text-white truncate mb-2">
-              {targetProfile.displayName}
-            </h1>
-
-            <div className="flex items-center justify-between text-center">
-              <div className="flex flex-col items-center flex-1">
-                <span className="text-base font-bold text-white leading-none">
-                  {targetProfile.stats?.postsCount ?? posts.length}
-                </span>
-                <span className="text-[12px] text-zinc-400 mt-1">Gönderi</span>
-              </div>
-              {/* // [START] NexusAI */}
-              <button
-                type="button"
-                disabled={Boolean(targetProfile.isPrivate)}
-                onClick={() =>
-                  !targetProfile.isPrivate &&
-                  router.push(`/follow?tab=followers&uid=${targetProfile.uid}`)
-                }
-                className={`flex flex-col items-center flex-1 ${
-                  !targetProfile.isPrivate
-                    ? "hover:opacity-80 transition-opacity cursor-pointer"
-                    : "cursor-default select-none"
-                }`}
-              >
-                <span className="text-base font-bold text-white leading-none">
-                  {targetProfile.stats?.followersCount ?? 0}
-                </span>
-                <span className="text-[12px] text-zinc-400 mt-1">Takipçi</span>
-              </button>
-              <button
-                type="button"
-                disabled={Boolean(targetProfile.isPrivate)}
-                onClick={() =>
-                  !targetProfile.isPrivate &&
-                  router.push(`/follow?tab=following&uid=${targetProfile.uid}`)
-                }
-                className={`flex flex-col items-center flex-1 ${
-                  !targetProfile.isPrivate
-                    ? "hover:opacity-80 transition-opacity cursor-pointer"
-                    : "cursor-default select-none"
-                }`}
-              >
-                <span className="text-base font-bold text-white leading-none">
-                  {targetProfile.stats?.followingCount ?? 0}
-                </span>
-                <span className="text-[12px] text-zinc-400 mt-1">Takip</span>
-              </button>
-              {/* // [END] NexusAI */}
-            </div>
-          </div>
-        </div>
-
-        {targetProfile.bio && (
-          <p className="mt-3 text-sm text-zinc-200 whitespace-pre-line leading-relaxed">
-            {targetProfile.bio}
-          </p>
-        )}
-
-        {/* Takip Et / İstek Gönderildi / Takip Ediliyor Butonu */}
-        <div className="mt-4">
-          <button
-            type="button"
-            disabled={followActionLoading}
-            onClick={handleFollowAction}
-            className={`w-full py-2.5 px-4 text-sm font-semibold rounded-xl transition-all btn-press-subtle disabled:opacity-50 ${
-              isFollowing || hasRequested
-                ? "bg-zinc-900 hover:bg-zinc-800 text-zinc-200 border border-zinc-800"
-                : "bg-white hover:bg-zinc-200 text-zinc-950 font-bold"
-            }`}
-          >
-            {isFollowing
-              ? "Takip Ediliyor"
-              : hasRequested
-              ? "İstek Gönderildi"
-              : "Takip Et"}
-          </button>
-        </div>
-
+        <div className={themed ? "px-4" : ""}>
         {/* Gizli Hesap Kilit Görünümü veya Gönderiler */}
         {isLocked ? (
           <div className="mt-12 py-12 flex flex-col items-center justify-center text-center border-t border-zinc-900">
@@ -544,12 +514,12 @@ export default function VisitedProfilePage() {
                   <Loader2 className="w-6 h-6 text-zinc-500 animate-spin" />
                 </div>
               ) : tabPosts.length > 0 ? (
-                <div className="grid grid-cols-3 gap-1">
+                <div className={themed ? "pf-grid" : "grid grid-cols-3 gap-1"}>
                   {tabPosts.map((post) => (
                     <div
                       key={post.id}
                       onClick={() => setSelectedPost(post)}
-                      className="aspect-square bg-zinc-900 border border-zinc-850 rounded-lg overflow-hidden cursor-pointer relative group"
+                      className={themed ? "pf-tile" : "aspect-square bg-zinc-900 border border-zinc-850 rounded-lg overflow-hidden cursor-pointer relative group"}
                     >
                       {post.mediaType === "video" ? (
                         <video
@@ -579,6 +549,7 @@ export default function VisitedProfilePage() {
             </div>
           </>
         )}
+        </div>
       </main>
 
       {/* Gönderi Detay Modalı */}
