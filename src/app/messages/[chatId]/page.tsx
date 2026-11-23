@@ -15,6 +15,7 @@ import {
   writeSharedChatSettings,
 } from "@/lib/chat/chatSharedStore";
 import { useBackLayer } from "@/lib/chat/useBackLayer";
+import { useKeyboardViewport } from "@/lib/chat/useKeyboardViewport";
 import {
   DEFAULT_CHAT_SETTINGS,
   settingsToVars,
@@ -256,6 +257,9 @@ export default function ChatRoomPage() {
   const [menu, setMenu] = useState<MenuState | null>(null);
   const pressRef = useRef<{ timer: ReturnType<typeof setTimeout>; x: number; y: number } | null>(null);
   const atBottomRef = useRef(true);
+  // Sohbet kökü: klavye açıkken görünür alana sabitlenir (başlık gizlenmez, yazı kutusu klavye altına kaymaz).
+  const [chatRootEl, setChatRootEl] = useState<HTMLDivElement | null>(null);
+  useKeyboardViewport(chatRootEl);
   const feedRef = useRef<ChatFeed | null>(null);
   const hasMoreRef = useRef(true);
   const olderBusyRef = useRef(false);
@@ -902,10 +906,11 @@ export default function ChatRoomPage() {
 
   return (
     <div
+      ref={setChatRootEl}
       data-chat-root=""
       data-chat-theme={view.theme}
       style={{ ...cssVars, background: "var(--bg1)", color: "var(--recv-t)" }}
-      className="chat-root relative isolate h-[100dvh] flex flex-col overflow-hidden"
+      className="chat-root fixed inset-x-0 top-0 isolate h-[100dvh] flex flex-col overflow-hidden"
     >
       {/* Yalnızca Mesaj Kutucuğunun Aşağıdan Yukarı Çıkma (Slide-Up) Animasyonu */}
       <style>{`
@@ -1019,7 +1024,7 @@ export default function ChatRoomPage() {
       {/* Mesaj Akışı */}
       <main
         ref={mainScrollRef}
-        className="relative z-10 flex-1 max-w-md lg:max-w-2xl w-full mx-auto px-3 py-3 overflow-y-auto flex flex-col [overflow-anchor:none]"
+        className="relative z-10 flex-1 max-w-md lg:max-w-2xl w-full mx-auto px-3 py-3 overflow-y-auto overscroll-y-contain flex flex-col [overflow-anchor:none]"
       >
         {displayedMessages.length === 0 && !peerTyping && !feedReady ? (
           <ChatSkeletonBubbles />
