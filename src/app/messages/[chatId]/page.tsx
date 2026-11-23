@@ -1117,9 +1117,9 @@ export default function ChatRoomPage() {
                               className="msg-chip inline-flex items-center justify-center gap-1 px-2 rounded-full text-[13px] leading-none border select-none whitespace-nowrap"
                               style={{
                                 height: CHIP_H,
-                                background: "var(--panel)",
-                                color: "var(--panel-t)",
-                                borderColor: c.mine ? "var(--acc)" : "var(--panel-line)",
+                                background: isMine ? "var(--sent-b)" : "var(--recv-bg)",
+                                color: isMine ? "var(--sent-t)" : "var(--recv-t)",
+                                borderColor: "transparent",
                                 boxShadow: "0 0 0 2px var(--bg1)",
                               }}
                             >
