@@ -1,10 +1,12 @@
 "use client";
 
 // [MODIFIED BY Umut]
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useRouter } from "next/navigation";
 import { chatSettingsStore } from "@/lib/chat/chatSettingsStore";
 import { getTheme } from "@/lib/chat/chatThemes";
+import { getLastUid, loadList, peekLastUid, peekList, saveList } from "@/lib/chat/chatCache";
+import { warmChat, warmTopChats } from "@/lib/chat/chatPrefetch";
 import {
   Search,
   SquarePen,
@@ -37,13 +39,20 @@ interface NoteItem {
 // [MODIFIED BY Umut]
 export default function MessagesPage() {
   const router = useRouter();
-  const [mounted, setMounted] = useState(false);
-  const [searchQuery, setSearchQuery] = useState("");
   const { profile, loading } = useAuth();
+  const [mounted, setMounted] = useState(
+    () => typeof window !== "undefined" && peekList(profile?.uid ?? peekLastUid()) !== null
+  );
+  const [searchQuery, setSearchQuery] = useState("");
 
   // [START] CREATED BY Umut
-  const [chats, setChats] = useState<UserChatSummary[]>([]);
-  const [loadingChats, setLoadingChats] = useState(true);
+  // Cache-first: rows come from memory (in-app navigation) or IndexedDB (reload) before RTDB answers.
+  const cachedList = peekList(profile?.uid ?? peekLastUid());
+  const [chats, setChats] = useState<UserChatSummary[]>(() => cachedList ?? []);
+  const [loadingChats, setLoadingChats] = useState(() => !cachedList);
+  const [bootUid, setBootUid] = useState<string | null>(null);
+  const myUid = profile?.uid ?? bootUid ?? undefined;
+  const liveListRef = useRef(false);
   const [newChatOpen, setNewChatOpen] = useState(false);
   const [userSearchTerm, setUserSearchTerm] = useState("");
   const [searchingUsers, setSearchingUsers] = useState(false);
@@ -54,20 +63,42 @@ export default function MessagesPage() {
   }, []);
 
   useEffect(() => {
+    let active = true;
+    (async () => {
+      const uid = profile?.uid ?? (await getLastUid());
+      if (!active || !uid) return;
+      setBootUid(uid);
+      const rows = await loadList(uid);
+      if (!active || !rows || liveListRef.current) return;
+      setChats(rows);
+      setLoadingChats(false);
+    })();
+    return () => {
+      active = false;
+    };
+  }, [profile?.uid]);
+
+  useEffect(() => {
     if (!profile?.uid) return;
+    const uid = profile.uid;
 
     const showOnline = profile.messageSettings?.showOnlineStatus ?? true;
     syncPresenceVisibility(profile.uid, showOnline);
 
-    const unsubscribe = listenUserChats(profile.uid, (list) => {
+    const unsubscribe = listenUserChats(uid, (list) => {
+      liveListRef.current = true;
       setChats(list);
       setLoadingChats(false);
+      saveList(uid, list);
+      void warmTopChats(uid, list);
+      // Route payload for the top chats too, so tapping a row does not wait for a server round trip.
+      for (const c of list.slice(0, 5)) router.prefetch(`/messages/${c.chatId}`);
     });
 
     return () => {
       unsubscribe();
     };
-  }, [profile?.uid, profile?.messageSettings?.showOnlineStatus]);
+  }, [profile?.uid, profile?.messageSettings?.showOnlineStatus, router]);
 
   useEffect(() => {
     if (!newChatOpen || !profile?.uid) {
@@ -100,7 +131,7 @@ export default function MessagesPage() {
   }, [userSearchTerm, newChatOpen, profile?.uid]);
   // [END] CREATED BY Umut
 
-  if (!mounted || loading) {
+  if (!mounted || (loading && chats.length === 0)) {
     return (
       <div className="min-h-[100dvh] flex items-center justify-center bg-zinc-950 text-white pt-safe pb-safe">
         <div className="w-8 h-8 border-2 border-emerald-500 border-t-transparent rounded-full animate-spin" />
@@ -260,6 +291,11 @@ export default function MessagesPage() {
                   key={chat.chatId}
                   type="button"
                   onClick={() => router.push(`/messages/${chat.chatId}`)}
+                  onPointerEnter={() => {
+                    router.prefetch(`/messages/${chat.chatId}`);
+                    if (profile?.uid) void warmChat(profile.uid, chat);
+                  }}
+                  onTouchStart={() => profile?.uid && void warmChat(profile.uid, chat)}
                   className="w-full flex items-center gap-3 p-2.5 rounded-2xl hover:bg-zinc-900/60 transition-colors btn-press-subtle text-left group"
                 >
                   <div className="relative shrink-0">
@@ -308,7 +344,7 @@ export default function MessagesPage() {
                             : "text-zinc-400"
                         }`}
                       >
-                        {chat.lastSenderUid === profile?.uid ? "Sen: " : ""}
+                        {chat.lastSenderUid === myUid ? "Sen: " : ""}
                         {chat.lastMessage}
                       </p>
 

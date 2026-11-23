@@ -21,11 +21,20 @@ import {
   type ChatSettings,
 } from "@/lib/chat/chatThemes";
 import { useAuth } from "@/context/AuthContext";
+import {
+  getLastUid,
+  loadChat,
+  peekChat,
+  peekLastUid,
+  saveChat,
+  type CachedPeer,
+} from "@/lib/chat/chatCache";
 import { preloadServerPublicKey } from "@/lib/crypto";
 import {
   extractPeerUidFromChatId,
   getPeerBasicProfile,
-  listenChatMessages,
+  openChatFeed,
+  type ChatFeed,
   listenPeerPresence,
   listenPeerTyping,
   markChatAsRead,
@@ -75,6 +84,12 @@ function formatChatTimeHeader(timestamp?: number): string {
   });
   return `${dayStr} ${timeStr}`;
 }
+
+// Reaction chip (Instagram style): a badge sitting on the bubble's bottom corner, 60% of its height over the
+// bubble. The row below the bubble reserves the remaining 40% plus the 2px background ring.
+const CHIP_H = 24;
+const CHIP_OVERHANG = CHIP_H * 0.4;
+const CHIP_RESERVE = CHIP_OVERHANG + 2;
 
 const LONG_PRESS_MS = 400;
 const LONG_PRESS_SLOP = 10;
@@ -139,6 +154,38 @@ function fitTextarea(el: HTMLTextAreaElement | null) {
   el.style.overflowY = needed > INPUT_MAX_HEIGHT ? "auto" : "hidden";
 }
 
+// Placeholder bubbles shown until the first messages (cache or live) arrive.
+function ChatSkeletonBubbles({ plain = false }: { plain?: boolean }) {
+  const rows: Array<[boolean, string]> = [
+    [false, "w-40"],
+    [false, "w-56"],
+    [true, "w-44"],
+    [true, "w-28"],
+    [false, "w-48"],
+    [true, "w-52"],
+  ];
+  return (
+    <div
+      data-testid="chat-skeleton-bubbles"
+      aria-busy="true"
+      aria-label="Mesajlar yükleniyor"
+      className="mt-auto flex flex-col gap-[7px] animate-pulse select-none"
+    >
+      {rows.map(([mine, w], i) => (
+        <div key={i} className={`flex ${mine ? "justify-end" : "justify-start"}`}>
+          <div
+            className={`${w} h-9 ${
+              plain
+                ? "rounded-2xl bg-zinc-800/70"
+                : `rounded-[var(--r)] opacity-40 ${mine ? "chat-sent" : "chat-recv"}`
+            }`}
+          />
+        </div>
+      ))}
+    </div>
+  );
+}
+
 const LIST_SLIDE_MS = 420;
 const LIST_SLIDE_EASING = "cubic-bezier(0.22, 1, 0.36, 1)";
 
@@ -164,14 +211,23 @@ function takeListSnapshot(
 export default function ChatRoomPage() {
   const params = useParams<{ chatId: string }>();
   const router = useRouter();
-  const { profile, loading } = useAuth();
+  const { profile, loading, user } = useAuth();
+  const authUid = user?.uid;
 
   const chatId = Array.isArray(params?.chatId)
     ? params.chatId[0]
     : params?.chatId || "";
 
-  const [mounted, setMounted] = useState(false);
-  const [messages, setMessages] = useState<ChatMessage[]>([]);
+  // In-app navigation with a warm cache skips the hydration gate (no SSR markup to match), so bubbles paint in the first frame.
+  const [mounted, setMounted] = useState(
+    () => typeof window !== "undefined" && peekChat(profile?.uid ?? peekLastUid(), chatId) !== null
+  );
+  // Cache-first: an in-app navigation finds the chat in memory (sync); a reload reads IndexedDB on mount.
+  const memRec = peekChat(profile?.uid ?? peekLastUid(), chatId);
+  const [messages, setMessages] = useState<ChatMessage[]>(() => memRec?.messages ?? []);
+  const [feedReady, setFeedReady] = useState<boolean>(() => Boolean(memRec));
+  // uid remembered from the last session: lets a reload paint cached bubbles before auth resolves.
+  const [bootUid, setBootUid] = useState<string | null>(() => (memRec ? memRec.uid : null));
   const [pendingMessages, setPendingMessages] = useState<ChatMessage[]>([]);
   const [inputText, setInputText] = useState("");
   const [errorToast, setErrorToast] = useState<string | null>(null);
@@ -181,6 +237,14 @@ export default function ChatRoomPage() {
   const [menu, setMenu] = useState<MenuState | null>(null);
   const pressRef = useRef<{ timer: ReturnType<typeof setTimeout>; x: number; y: number } | null>(null);
   const atBottomRef = useRef(true);
+  const feedRef = useRef<ChatFeed | null>(null);
+  const hasMoreRef = useRef(true);
+  const olderBusyRef = useRef(false);
+  const olderAnchorRef = useRef<{ mid: string; top: number } | null>(null);
+  const loadOlderRef = useRef<() => void>(() => {});
+  const liveOnceRef = useRef(false);
+  const peerRef = useRef<CachedPeer | null>(null);
+  const seedRef = useRef<ChatMessage[]>(memRec?.messages ?? []);
 
   const [peerProfile, setPeerProfile] = useState<{
     uid: string;
@@ -189,9 +253,13 @@ export default function ChatRoomPage() {
     photoURL: string;
     showOnlineStatus: boolean;
     readReceipts: boolean;
-  } | null>(null);
+  } | null>(() => memRec?.peer ?? null);
   const [peerOnline, setPeerOnline] = useState(false);
   const [peerTyping, setPeerTyping] = useState(false);
+
+  const myUid = profile?.uid ?? bootUid ?? undefined;
+  // Auth (profile fetch) is slow: with cached bubbles on hand the chat paints without waiting for it.
+  const uiReady = mounted && (!loading || messages.length > 0);
 
   // Sohbete özel görünüm ayarları (yalnızca frontend, localStorage adaptörü). draft != null: özelleştirme sayfası açık.
   const [settings, setSettings] = useState<ChatSettings>(DEFAULT_CHAT_SETTINGS);
@@ -206,8 +274,7 @@ export default function ChatRoomPage() {
   const inputRef = useRef<HTMLTextAreaElement | null>(null);
   const typingTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const isLocalTypingRef = useRef<boolean>(false);
-  const initialHistoryLoadedRef = useRef<boolean>(false);
-  const initialMessageIdsRef = useRef<Set<string>>(new Set());
+  const initialMessageIdsRef = useRef<Set<string>>(new Set(memRec?.messages.map((m) => m.id) ?? []));
   const stableKeyMapRef = useRef<Map<string, string>>(new Map());
   const lastSendTimestampRef = useRef<number>(0);
   // Mobil klavye IME/otomatik düzeltme tamponunun gönderimden hemen sonra eski metni input'a geri yazmasını engeller
@@ -229,6 +296,27 @@ export default function ChatRoomPage() {
     setMounted(true);
     preloadServerPublicKey();
   }, []);
+
+  // Cache-first boot: read the last uid + this chat's cached tail from IndexedDB (no network, no auth wait).
+  useEffect(() => {
+    if (!chatId) return;
+    let active = true;
+    (async () => {
+      const uid = profile?.uid ?? (await getLastUid());
+      if (!active || !uid) return;
+      setBootUid((prev) => prev ?? uid);
+      const rec = await loadChat(uid, chatId);
+      if (!active || !rec || liveOnceRef.current) return;
+      seedRef.current = rec.messages;
+      for (const m of rec.messages) initialMessageIdsRef.current.add(m.id);
+      setMessages((cur) => (cur.length > 0 ? cur : rec.messages));
+      if (rec.peer) setPeerProfile((cur) => cur ?? rec.peer ?? null);
+      setFeedReady(true);
+    })();
+    return () => {
+      active = false;
+    };
+  }, [chatId, profile?.uid]);
 
   // Sohbet değişince (ve ilk istemci render'ında) ayarları yükle: render sırasında "prop değişti" deseni (effect içinde setState yok).
   const [prefsFor, setPrefsFor] = useState("");
@@ -328,52 +416,100 @@ export default function ChatRoomPage() {
   const cssVars = useMemo(() => settingsToVars(view), [view]);
 
   const peerUid =
-    profile?.uid && chatId
-      ? extractPeerUidFromChatId(chatId, profile.uid)
-      : null;
+    myUid && chatId ? extractPeerUidFromChatId(chatId, myUid) : null;
+  const authedPeerUid = profile?.uid ? peerUid : null;
 
   useEffect(() => {
-    if (!peerUid) return;
+    if (!authedPeerUid) return;
     let active = true;
 
-    getPeerBasicProfile(peerUid).then((res) => {
+    getPeerBasicProfile(authedPeerUid).then((res) => {
       if (active) setPeerProfile(res);
     });
 
     return () => {
       active = false;
     };
-  }, [peerUid]);
+  }, [authedPeerUid]);
 
+  // Read receipts follow the profile; until it has loaded nothing is marked read (conservative).
+  const receiptsRef = useRef(false);
+  const latestListRef = useRef<ChatMessage[]>([]);
+  const myReadReceipts = profile ? profile.messageSettings?.readReceipts ?? true : false;
   useEffect(() => {
-    if (!chatId || !profile?.uid) return;
+    receiptsRef.current = myReadReceipts;
+    if (profile?.uid && latestListRef.current.length > 0) {
+      markChatAsRead(chatId, profile.uid, myReadReceipts, latestListRef.current);
+    }
+  }, [chatId, profile?.uid, myReadReceipts]);
 
-    const myReadReceipts = profile.messageSettings?.readReceipts ?? true;
+  // The live feed only needs the auth user (not the slower Firestore profile): it starts as early as possible.
+  useEffect(() => {
+    if (!chatId || !authUid) return;
 
-    const unsubMessages = listenChatMessages(chatId, (list) => {
-      if (!initialHistoryLoadedRef.current) {
-        initialHistoryLoadedRef.current = true;
-        initialMessageIdsRef.current = new Set(list.map((m) => m.id));
+    const uid = authUid;
+    liveOnceRef.current = false;
+    hasMoreRef.current = true;
+    olderBusyRef.current = false;
+    const feed = openChatFeed(
+      chatId,
+      (list, meta) => {
+        if (meta.first) {
+          // First live window reconciled with the cache: not animated (nothing is "new" yet).
+          liveOnceRef.current = true;
+          for (const m of list) initialMessageIdsRef.current.add(m.id);
+          listSnapshotRef.current = null;
+          setFeedReady(true);
+        } else if (meta.older) {
+          // Older page prepended: remember the first visible bubble so the scroll position can be restored.
+          for (const m of list) initialMessageIdsRef.current.add(m.id);
+          const main = mainScrollRef.current;
+          const inner = listInnerRef.current;
+          olderAnchorRef.current = null;
+          if (main && inner) {
+            const mt = main.getBoundingClientRect().top;
+            for (const n of Array.from(inner.querySelectorAll<HTMLElement>("[data-mid]"))) {
+              const r = n.getBoundingClientRect();
+              if (r.bottom > mt + 1) {
+                olderAnchorRef.current = { mid: n.dataset.mid || "", top: r.top - mt };
+                break;
+              }
+            }
+          }
+          listSnapshotRef.current = null;
+        } else {
+          listSnapshotRef.current = takeListSnapshot(
+            mainScrollRef.current,
+            listInnerRef.current
+          );
+        }
+        setMessages(list);
+        latestListRef.current = list;
+        markChatAsRead(chatId, uid, receiptsRef.current, list);
+        saveChat(uid, chatId, list, { complete: !hasMoreRef.current, peer: peerRef.current });
+      },
+      {
+        seed: () => seedRef.current,
+        onHasMore: (v) => {
+          hasMoreRef.current = v;
+        },
       }
-      listSnapshotRef.current = takeListSnapshot(
-        mainScrollRef.current,
-        listInnerRef.current
-      );
-      setMessages(list);
-      markChatAsRead(chatId, profile.uid, myReadReceipts, list);
-    });
+    );
+    feedRef.current = feed;
 
     return () => {
-      unsubMessages();
+      feed.unsubscribe();
+      if (feedRef.current === feed) feedRef.current = null;
       if (isLocalTypingRef.current) {
         isLocalTypingRef.current = false;
-        setTypingStatus(chatId, profile.uid, false);
+        setTypingStatus(chatId, uid, false);
       }
     };
-  }, [chatId, profile?.uid, profile?.messageSettings?.readReceipts]);
+  }, [chatId, authUid]);
 
   useEffect(() => {
-    if (!chatId || !peerUid) return;
+    if (!chatId || !authedPeerUid) return;
+    const peerUid = authedPeerUid;
 
     const unsubTyping = listenPeerTyping(chatId, peerUid, (typing) => {
       setPeerTyping(typing);
@@ -389,7 +525,7 @@ export default function ChatRoomPage() {
       unsubTyping();
       unsubPresence();
     };
-  }, [chatId, peerUid, peerProfile?.showOnlineStatus]);
+  }, [chatId, authedPeerUid, peerProfile?.showOnlineStatus]);
 
   const displayedMessages = useMemo(() => {
     if (pendingMessages.length === 0) return messages;
@@ -416,6 +552,20 @@ export default function ChatRoomPage() {
   // geçirilir. Dış kap overflow-y:clip olduğu için dönüşüm scrollHeight'ı şişirmez / scrollTop'u kıstırmaz.
   useLayoutEffect(() => {
     const el = mainScrollRef.current;
+    const oa = olderAnchorRef.current;
+    if (oa && el) {
+      // Older page prepended: keep the first visible bubble where it was (no pin, no FLIP).
+      olderAnchorRef.current = null;
+      prevListLenRef.current = displayedMessages.length;
+      const n = Array.from(
+        listInnerRef.current?.querySelectorAll<HTMLElement>("[data-mid]") ?? []
+      ).find((x) => x.dataset.mid === oa.mid);
+      if (n) {
+        const delta = n.getBoundingClientRect().top - el.getBoundingClientRect().top - oa.top;
+        el.scrollTop += delta;
+      }
+      return;
+    }
     if (el) {
       el.scrollTop = el.scrollHeight;
     }
@@ -462,6 +612,7 @@ export default function ChatRoomPage() {
     fitTextarea(inputRef.current);
   }, [inputText]);
 
+  const hasList = displayedMessages.length > 0;
   // Liste en alttayken yazı kutusu büyür/küçülürse (main yüksekliği değişir) son mesajlar görünür kalsın.
   useEffect(() => {
     const el = mainScrollRef.current;
@@ -471,6 +622,7 @@ export default function ChatRoomPage() {
     const onScroll = () => {
       atBottom = el.scrollHeight - el.scrollTop - el.clientHeight <= 4;
       atBottomRef.current = atBottom;
+      if (el.scrollTop < 160) loadOlderRef.current();
     };
     el.addEventListener("scroll", onScroll, { passive: true });
     const ro = new ResizeObserver(() => {
@@ -479,11 +631,28 @@ export default function ChatRoomPage() {
       if (atBottom) el.scrollTop = el.scrollHeight;
     });
     ro.observe(el);
+    // Content height changes after the first paint (web font swap re-wrapping text, images): stay pinned.
+    const inner = listInnerRef.current;
+    const roInner = inner ? new ResizeObserver(() => { if (atBottom) el.scrollTop = el.scrollHeight; }) : null;
+    if (inner && roInner) roInner.observe(inner);
     return () => {
       el.removeEventListener("scroll", onScroll);
       ro.disconnect();
+      roInner?.disconnect();
     };
-  }, [mounted, loading]);
+  }, [uiReady, hasList]);
+
+  useEffect(() => {
+    peerRef.current = peerProfile;
+    loadOlderRef.current = () => {
+      const feed = feedRef.current;
+      if (!feed || olderBusyRef.current || !hasMoreRef.current) return;
+      olderBusyRef.current = true;
+      feed.loadOlder().finally(() => {
+        olderBusyRef.current = false;
+      });
+    };
+  });
 
   const handleInputChange = (val: string) => {
     // Gönder butonuna basıldıktan hemen sonraki 80ms içinde mobil klavyenin eski kelimeyi geri basmasını engelle
@@ -665,10 +834,24 @@ export default function ChatRoomPage() {
     } else router.push(target);
   };
 
-  if (!mounted || loading) {
+  if (!uiReady) {
+    // Server-rendered / pre-auth shell: header + skeleton bubbles (no spinner), same frame as the first paint.
     return (
-      <div className="min-h-[100dvh] flex items-center justify-center bg-zinc-950 text-white pt-safe pb-safe">
-        <div className="w-8 h-8 border-2 border-emerald-500 border-t-transparent rounded-full animate-spin" />
+      <div
+        data-testid="chat-skeleton"
+        aria-busy="true"
+        className="h-[100dvh] flex flex-col overflow-hidden bg-zinc-950 text-white pt-safe"
+      >
+        <div className="shrink-0 h-[60px] px-3 flex items-center gap-3">
+          <div className="w-[38px] h-[38px] rounded-full bg-zinc-800 animate-pulse" />
+          <div className="flex flex-col gap-1.5">
+            <div className="h-3 w-28 rounded bg-zinc-800 animate-pulse" />
+            <div className="h-2.5 w-16 rounded bg-zinc-900 animate-pulse" />
+          </div>
+        </div>
+        <div className="flex-1 max-w-md lg:max-w-2xl w-full mx-auto px-3 py-3 flex flex-col overflow-hidden">
+          <ChatSkeletonBubbles plain />
+        </div>
       </div>
     );
   }
@@ -819,7 +1002,9 @@ export default function ChatRoomPage() {
         ref={mainScrollRef}
         className="relative z-10 flex-1 max-w-md lg:max-w-2xl w-full mx-auto px-3 py-3 overflow-y-auto flex flex-col [overflow-anchor:none]"
       >
-        {displayedMessages.length === 0 && !peerTyping ? (
+        {displayedMessages.length === 0 && !peerTyping && !feedReady ? (
+          <ChatSkeletonBubbles />
+        ) : displayedMessages.length === 0 && !peerTyping ? (
           <div className="m-auto text-center text-xs select-none rounded-full px-3 py-1 bg-[var(--chip)] text-[var(--chip-t)]">
             Henüz mesaj yok.
           </div>
@@ -827,7 +1012,7 @@ export default function ChatRoomPage() {
           <div className="mt-auto flex flex-col [overflow-y:clip]">
             <div ref={listInnerRef} className="flex flex-col">
             {displayedMessages.map((msg, idx) => {
-              const isMine = msg.senderUid === profile?.uid;
+              const isMine = msg.senderUid === myUid;
               const prevMsg = idx > 0 ? displayedMessages[idx - 1] : null;
               const nextMsg =
                 idx < displayedMessages.length - 1
@@ -873,7 +1058,7 @@ export default function ChatRoomPage() {
 
               const stableDomKey =
                 stableKeyMapRef.current.get(msg.id) || msg.id;
-              const chips = groupReactions(msg.reactions, profile?.uid);
+              const chips = groupReactions(msg.reactions, myUid);
               const isNewMessage =
                 Boolean(msg.optimistic) ||
                 !initialMessageIdsRef.current.has(msg.id);
@@ -892,6 +1077,7 @@ export default function ChatRoomPage() {
                     className={`flex items-end gap-[7px] ${
                       isMine ? "justify-end" : "justify-start"
                     } ${marginTopClass}`}
+                    style={chips.length > 0 ? { marginBottom: CHIP_RESERVE } : undefined}
                   >
                     {!isMine && !view.compact && (
                       nextSameCluster ? (
@@ -904,7 +1090,7 @@ export default function ChatRoomPage() {
                     <div
                       data-bubble-id={msg.id}
                       {...pressHandlers(msg, stableDomKey, isMine, radiusClass)}
-                      className={`max-w-[78%] lg:max-w-[62%] px-0 text-[length:var(--fs)] leading-[1.35] break-words transform-gpu select-none [-webkit-touch-callout:none] [-webkit-user-select:none] ${
+                      className={`relative max-w-[78%] lg:max-w-[62%] px-0 text-[length:var(--fs)] leading-[1.35] break-words transform-gpu select-none [-webkit-touch-callout:none] [-webkit-user-select:none] ${
                         isNewMessage ? "msg-bubble-slide-up" : ""
                       } ${radiusClass} ${
                         isMine
@@ -914,31 +1100,37 @@ export default function ChatRoomPage() {
                       style={{ padding: "var(--pad)" }}
                     >
                       <span className="whitespace-pre-wrap">{msg.text}</span>
+                      {chips.length > 0 && (
+                        <div
+                          data-testid="msg-reactions"
+                          className="absolute z-[1] flex gap-[3px]"
+                          style={{
+                            bottom: -CHIP_OVERHANG,
+                            [isMine ? "right" : "left"]: 8,
+                          }}
+                        >
+                          {chips.map((c) => (
+                            <span
+                              key={c.emoji}
+                              data-emoji={c.emoji}
+                              aria-label={`${c.emoji} ${c.count}`}
+                              className="msg-chip inline-flex items-center justify-center gap-1 px-2 rounded-full text-[13px] leading-none border select-none whitespace-nowrap"
+                              style={{
+                                height: CHIP_H,
+                                background: "var(--panel)",
+                                color: "var(--panel-t)",
+                                borderColor: c.mine ? "var(--acc)" : "var(--panel-line)",
+                                boxShadow: "0 0 0 2px var(--bg1)",
+                              }}
+                            >
+                              <span>{c.emoji}</span>
+                              {c.count > 1 && <span className="text-[11px]">{c.count}</span>}
+                            </span>
+                          ))}
+                        </div>
+                      )}
                     </div>
                   </div>
-                  {chips.length > 0 && (
-                    <div
-                      data-testid="msg-reactions"
-                      className={`flex flex-wrap gap-1 mt-[3px] ${
-                        isMine ? "justify-end" : `justify-start ${view.compact ? "" : "pl-[35px]"}`
-                      }`}
-                    >
-                      {chips.map((c) => (
-                        <span
-                          key={c.emoji}
-                          data-emoji={c.emoji}
-                          aria-label={`${c.emoji} ${c.count}`}
-                          className={`msg-chip inline-flex items-center gap-1 h-6 px-2 rounded-full text-[13px] leading-none border select-none ${
-                            c.mine ? "ring-1 ring-[var(--acc)]" : ""
-                          }`}
-                          style={{ background: "var(--panel)", color: "var(--panel-t)", borderColor: "var(--panel-line)" }}
-                        >
-                          <span>{c.emoji}</span>
-                          {c.count > 1 && <span className="text-[11px]">{c.count}</span>}
-                        </span>
-                      ))}
-                    </div>
-                  )}
                 </div>
               );
             })}
@@ -1030,7 +1222,7 @@ export default function ChatRoomPage() {
             rect={menu.rect}
             mine={menu.mine}
             timestamp={m.timestamp}
-            myReaction={profile?.uid ? m.reactions?.[profile.uid] : undefined}
+            myReaction={myUid ? m.reactions?.[myUid] : undefined}
             canReact={!m.optimistic}
             bubble={
               <div

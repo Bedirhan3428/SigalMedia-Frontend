@@ -8,6 +8,7 @@ import { doc, getDoc } from "firebase/firestore";
 import { usePathname, useRouter } from "next/navigation";
 import { auth, db } from "@/lib/firebase";
 import { disablePush } from "@/lib/push/pushClient";
+import { clearChatCache, rememberUser } from "@/lib/chat/chatCache";
 import { UserProfile } from "@/types/user";
 
 interface AuthContextType {
@@ -114,6 +115,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const signOut = async () => {
     try {
       await disablePush();
+      await clearChatCache().catch(() => {});
       if (typeof window !== "undefined") {
         localStorage.clear();
         sessionStorage.clear();
@@ -133,9 +135,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
       setUser(currentUser);
       if (currentUser) {
+        void rememberUser(currentUser.uid);
         const userProfile = await fetchProfile(currentUser.uid);
         setProfile(userProfile);
       } else {
+        void clearChatCache();
         setProfile(null);
       }
       setLoading(false);
