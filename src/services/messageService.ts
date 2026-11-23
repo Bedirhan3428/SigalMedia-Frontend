@@ -10,6 +10,10 @@ import {
   push,
   onDisconnect,
   increment,
+  query as rtdbQuery,
+  orderByKey,
+  limitToLast,
+  endBefore,
 } from "firebase/database";
 import {
   collection,
@@ -25,6 +29,7 @@ import {
   encryptMessagePayload,
   clearCachedServerPublicKey,
 } from "@/lib/crypto";
+import { mergeWindow } from "@/lib/chat/chatCacheLogic";
 import { getBlockedUserIds } from "@/services/privacyService";
 import type { UserProfile } from "@/types/user";
 
@@ -348,70 +353,216 @@ export function listenUserChats(
   return () => unsubscribe();
 }
 
+export const CHAT_PAGE_SIZE = 50;
+
+export interface ChatFeed {
+  unsubscribe: () => void;
+  /** Loads one page older than the oldest known message. Resolves to the number of messages added. */
+  loadOlder: () => Promise<number>;
+}
+
+export interface ChatFeedOptions {
+  pageSize?: number;
+  /** Cached messages shown before the live window arrives (reconciled with mergeWindow). */
+  seed?: ChatMessage[] | (() => ChatMessage[]);
+  /** Called when `hasMore` (older pages exist) changes. */
+  onHasMore?: (hasMore: boolean) => void;
+}
+
+export interface ChatFeedMeta {
+  /** this emission added an older page */
+  older?: boolean;
+  /** first live window (after the optional cache seed) */
+  first?: boolean;
+}
+
+/**
+ * Live feed of a chat: the last `pageSize` messages (orderByKey + limitToLast; push ids are chronological,
+ * so no index is needed) plus on-demand older pages (endBefore + limitToLast). Every loaded page stays
+ * live, so reactions/status changes sync. The callback always receives the full merged, sorted list.
+ */
+export function openChatFeed(
+  chatId: string,
+  callback: (messages: ChatMessage[], meta: ChatFeedMeta) => void,
+  opts: ChatFeedOptions = {}
+): ChatFeed {
+  const pageSize = opts.pageSize ?? CHAT_PAGE_SIZE;
+  const messagesRef = ref(rtdb, `chats/${chatId}/messages`);
+  const messageMap = new Map<string, ChatMessage>();
+  const unsubs: Array<() => void> = [];
+  const firstBatch = new Map<string, ChatMessage>();
+  let liveResolved = false;
+  let disposed = false;
+  let hasMore = true;
+  let loadingOlder: Promise<number> | null = null;
+
+  const setHasMore = (v: boolean) => {
+    if (hasMore === v) return;
+    hasMore = v;
+    opts.onHasMore?.(v);
+  };
+  const sortedList = () => {
+    const list = Array.from(messageMap.values());
+    list.sort((a, b) => (a.timestamp || 0) - (b.timestamp || 0));
+    return list;
+  };
+  const emit = (meta: ChatFeedMeta = {}) => {
+    if (!disposed) callback(sortedList(), meta);
+  };
+  const getSeed = () => (typeof opts.seed === "function" ? opts.seed() : opts.seed ?? []);
+  const onFail = () => {
+    liveResolved = true;
+    // With a cache seed the cached list stays on screen; otherwise show an empty chat.
+    if (getSeed().length === 0) callback([], { first: true });
+  };
+
+  const liveQuery = rtdbQuery(messagesRef, orderByKey(), limitToLast(pageSize));
+  const take = (snapshot: { key: string | null; val: () => unknown }): ChatMessage | null => {
+    const val = snapshot.val() as ChatMessage | null;
+    if (!val) return null;
+    return { ...val, id: snapshot.key || val.id };
+  };
+
+  unsubs.push(
+    onChildAdded(
+      liveQuery,
+      (snapshot) => {
+        const msg = take(snapshot);
+        if (!msg) return;
+        if (!liveResolved) {
+          firstBatch.set(msg.id, msg);
+          return;
+        }
+        messageMap.set(msg.id, msg);
+        emit();
+      },
+      onFail
+    ),
+    onChildChanged(
+      liveQuery,
+      (snapshot) => {
+        const msg = take(snapshot);
+        if (!msg) return;
+        if (!liveResolved) {
+          firstBatch.set(msg.id, msg);
+          return;
+        }
+        messageMap.set(msg.id, msg);
+        emit();
+      },
+      () => {}
+    ),
+    onValue(
+      liveQuery,
+      (snapshot) => {
+        if (!liveResolved) {
+          liveResolved = true;
+          const merged = snapshot.exists()
+            ? mergeWindow(getSeed(), Array.from(firstBatch.values()), pageSize)
+            : [];
+          firstBatch.clear();
+          messageMap.clear();
+          for (const m of merged) messageMap.set(m.id, m);
+          setHasMore(snapshot.exists() && snapshot.size >= pageSize);
+          emit({ first: true });
+          return;
+        }
+        if (!snapshot.exists()) {
+          messageMap.clear();
+          emit();
+        }
+      },
+      onFail
+    )
+  );
+
+  const loadOlder = (): Promise<number> => {
+    if (loadingOlder) return loadingOlder;
+    if (!liveResolved || !hasMore || disposed) return Promise.resolve(0);
+    const oldest = sortedList()[0];
+    if (!oldest) return Promise.resolve(0);
+    const q = rtdbQuery(messagesRef, orderByKey(), endBefore(oldest.id), limitToLast(pageSize));
+    const batch = new Map<string, ChatMessage>();
+    let resolved = false;
+    loadingOlder = new Promise<number>((resolve) => {
+      const finish = (n: number) => {
+        loadingOlder = null;
+        resolve(n);
+      };
+      const apply = (snapshot: { key: string | null; val: () => unknown }) => {
+        const msg = take(snapshot);
+        if (!msg) return;
+        if (!resolved) batch.set(msg.id, msg);
+        else {
+          messageMap.set(msg.id, msg);
+          emit();
+        }
+      };
+      unsubs.push(
+        onChildAdded(q, apply, () => {
+          if (resolved) return;
+          resolved = true;
+          finish(0);
+        }),
+        onChildChanged(q, apply, () => {}),
+        onValue(
+          q,
+          () => {
+            if (resolved) return;
+            resolved = true;
+            let added = 0;
+            for (const [id, m] of batch) {
+              if (!messageMap.has(id)) added += 1;
+              messageMap.set(id, m);
+            }
+            if (batch.size < pageSize) setHasMore(false);
+            batch.clear();
+            if (added > 0) emit({ older: true });
+            finish(added);
+          },
+          () => {
+            if (resolved) return;
+            resolved = true;
+            finish(0);
+          }
+        )
+      );
+    });
+    return loadingOlder;
+  };
+
+  return {
+    unsubscribe: () => {
+      disposed = true;
+      for (const u of unsubs) u();
+    },
+    loadOlder,
+  };
+}
+
+/** Backwards compatible helper: live window only, returns the unsubscribe function. */
 export function listenChatMessages(
   chatId: string,
   callback: (messages: ChatMessage[]) => void
 ): () => void {
-  const messagesRef = ref(rtdb, `chats/${chatId}/messages`);
-  const messageMap = new Map<string, ChatMessage>();
-  let initialResolved = false;
+  return openChatFeed(chatId, (list) => callback(list)).unsubscribe;
+}
 
-  const emitSorted = () => {
-    const list = Array.from(messageMap.values());
-    list.sort((a, b) => (a.timestamp || 0) - (b.timestamp || 0));
-    callback(list);
-  };
-
-  const unsubAdded = onChildAdded(
-    messagesRef,
-    (snapshot) => {
-      const val = snapshot.val() as ChatMessage | null;
-      if (!val) return;
-      const id = snapshot.key || val.id;
-      messageMap.set(id, { ...val, id });
-      if (initialResolved) {
-        emitSorted();
-      }
-    },
-    () => {
-      callback([]);
-    }
+/** One-shot read of the newest page of a chat (used to warm the local cache). */
+export async function fetchChatTail(
+  chatId: string,
+  pageSize: number = CHAT_PAGE_SIZE
+): Promise<ChatMessage[]> {
+  const snap = await get(
+    rtdbQuery(ref(rtdb, `chats/${chatId}/messages`), orderByKey(), limitToLast(pageSize))
   );
-
-  const unsubChanged = onChildChanged(
-    messagesRef,
-    (snapshot) => {
-      const val = snapshot.val() as ChatMessage | null;
-      if (!val) return;
-      const id = snapshot.key || val.id;
-      messageMap.set(id, { ...val, id });
-      emitSorted();
-    },
-    () => {}
-  );
-
-  const unsubValue = onValue(
-    messagesRef,
-    (snapshot) => {
-      initialResolved = true;
-      if (!snapshot.exists()) {
-        messageMap.clear();
-        callback([]);
-        return;
-      }
-      emitSorted();
-    },
-    () => {
-      initialResolved = true;
-      callback([]);
-    }
-  );
-
-  return () => {
-    unsubAdded();
-    unsubChanged();
-    unsubValue();
-  };
+  const out: ChatMessage[] = [];
+  snap.forEach((child) => {
+    const val = child.val() as ChatMessage | null;
+    if (val) out.push({ ...val, id: child.key || val.id });
+  });
+  out.sort((a, b) => (a.timestamp || 0) - (b.timestamp || 0));
+  return out;
 }
 
 export async function markChatAsRead(
