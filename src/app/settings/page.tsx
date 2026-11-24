@@ -138,7 +138,10 @@ export default function SettingsPage() {
             >
               <div className="flex items-center gap-3">
                 <User className="w-5 h-5 text-zinc-400" />
-                <span>Profili Düzenle</span>
+                <div className="flex flex-col">
+                  <span>Profili Düzenle</span>
+                  <span className="text-xs font-normal text-zinc-500">Fotoğraf, ad, kullanıcı adı, biyografi</span>
+                </div>
               </div>
               <ChevronRight className="w-4 h-4 text-zinc-500" />
             </Link>
