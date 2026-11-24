@@ -225,3 +225,17 @@
 .fd-root .fd-ci.fd-rp svg.fd-bc{top:2px}
 .fd-root .fd-ci.fd-rp:last-child::before{bottom:auto;height:14px}
 .fd-root .fd-ci.fd-rp::after{display:none}
+
+/* --- WP-29: FeedPost / ayrıntı görünümü --- */
+.fd-root .fd-detail{border-bottom:0;padding-bottom:12px}
+.fd-root .fd-detail .fd-card{border-bottom:0}
+.fd-root .fd-ctx{display:flex;align-items:center;gap:6px;width:100%;min-height:44px;padding:8px 12px;background:var(--s1);border:0;border-bottom:1px solid var(--line);color:var(--tx2);font-size:13.5px;text-align:left}
+.fd-root .fd-ctx b{color:var(--ac);font-weight:600}
+.fd-root .fd-xtra{padding:4px 12px;display:flex;gap:8px}
+.fd-root .fd-pd{position:fixed;inset:0;z-index:60;display:flex;flex-direction:column;background:var(--bg);color:var(--tx)}
+.fd-root .fd-pd-h{flex:none;display:flex;align-items:center;gap:4px;min-height:52px;padding:0 6px;padding-top:env(safe-area-inset-top,0px);border-bottom:1px solid var(--line)}
+.fd-root .fd-pd-h h2{flex:1;margin:0;font-size:16px;font-weight:600;text-align:center}
+.fd-root .fd-pd-b{width:44px;height:44px;display:grid;place-items:center;background:none;border:0;border-radius:12px;color:var(--tx2)}
+.fd-root .fd-pd-b:hover:not(:disabled){background:var(--s3);color:var(--tx)}
+.fd-root .fd-pd-b:disabled{opacity:.35;cursor:default}
+.fd-root .fd-pd-s{flex:1;overflow-y:auto;overflow-x:clip;max-width:28rem;width:100%;margin:0 auto;padding-bottom:calc(24px + env(safe-area-inset-bottom,0px))}

@@ -1,5 +1,5 @@
 "use client";
-import { createContext, useContext, type ReactNode } from "react";
+import { createContext, useContext, useEffect, useRef, type ReactNode } from "react";
 import type { Post } from "@/lib/feed/types";
 
 export interface FeedActions {
@@ -8,7 +8,12 @@ export interface FeedActions {
   openChain: (rootId: string, opener?: HTMLElement | null) => void;
   openReply: (parent: Post, opener?: HTMLElement | null) => void;
   openProfile: (userId: string, opener?: HTMLElement | null) => void;
+  openPoll: (parent: Post | null, opener?: HTMLElement | null) => void;
   toast: (msg: string, icon?: ReactNode) => void;
+  /** Güncel gönderi: iyimser beğeni > servis önbelleği > verilen nesne. */
+  resolve: (post: Post) => Post;
+  /** Sayfa içi bir tam ekran katmanın (gönderi detayı) kapatma işlevini yığının tabanına kaydeder; Geri/Escape önce sayfaları, sonra bunu kapatır. */
+  registerBase: (close: () => void) => () => void;
 }
 
 export const FeedActionsContext = createContext<FeedActions | null>(null);
@@ -16,4 +21,12 @@ export function useFeedActions(): FeedActions {
   const c = useContext(FeedActionsContext);
   if (!c) throw new Error("FeedActionsContext yok");
   return c;
+}
+
+/** Tam ekran katman açıkken Geri tuşu/Escape `onClose`u çağırır (sayfa yığınıyla tek geri girdisini paylaşır). */
+export function useBaseLayer(onClose: () => void) {
+  const { registerBase } = useFeedActions();
+  const cb = useRef(onClose);
+  useEffect(() => { cb.current = onClose; });
+  useEffect(() => registerBase(() => cb.current()), [registerBase]);
 }

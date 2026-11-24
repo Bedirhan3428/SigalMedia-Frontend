@@ -135,6 +135,12 @@ export interface FeedService {
   getPopularReplies(rootId: string, n?: number): Post[];
   /** Tek gönderi (yoksa undefined). */
   getPost(id: string): Promise<Post | undefined>;
+  /** Yüklü önbellekten güncel gönderi (beğeni/oy/yanıt sayıları işlenmiş); eşzamanlı. */
+  peekPost(id: string): Post | undefined;
+  /** Profil ızgarasındaki eski biçimli Firestore belgesini akış gönderisine çevirip önbelleğe alır (FeedPost için). */
+  adoptLegacy(id: string, data: Record<string, unknown>): Post | undefined;
+  /** Bir kökün gerçek yanıtlarını önbelleğe alır ve abonelere haber verir (popüler yanıt rayı için). */
+  prepareReplies(rootId: string): Promise<void>;
   /** Editörde Firebase'e yayımlanan bir yanıt için rozet kurallarını işletir. */
   notePublished(isReply: boolean, parentId?: string): Promise<void>;
   getChain(rootId: string, sort: ChainSort): Promise<{ root: Post; replies: Post[] }>;

@@ -15,6 +15,9 @@ import { db } from "@/lib/firebase";
 import { useAuth } from "@/context/AuthContext";
 import { UserProfile } from "@/types/user";
 import { Post } from "@/types/post";
+import { PostDetailView } from "@/components/feed";
+import { feedService } from "@/lib/feed/feedService";
+import type { Post as FeedPostT } from "@/lib/feed/types";
 import {
   blockUser,
   sendFollowRequest,
@@ -59,7 +62,7 @@ export default function VisitedProfilePage() {
   const [activeTab, setActiveTab] = useState<ProfileTab>("posts");
   const [posts, setPosts] = useState<Post[]>([]);
   const [loadingPosts, setLoadingPosts] = useState(false);
-  const [selectedPost, setSelectedPost] = useState<Post | null>(null);
+  const [detail, setDetail] = useState<{ list: FeedPostT[]; id: string } | null>(null);
 
   const [menuOpen, setMenuOpen] = useState(false);
   const [confirmBlockOpen, setConfirmBlockOpen] = useState(false);
@@ -323,6 +326,17 @@ export default function VisitedProfilePage() {
     return false;
   });
 
+  // Izgara karosu: eski biçimli Firestore belgesini akış gönderisine çevirerek (firestoreSource eşleyicisi) detay görünümünü açar.
+  const openDetail = (post: Post) => {
+    const list = tabPosts.flatMap((p) => {
+      const fp = feedService.adoptLegacy(p.id, p as unknown as Record<string, unknown>);
+      return fp ? [fp] : [];
+    });
+    if (list.some((x) => x.id === post.id)) setDetail({ list, id: post.id });
+  };
+
+
+
   return (
     <div className={`min-h-[100dvh] bg-zinc-950 text-zinc-100 flex flex-col pb-20 ${profileRootClass(style.theme)}`}>
       {/* Toast Bildirimi */}
@@ -518,7 +532,7 @@ export default function VisitedProfilePage() {
                   {tabPosts.map((post) => (
                     <div
                       key={post.id}
-                      onClick={() => setSelectedPost(post)}
+                      onClick={() => openDetail(post)}
                       className={themed ? "pf-tile" : "aspect-square bg-zinc-900 border border-zinc-850 rounded-lg overflow-hidden cursor-pointer relative group"}
                     >
                       {post.mediaType === "video" ? (
@@ -562,69 +576,14 @@ export default function VisitedProfilePage() {
         </div>
       </main>
 
-      {/* Gönderi Detay Modalı */}
-      {selectedPost && (
-        <div
-          className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-4 animate-in fade-in duration-150"
-          onClick={() => setSelectedPost(null)}
-        >
-          <div
-            className="w-full max-w-sm bg-zinc-900 border border-zinc-800 rounded-2xl overflow-hidden shadow-2xl relative select-none"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div className="p-3 border-b border-zinc-800 flex items-center justify-between">
-              <div className="flex items-center gap-2.5">
-                <div className="w-8 h-8 rounded-full bg-zinc-800 overflow-hidden flex items-center justify-center">
-                  {targetProfile.photoURL ? (
-                    <img
-                      src={targetProfile.photoURL}
-                      alt={targetProfile.displayName}
-                      className="w-full h-full object-cover"
-                    />
-                  ) : (
-                    <UserIcon className="w-4 h-4 text-zinc-500" />
-                  )}
-                </div>
-                <span className="text-xs font-bold text-white">
-                  @{targetProfile.username}
-                </span>
-              </div>
-              <button
-                type="button"
-                onClick={() => setSelectedPost(null)}
-                className="p-1.5 text-zinc-400 hover:text-white hover:bg-zinc-800 rounded-lg transition-colors"
-              >
-                <X className="w-4 h-4" />
-              </button>
-            </div>
-
-            <div className="w-full aspect-square bg-zinc-950 flex items-center justify-center overflow-hidden">
-              {selectedPost.mediaType === "video" ? (
-                <video
-                  src={selectedPost.mediaUrl}
-                  className="w-full h-full object-cover"
-                  controls
-                  autoPlay
-                />
-              ) : (
-                <img
-                  src={selectedPost.mediaUrl}
-                  alt={selectedPost.caption || "Gönderi"}
-                  className="w-full h-full object-cover"
-                />
-              )}
-            </div>
-
-            {selectedPost.caption && (
-              <div className="p-3 text-sm text-zinc-200 border-t border-zinc-800">
-                <span className="font-bold mr-1.5">
-                  @{targetProfile.username}
-                </span>
-                {selectedPost.caption}
-              </div>
-            )}
-          </div>
-        </div>
+      {/* Gönderi detayı: akış ile aynı FeedPost bileşeni */}
+      {detail && (
+        <PostDetailView
+          posts={detail.list}
+          index={Math.max(0, detail.list.findIndex((x) => x.id === detail.id))}
+          onIndexChange={(i) => setDetail((d) => (d ? { ...d, id: d.list[i].id } : d))}
+          onClose={() => setDetail(null)}
+        />
       )}
 
       {/* Engelleme Onay Modalı */}

@@ -15,6 +15,9 @@ import {
 } from "firebase/firestore";
 import { db } from "@/lib/firebase";
 import { Post } from "@/types/post";
+import { PostDetailView } from "@/components/feed";
+import { feedService } from "@/lib/feed/feedService";
+import type { Post as FeedPostT } from "@/lib/feed/types";
 import {
   User as UserIcon,
   Grid3X3,
@@ -44,7 +47,8 @@ export default function ProfilePage() {
   // Gönderiler Durumu
   const [posts, setPosts] = useState<Post[]>([]);
   const [loadingPosts, setLoadingPosts] = useState(false);
-  const [selectedPost, setSelectedPost] = useState<Post | null>(null);
+  /** Açık gönderi görünümü: ızgara sırasındaki akış gönderileri ve açık olanın kimliği. */
+  const [detail, setDetail] = useState<{ list: FeedPostT[]; id: string } | null>(null);
   const [isDeletingPost, setIsDeletingPost] = useState(false);
 
   // Büyük Profil Fotoğrafı Modalı
@@ -205,7 +209,7 @@ export default function ProfilePage() {
 
       await refreshProfile();
       await fetchUserPosts();
-      setSelectedPost(null);
+      setDetail(null);
       showToast("Gönderi silindi");
     } catch (err) {
       console.error("Silme hatası:", err);
@@ -213,6 +217,15 @@ export default function ProfilePage() {
     } finally {
       setIsDeletingPost(false);
     }
+  };
+
+  // Izgara karosu: eski biçimli Firestore belgesini akış gönderisine çevirerek (firestoreSource eşleyicisi) detay görünümünü açar.
+  const openDetail = (post: Post) => {
+    const list = tabPosts.flatMap((p) => {
+      const fp = feedService.adoptLegacy(p.id, p as unknown as Record<string, unknown>);
+      return fp ? [fp] : [];
+    });
+    if (list.some((x) => x.id === post.id)) setDetail({ list, id: post.id });
   };
 
   // Sekmeye göre filtrelenen gönderiler
@@ -388,7 +401,7 @@ export default function ProfilePage() {
               {tabPosts.map((post) => (
                 <div
                   key={post.id}
-                  onClick={() => setSelectedPost(post)}
+                  onClick={() => openDetail(post)}
                   className={themed ? "pf-tile" : "aspect-square bg-zinc-900 border border-zinc-850 rounded-lg overflow-hidden cursor-pointer relative group"}
                 >
                   {post.mediaType === "video" ? (
@@ -452,87 +465,27 @@ export default function ProfilePage() {
         </div>
       </main>
 
-      {/* GÖNDERİ DETAY MODAL */}
-      {selectedPost && (
-        <div
-          className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-4 animate-in fade-in duration-150"
-          onClick={() => !isDeletingPost && setSelectedPost(null)}
-        >
-          <div
-            className="w-full max-w-sm bg-zinc-900 border border-zinc-800 rounded-2xl overflow-hidden shadow-2xl relative select-none"
-            onClick={(e) => e.stopPropagation()}
-          >
-            {/* Üst Bar */}
-            <div className="p-3 border-b border-zinc-800 flex items-center justify-between">
-              <div className="flex items-center gap-2.5">
-                <div className="w-8 h-8 rounded-full bg-zinc-800 overflow-hidden flex items-center justify-center">
-                  {profile?.photoURL ? (
-                    <img
-                      src={profile.photoURL}
-                      alt="Profil"
-                      className="w-full h-full object-cover"
-                    />
-                  ) : (
-                    <UserIcon className="w-4 h-4 text-zinc-500" />
-                  )}
-                </div>
-                <span className="text-xs font-bold text-white">
-                  @{profile?.username}
-                </span>
-              </div>
-
-              <div className="flex items-center gap-1">
-                <button
-                  type="button"
-                  onClick={() => handleDeletePost(selectedPost.id)}
-                  disabled={isDeletingPost}
-                  title="Sil"
-                  className="p-1.5 text-red-400 hover:text-red-300 hover:bg-zinc-800 rounded-lg transition-colors"
-                >
-                  {isDeletingPost ? (
-                    <Loader2 className="w-4 h-4 animate-spin" />
-                  ) : (
-                    <Trash2 className="w-4 h-4" />
-                  )}
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setSelectedPost(null)}
-                  disabled={isDeletingPost}
-                  className="p-1.5 text-zinc-400 hover:text-white hover:bg-zinc-800 rounded-lg transition-colors"
-                >
-                  <X className="w-4 h-4" />
-                </button>
-              </div>
-            </div>
-
-            {/* Medya */}
-            <div className="w-full aspect-square bg-zinc-950 flex items-center justify-center overflow-hidden">
-              {selectedPost.mediaType === "video" ? (
-                <video
-                  src={selectedPost.mediaUrl}
-                  className="w-full h-full object-cover"
-                  controls
-                  autoPlay
-                />
-              ) : (
-                <img
-                  src={selectedPost.mediaUrl}
-                  alt={selectedPost.caption || "Gönderi"}
-                  className="w-full h-full object-cover"
-                />
-              )}
-            </div>
-
-            {/* Açıklama */}
-            {selectedPost.caption && (
-              <div className="p-3 text-sm text-zinc-200 border-t border-zinc-800">
-                <span className="font-bold mr-1.5">@{profile?.username}</span>
-                {selectedPost.caption}
-              </div>
-            )}
-          </div>
-        </div>
+      {/* GÖNDERİ DETAYI: akış ile aynı FeedPost bileşeni (PostCard + yanıt rayı + zincir) */}
+      {detail && (
+        <PostDetailView
+          posts={detail.list}
+          index={Math.max(0, detail.list.findIndex((x) => x.id === detail.id))}
+          onIndexChange={(i) => !isDeletingPost && setDetail((d) => (d ? { ...d, id: d.list[i].id } : d))}
+          onClose={() => !isDeletingPost && setDetail(null)}
+          headerActions={(fp) => (
+            <button
+              type="button"
+              onClick={() => handleDeletePost(fp.id)}
+              disabled={isDeletingPost}
+              title="Sil"
+              aria-label="Sil"
+              className="fd-pd-b"
+              style={{ color: "#f87171" }}
+            >
+              {isDeletingPost ? <Loader2 className="w-4 h-4 animate-spin" /> : <Trash2 className="w-4 h-4" />}
+            </button>
+          )}
+        />
       )}
 
       {/* BÜYÜK PROFİL FOTOĞRAFI GÖRÜNTÜLEME MODALI */}
