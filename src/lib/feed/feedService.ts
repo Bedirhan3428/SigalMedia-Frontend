@@ -1,7 +1,7 @@
 // Sahte akış servisi (yalnızca ön yüz). Gerçek arka uç bağlandığında FeedService arayüzü aynı kalır, bu dosya değişir.
 // Durum bellekte tutulur; beğeni/oy/oluşturulan gönderiler localStorage'a (try/catch) yazılır.
 import { BADGES, SHELF_IDS, VOTES_FOR_KAHIN, evaluateAfterCreate, evaluateAfterVote, sortBadgeIds, type RuleState } from "./badgeRules";
-import { countReplies, docToPost, fetchOriginals, fetchPost, fetchReplies, fetchRepliesBatch, type RemotePost } from "./firestoreSource";
+import { countReplies, docToPost, fetchOriginals, fetchReels, fetchPost, fetchReplies, fetchRepliesBatch, type RemotePost } from "./firestoreSource";
 import { ART_KEYS, FEED_ORDER, MOCK_USERS, buildSeedPosts } from "./mockData";
 import type {
   ArtKey, Badge, ChainSort, CurrentUserInfo, FeedService, FeedUser, Page, PollDraft, Post, PostDraft,
@@ -314,6 +314,53 @@ class MockFeedService implements FeedService {
     for (const id of slice) addOriginal(id, all);
     const next = start + limit;
     return { items, nextCursor: next < order.length ? `m:${next}` : null };
+  }
+
+  /** Test kancası (yalnızca tarayıcı testlerinde tanımlanır; yoksa etkisizdir): Reels için örnek video gönderileri. */
+  private testReels(): RemotePost[] | null {
+    if (typeof window === "undefined") return null;
+    const raw = (window as unknown as { __SIGAL_TEST_REELS__?: unknown }).__SIGAL_TEST_REELS__;
+    if (!Array.isArray(raw)) return null;
+    return (raw as Record<string, unknown>[]).map((r, i): RemotePost => {
+      const id = String(r.id ?? `tr${i}`);
+      const authorId = String(r.authorId ?? `tu${i}`);
+      return {
+        post: {
+          id, type: "video", authorId, createdAt: new Date(Date.now() - i * 60000).toISOString(),
+          caption: r.caption ? String(r.caption) : undefined,
+          likeCount: Number(r.likeCount) || 0, commentCount: Number(r.commentCount) || 0, replyCount: 0, likedByMe: false, postBadges: [],
+          art: ART_KEYS[i % ART_KEYS.length], mediaUrl: String(r.mediaUrl ?? ""), posterUrl: r.posterUrl ? String(r.posterUrl) : undefined,
+          durationSec: Number(r.durationSec) || 0, music: r.music ? String(r.music) : undefined,
+        },
+        user: { id: authorId, username: String(r.username ?? `kullanici${i}`), badgeIds: [] },
+      };
+    });
+  }
+
+  async listReels(cursor?: string, limit = 4): Promise<Page<Post>> {
+    await delay();
+    const playable = (p: Post | undefined): p is Post => !!p && p.type === "video" && !!p.mediaUrl && !p.replyTo;
+    const test = this.testReels();
+    if (test) {
+      this.ingest(test);
+      const start = cursor?.startsWith("t:") ? parseInt(cursor.slice(2), 10) || 0 : 0;
+      const slice = test.slice(start, start + limit).map((r) => this.find(r.post.id)).filter(playable);
+      return { items: slice, nextCursor: start + limit < test.length ? `t:${start + limit}` : null };
+    }
+    const before = cursor?.startsWith("r:") ? parseInt(cursor.slice(2), 10) || undefined : undefined;
+    const ids: string[] = [];
+    let nextMs: number | null = null;
+    try {
+      const r = await this.remoteCall(() => fetchReels(before, limit));
+      this.ingest(r.items);
+      ids.push(...r.items.map((x) => x.post.id));
+      nextMs = r.nextMs;
+    } catch {
+      /* çevrimdışı: örnek videoların oynatılabilir adresi yoktur; boş durum gösterilir */
+    }
+    const mine = cursor ? [] : this.state.created.filter((p) => !p.replyTo && p.type === "video").sort((a, b) => b.createdAt.localeCompare(a.createdAt)).map((p) => p.id);
+    const items = [...mine, ...ids].map((id) => this.find(id)).filter(playable);
+    return { items, nextCursor: nextMs ? `r:${nextMs}` : null };
   }
 
   async getChain(rootId: string, sort: ChainSort) {

@@ -75,6 +75,8 @@ export interface VideoPost extends PostBase {
   posterUrl?: string;
   art: ArtKey;
   durationSec: number;
+  /** Müzik satırı ("Şarkı · Sanatçı"); gönderide müzik varsa. */
+  music?: string;
 }
 
 export interface PollOption {
@@ -133,6 +135,8 @@ export interface FeedService {
   getUser(id: string): FeedUser;
   /** Yalnızca orijinal gönderiler (yanıtlar akışta ayrı kart olmaz; kartın altında ReplyRail ile görünür). */
   listFeed(cursor?: string, limit?: number): Promise<Page<Post>>;
+  /** Reels akışı: oynatılabilir video gönderiler (Reels olarak ya da normal gönderi olarak paylaşılanlar), en yeni önce. */
+  listReels(cursor?: string, limit?: number): Promise<Page<Post>>;
   /** Kökün en popüler yanıtları (beğeni >= 1; çok beğenilen önce, eşitlikte yeni önce). Eşzamanlı, yüklü önbellekten. */
   getPopularReplies(rootId: string, n?: number): Post[];
   /** Tek gönderi (yoksa undefined). */

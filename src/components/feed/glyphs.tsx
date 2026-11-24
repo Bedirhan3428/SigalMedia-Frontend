@@ -28,6 +28,8 @@ export const GlyphSprite = memo(function GlyphSprite() {
         <symbol id="fd-i-play" viewBox="0 0 24 24"><path d="M8 5v14l11-7z" /></symbol>
         <symbol id="fd-i-pause" viewBox="0 0 24 24"><path d="M8 5v14M16 5v14" /></symbol>
         <symbol id="fd-i-vol" viewBox="0 0 24 24"><path d="M4 9v6h4l5 4V5L8 9z" /><path d="M16 9a4 4 0 0 1 0 6" /></symbol>
+        <symbol id="fd-i-expand" viewBox="0 0 24 24"><path d="M14 4h6v6M10 20H4v-6M20 4l-7 7M4 20l7-7" /></symbol>
+        <symbol id="fd-i-music" viewBox="0 0 24 24"><path d="M9 18V6l10-2v12" /><circle cx="6.5" cy="18" r="2.5" /><circle cx="16.5" cy="16" r="2.5" /></symbol>
         <symbol id="fd-i-mute" viewBox="0 0 24 24"><path d="M4 9v6h4l5 4V5L8 9z" /><path d="M16 9l5 6M21 9l-5 6" /></symbol>
       </defs>
     </svg>
