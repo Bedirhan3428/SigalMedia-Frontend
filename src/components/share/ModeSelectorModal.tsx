@@ -29,6 +29,8 @@ export interface ModeSelectorModalProps {
   registerBackLayer?: boolean;
   /** Optional info line under the title (e.g. "unsaved work was lost on reload"). */
   notice?: string | null;
+  /** Gizlenecek modlar (ör. yanıt modunda "story"). */
+  hiddenModes?: ShareMode[];
 }
 
 interface ModeOption {
@@ -74,6 +76,7 @@ export default function ModeSelectorModal({
   onBack,
   registerBackLayer,
   notice,
+  hiddenModes,
 }: ModeSelectorModalProps) {
   const overSession = activeMode !== null;
   useBackLayer(isOpen && (registerBackLayer ?? overSession), onBack);
@@ -113,7 +116,7 @@ export default function ModeSelectorModal({
                 {notice}
               </p>
             ) : null}
-            {MODES.map((m) => {
+            {MODES.filter((m) => !hiddenModes?.includes(m.mode)).map((m) => {
               const active = activeMode === m.mode;
               return (
                 <button

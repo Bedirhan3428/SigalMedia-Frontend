@@ -53,6 +53,7 @@ export const VideoBody = memo(function VideoBody({ post }: { post: VideoPost }) 
         <video
           ref={vid}
           src={post.mediaUrl}
+          poster={post.posterUrl}
           muted={muted}
           loop
           playsInline
