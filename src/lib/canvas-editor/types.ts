@@ -333,6 +333,12 @@ export const POST_ASPECT_SIZES: Record<PostAspect, { width: number; height: numb
 /** Görseller yüklenirken bu uzun kenara (px) küçültülür (iOS tuval sınırı ~16.7M px). */
 export const MAX_IMAGE_DECODE_PX = 4096;
 export const MAX_IMAGE_DECODE_AREA = 16_000_000;
+/**
+ * Gönderi (Post) çalışma kopyası: tuval en çok 1440 px olduğundan kaynağı 2560 px uzun kenara indirmek
+ * kırpma yakınlaştırmasında ~1.8x pay bırakır; 12 MP yerine ~5 MP çözmek/çizmek fotoğraf geçişini ve
+ * ilk çizimi (4x CPU kısıtında ~300 ms'lik tek görev) ve bellek kullanımını belirgin biçimde azaltır (WP-35).
+ */
+export const POST_WORK_IMAGE_PX = 2560;
 
 /** loadVideo / loadImage zaman aşımı (ms). */
 export const MEDIA_LOAD_TIMEOUT_MS = 15_000;

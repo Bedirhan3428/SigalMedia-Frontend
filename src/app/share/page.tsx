@@ -1,6 +1,6 @@
 "use client";
 
-import { Suspense, useState, useEffect, useRef, useCallback } from "react";
+import { Suspense, useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useAuth } from "@/context/AuthContext";
 import { ref, uploadBytes, getDownloadURL } from "firebase/storage";
@@ -30,6 +30,8 @@ import {
   getMusicFadeGain,
   getMusicTimelineRange,
   isMediaLoadError,
+  MediaSourceManager,
+  POST_WORK_IMAGE_PX,
 } from "@/lib/canvas-editor";
 import MusicPickerDrawer from "@/components/share/MusicPickerDrawer";
 import MusicSettingsPanel from "@/components/share/MusicSettingsPanel";
@@ -172,6 +174,25 @@ function ShareStoryPageInner() {
   const [slots, setSlots] = useState<PhotoSlot[]>([]);
   const [activeSlot, setActiveSlot] = useState(0);
   const [slotBusy, setSlotBusy] = useState(false);
+  const slotFiles = useMemo(() => slots.map((s) => s.file), [slots]);
+  // WP-35: etkin olmayan fotoğrafların çalışma kopyalarını sırayla, tarayıcı boştayken hazırla; geçişte
+  // yeniden çözme/kodlama olmasın. Bellekte yalnızca küçültülmüş Blob kalır (WeakMap, dosyayla birlikte gider).
+  useEffect(() => {
+    if (slotFiles.length < 2) return;
+    let cancelled = false;
+    const ric = (window as unknown as { requestIdleCallback?: (cb: () => void, o?: { timeout: number }) => number }).requestIdleCallback;
+    const later = (cb: () => void) => (ric ? ric(cb, { timeout: 1500 }) : window.setTimeout(cb, 250));
+    void (async () => {
+      for (let i = 0; i < slotFiles.length && !cancelled; i++) {
+        await new Promise<void>((r) => later(r));
+        if (cancelled) return;
+        await MediaSourceManager.prepareWorkingCopy(slotFiles[i], POST_WORK_IMAGE_PX);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [slotFiles]);
   const slotsRef = useRef<PhotoSlot[]>([]);
   const activeSlotRef = useRef(0);
   const addPhotosInputRef = useRef<HTMLInputElement | null>(null);
@@ -1950,7 +1971,7 @@ function ShareStoryPageInner() {
           </div>
 
           <PhotoStrip
-            files={slots.map((s) => s.file)}
+            files={slotFiles}
             active={activeSlot}
             max={7}
             busy={slotBusy || isPublishing}
