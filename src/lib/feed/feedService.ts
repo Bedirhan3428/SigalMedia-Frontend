@@ -1,6 +1,7 @@
 // Sahte akış servisi (yalnızca ön yüz). Gerçek arka uç bağlandığında FeedService arayüzü aynı kalır, bu dosya değişir.
 // Durum bellekte tutulur; beğeni/oy/oluşturulan gönderiler localStorage'a (try/catch) yazılır.
 import { BADGES, SHELF_IDS, VOTES_FOR_KAHIN, evaluateAfterCreate, evaluateAfterVote, sortBadgeIds, type RuleState } from "./badgeRules";
+import { countReplies, fetchOriginals, fetchPost, fetchReplies, type RemotePost } from "./firestoreSource";
 import { ART_KEYS, FEED_ORDER, MOCK_USERS, buildSeedPosts } from "./mockData";
 import type {
   ArtKey, Badge, ChainSort, CurrentUserInfo, FeedService, FeedUser, Page, PollDraft, Post, PostDraft,
@@ -38,6 +39,25 @@ class MockFeedService implements FeedService {
   private version = 0;
   /** Oturumda oluşturulan, kalıcı olmayan blob adresleri (yalnızca bellekte). */
   private blobs = new Map<string, string>();
+  /** Firestore'dan okunan gerçek gönderiler (yalnızca bellek önbelleği). */
+  private remote = new Map<string, Post>();
+  private remoteUsers = new Map<string, FeedUser>();
+  /** Zincir başına sunucu sayımı (getCountFromServer), önbellekli. */
+  private remoteCounts = new Map<string, number>();
+  private chainLoaded = new Map<string, number>();
+  /** Firestore ulaşılamadıysa bu zamana kadar (ms) sorgulanmaz; akış örnek içerikle açılır. */
+  private remoteDownUntil = 0;
+  private async remoteCall<T>(fn: () => Promise<T>): Promise<T> {
+    if (Date.now() < this.remoteDownUntil) throw new Error("remote-down");
+    try {
+      return await fn();
+    } catch (e) {
+      if ((e as Error).message === "firestore-timeout") this.remoteDownUntil = Date.now() + 60000;
+      throw e;
+    }
+  }
+  /** Dinleyici yokken (ör. düzenleyicide) açılan rozetler; akış açılınca teslim edilir. */
+  private pendingBadges: Badge[] = [];
 
   setCurrentUser(u: CurrentUserInfo) {
     const changed = this.me.id !== u.id || this.me.username !== u.username || this.me.avatarUrl !== u.avatarUrl;
@@ -89,6 +109,8 @@ class MockFeedService implements FeedService {
   }
   onBadgeUnlocked(cb: (b: Badge) => void) {
     this.badgeListeners.add(cb);
+    const pending = this.pendingBadges.splice(0);
+    if (pending.length) setTimeout(() => pending.forEach((b) => cb(b)), 0);
     return () => this.badgeListeners.delete(cb);
   }
   votesToKahin() {
@@ -107,13 +129,13 @@ class MockFeedService implements FeedService {
         isMe: true,
       };
     }
-    return MOCK_USERS[id] ?? { id, username: id, badgeIds: [] };
+    return MOCK_USERS[id] ?? this.remoteUsers.get(id) ?? { id, username: id, badgeIds: [] };
   }
 
   // ---- gönderi birleştirme ----
 
   private rawAll(): Post[] {
-    return [...[...this.seeds.values()].map((s) => s.post), ...this.state.created];
+    return [...[...this.seeds.values()].map((s) => s.post), ...this.remote.values(), ...this.state.created];
   }
 
   private descendants(id: string, all: Post[]): Post[] {
@@ -141,7 +163,7 @@ class MockFeedService implements FeedService {
       ...p,
       likedByMe: liked,
       likeCount: p.likeCount + (liked ? 1 : 0),
-      replyCount: extra + desc,
+      replyCount: extra + Math.max(desc, this.remoteCounts.get(p.id) ?? 0),
       postBadges,
     };
     const blob = this.blobs.get(p.id);
@@ -164,29 +186,106 @@ class MockFeedService implements FeedService {
 
   // ---- okuma ----
 
+  private ingest(rs: RemotePost[]) {
+    for (const r of rs) {
+      this.remote.set(r.post.id, r.post);
+      if (r.user.id && !MOCK_USERS[r.user.id]) this.remoteUsers.set(r.user.id, r.user);
+    }
+  }
+
+  /** Bir kökün gerçek yanıtlarını önbelleğe alır (kısa süre içinde tekrar sorgulanmaz). */
+  private async loadChain(rootId: string, force = false) {
+    const at = this.chainLoaded.get(rootId);
+    if (!force && at && Date.now() - at < 15000) return;
+    this.chainLoaded.set(rootId, Date.now());
+    try {
+      const rs = await this.remoteCall(() => fetchReplies(rootId));
+      this.ingest(rs);
+      // Sunucu toplulaştırması yalnızca sayfalama sınırı aşılırsa gerekir
+      if (rs.length >= 100) this.remoteCounts.set(rootId, await this.remoteCall(() => countReplies(rootId)));
+    } catch {
+      /* çevrimdışı: yalnızca örnek içerik */
+    }
+  }
+
+  async notePublished(isReply: boolean, parentId?: string): Promise<void> {
+    let trending = false;
+    if (isReply && parentId) {
+      const parent = this.find(parentId) ?? (await this.getPost(parentId));
+      const root = parent ? this.find(parent.replyTo?.rootId ?? parent.id) ?? parent : undefined;
+      trending = !!(root?.postBadges.includes("gundem") || parent?.postBadges.includes("gundem"));
+    }
+    if (isReply) this.state.rule.repliesCreated++;
+    else this.state.rule.postsCreated++;
+    const unlocked = evaluateAfterCreate(this.state.rule, { isReply, parentIsTrending: trending });
+    this.write();
+    this.emit();
+    this.fireBadges(unlocked);
+  }
+
+  async getPost(id: string): Promise<Post | undefined> {
+    const hit = this.find(id);
+    if (hit) return hit;
+    try {
+      const r = await this.remoteCall(() => fetchPost(id));
+      if (r) {
+        this.ingest([r]);
+        return this.find(id);
+      }
+    } catch {
+      /* yoksay */
+    }
+    return undefined;
+  }
+
   async listFeed(cursor?: string, limit = 5): Promise<Page<Post>> {
     await delay();
-    const all = this.rawAll();
-    const mineOriginals = this.state.created.filter((p) => !p.replyTo).sort((a, b) => b.createdAt.localeCompare(a.createdAt)).map((p) => p.id);
-    const order = [...mineOriginals, ...FEED_ORDER];
-    const start = cursor ? parseInt(cursor, 10) || 0 : 0;
-    const slice = order.slice(start, start + limit);
     const items: Post[] = [];
-    for (const id of slice) {
+    const addWithReply = (id: string, all: Post[]) => {
       const p = all.find((x) => x.id === id);
-      if (!p) continue;
+      if (!p) return;
       items.push(this.materialize(p, all));
       const first = all
         .filter((x) => x.replyTo?.parentId === id && x.replyTo.depth === 1)
         .sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0];
       if (first) items.push(this.materialize(first, all));
+    };
+    // 1) gerçek gönderiler (en yeni önce, 10'luk sayfalar), 2) örnek içerik
+    if (!cursor || cursor.startsWith("r:")) {
+      const before = cursor ? parseInt(cursor.slice(2), 10) || undefined : undefined;
+      let ids: string[] = [];
+      let nextMs: number | null = null;
+      try {
+        const r = await this.remoteCall(() => fetchOriginals(before, 10));
+        this.ingest(r.items);
+        ids = r.items.map((x) => x.post.id);
+        nextMs = r.nextMs;
+        await Promise.all(ids.map((id) => this.loadChain(id, true)));
+      } catch {
+        /* çevrimdışı */
+      }
+      const mine = cursor ? [] : this.state.created.filter((p) => !p.replyTo).sort((a, b) => b.createdAt.localeCompare(a.createdAt)).map((p) => p.id);
+      if (!ids.length && !nextMs && !mine.length) return this.listFeed("m:0", limit);
+      const all = this.rawAll();
+      for (const id of [...mine, ...ids]) addWithReply(id, all);
+      return { items, nextCursor: nextMs ? `r:${nextMs}` : "m:0" };
+    }
+    const order = FEED_ORDER;
+    const start = parseInt(cursor.slice(2), 10) || 0;
+    const slice = order.slice(start, start + limit);
+    await Promise.all(slice.map((id) => this.loadChain(id, true)));
+    const all = this.rawAll();
+    for (const id of slice) {
+      addWithReply(id, all);
     }
     const next = start + limit;
-    return { items, nextCursor: next < order.length ? String(next) : null };
+    return { items, nextCursor: next < order.length ? `m:${next}` : null };
   }
 
   async getChain(rootId: string, sort: ChainSort) {
     await delay(60);
+    if (!this.find(rootId)) await this.getPost(rootId);
+    await this.loadChain(rootId, true);
     const all = this.rawAll();
     const root = all.find((p) => p.id === rootId);
     if (!root) throw new Error("Gönderi bulunamadı");
@@ -239,7 +338,11 @@ class MockFeedService implements FeedService {
   }
 
   private fireBadges(ids: string[]) {
-    ids.forEach((id) => BADGES[id] && this.badgeListeners.forEach((l) => l(BADGES[id])));
+    ids.forEach((id) => {
+      if (!BADGES[id]) return;
+      if (this.badgeListeners.size === 0) this.pendingBadges.push(BADGES[id]);
+      else this.badgeListeners.forEach((l) => l(BADGES[id]));
+    });
   }
 
   private build(draft: PostDraft, reply?: { parent: Post }): Post {

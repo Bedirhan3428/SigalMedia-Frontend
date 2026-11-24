@@ -28,7 +28,7 @@ interface SeedBase {
   caption?: string;
 }
 type Seed =
-  | (SeedBase & { type: "photo"; art: ArtKey })
+  | (SeedBase & { type: "photo"; art: ArtKey; arts?: ArtKey[] })
   | (SeedBase & { type: "video"; art: ArtKey; dur: number })
   | (SeedBase & { type: "poll"; question: string; options: { id: string; text: string; votes: number; art?: ArtKey }[]; endsInMin: number; my?: string });
 
@@ -47,6 +47,8 @@ export const SEEDS: Seed[] = [
     { id: "a", text: "Filtre kahve", votes: 310 }, { id: "b", text: "Latte", votes: 455 }, { id: "c", text: "Çay, kahve değil", votes: 288 }, { id: "d", text: "Hiçbiri, uyku", votes: 197 }] },
   { id: "p6", type: "photo", authorId: "selin", art: "city", min: 20, likes: 1240, comments: 96, pills: ["gunun", "yeni"], caption: "Gece yürüyüşünde şehir ışıkları. Bugünün favorisi bu." },
   { id: "q2", type: "photo", authorId: "ece", art: "sunset", min: 12, likes: 60, comments: 4, reply: { parentId: "p6", depth: 1 }, caption: "Bu kareyi duvar kağıdı yaptım bile." },
+  { id: "p13", type: "photo", authorId: "ece", art: "sunset", arts: ["sunset", "wave", "hills", "city", "pink"], min: 40, likes: 310, comments: 22, pills: ["yeni"], caption: "Haftanın fotoğraf dizisi: beş kare, beş ruh hali." },
+  { id: "p14", type: "photo", authorId: "selin", art: "city", arts: ["city", "pink", "hills"], min: 150, likes: 87, comments: 6, caption: "Üç kare, tek gezi." },
   { id: "p7", type: "photo", authorId: "mert", art: "hills", min: 380, likes: 72, comments: 5, caption: "Sabah koşusu, bugün 8 km. Kahve hak edildi." },
   { id: "p8", type: "poll", authorId: "ece", min: 3000, likes: 51, comments: 9, question: "En iyi mevsim hangisi?", endsInMin: -120, options: [
     { id: "a", text: "Yaz", votes: 220 }, { id: "b", text: "Sonbahar", votes: 340 }, { id: "c", text: "Kış", votes: 90 }] },
@@ -81,7 +83,7 @@ export function buildSeedPosts(): Map<string, SeedMeta> {
       replyTo: s.reply ? { parentId: s.reply.parentId, rootId: rootOf(s), depth: s.reply.depth } : undefined,
     };
     let post: Post;
-    if (s.type === "photo") post = { ...base, type: "photo", art: s.art };
+    if (s.type === "photo") post = { ...base, type: "photo", art: s.art, photos: s.arts?.map((a) => ({ art: a })) };
     else if (s.type === "video") post = { ...base, type: "video", art: s.art, durationSec: s.dur };
     else
       post = {
@@ -98,4 +100,4 @@ export function buildSeedPosts(): Map<string, SeedMeta> {
 }
 
 /** Akışta görünen orijinal gönderilerin sırası. */
-export const FEED_ORDER = ["p1", "p3", "p4", "p5", "p6", "p7", "p8", "p9", "p10", "p11", "p12"];
+export const FEED_ORDER = ["p1", "p13", "p3", "p14", "p4", "p5", "p6", "p7", "p8", "p9", "p10", "p11", "p12"];

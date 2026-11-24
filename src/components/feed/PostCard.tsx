@@ -9,6 +9,7 @@ import { PollView } from "./PollView";
 import { VideoBody } from "./VideoBody";
 import { Who, useFeedUser } from "./UserParts";
 import { useFeedActions } from "./FeedContext";
+import { PhotoCarousel } from "./PhotoCarousel";
 
 export const PostCard = memo(function PostCard({ post, child = false }: { post: Post; child?: boolean }) {
   const { like, openReply, openChain, toast } = useFeedActions();
@@ -31,8 +32,8 @@ export const PostCard = memo(function PostCard({ post, child = false }: { post: 
 
       {post.type === "photo" ? (
         <>
-          <div className="fd-media">
-            {post.mediaUrl ? <img src={post.mediaUrl} alt={post.caption ?? "Gönderi görseli"} loading="lazy" decoding="async" /> : <Art k={post.art} />}
+          <div className="fd-media" style={post.photos?.[0]?.width && post.photos[0].height ? { aspectRatio: `${post.photos[0].width} / ${post.photos[0].height}` } : undefined}>
+            {post.photos && post.photos.length > 1 ? <PhotoCarousel photos={post.photos} alt={post.caption ?? "Gönderi görseli"} /> : post.mediaUrl ? <img src={post.mediaUrl} alt={post.caption ?? "Gönderi görseli"} loading="lazy" decoding="async" /> : <Art k={post.art} />}
             <div className="fd-pills">{post.postBadges.map((b) => <PostPill key={b} id={b} />)}</div>
           </div>
           {post.caption ? <p className="fd-cap">{post.caption}</p> : null}

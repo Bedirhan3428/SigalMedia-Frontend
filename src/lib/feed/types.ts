@@ -49,10 +49,20 @@ interface PostBase {
   replyTo?: ReplyRef;
 }
 
+export interface PhotoItem {
+  /** Yoksa art yer tutucusu gösterilir (örnek içerik). */
+  url?: string;
+  art?: ArtKey;
+  width?: number;
+  height?: number;
+}
+
 export interface PhotoPost extends PostBase {
   type: "photo";
   /** Gerçek görsel (blob/URL). Yoksa art kullanılır. */
   mediaUrl?: string;
+  /** Çoklu fotoğraf (en çok 7); ilki mediaUrl ile aynıdır. */
+  photos?: PhotoItem[];
   art: ArtKey;
 }
 
@@ -60,6 +70,7 @@ export interface VideoPost extends PostBase {
   type: "video";
   /** Gerçek video kaynağı. Yoksa art + durationSec ile simüle edilir. */
   mediaUrl?: string;
+  posterUrl?: string;
   art: ArtKey;
   durationSec: number;
 }
@@ -120,6 +131,10 @@ export interface FeedService {
   getUser(id: string): FeedUser;
   /** Orijinal gönderiler; her birini en yeni birinci derece yanıtı izler (düz liste). */
   listFeed(cursor?: string, limit?: number): Promise<Page<Post>>;
+  /** Tek gönderi (yoksa undefined). */
+  getPost(id: string): Promise<Post | undefined>;
+  /** Editörde Firebase'e yayımlanan bir yanıt için rozet kurallarını işletir. */
+  notePublished(isReply: boolean, parentId?: string): Promise<void>;
   getChain(rootId: string, sort: ChainSort): Promise<{ root: Post; replies: Post[] }>;
   toggleLike(postId: string): Promise<Post>;
   vote(pollId: string, optionId: string): Promise<PollPost>;

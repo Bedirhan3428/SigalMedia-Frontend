@@ -1,7 +1,7 @@
 "use client";
 
-import { useState, useEffect, useRef, useCallback } from "react";
-import { useRouter } from "next/navigation";
+import { Suspense, useState, useEffect, useRef, useCallback } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
 import { useAuth } from "@/context/AuthContext";
 import { ref, uploadBytes, getDownloadURL } from "firebase/storage";
 import { collection, addDoc, doc, updateDoc, increment, serverTimestamp } from "firebase/firestore";
@@ -36,6 +36,9 @@ import MusicSettingsPanel from "@/components/share/MusicSettingsPanel";
 // [START] CREATED BY Bedirhan
 import ExportProgress from "@/components/share/ExportProgress";
 import ModeSelectorModal from "@/components/share/ModeSelectorModal";
+import { ReplyBanner, ReplyMissingNotice } from "@/components/share/ReplyBanner";
+import { feedService } from "@/lib/feed/feedService";
+import type { Post } from "@/lib/feed/types";
 import {
   ConfirmDialog,
   EditorBackStackProvider,
@@ -47,7 +50,8 @@ import ReelsEditor from "@/components/share/reels/ReelsEditor";
 import PostEditor from "@/components/share/post/PostEditor";
 import { DraftAutosaver } from "@/lib/drafts/DraftAutosaver";
 import { deleteDraft, listDrafts, loadDraftFiles, requestPersistence, type DraftMode, type DraftRecord } from "@/lib/drafts/DraftStore";
-import { adoptBlobKey, applyDraft, baseMediaKeyOf, type DraftState } from "@/lib/drafts/serialize";
+import { adoptBlobKey, applyDraft, baseMediaKeyOf, captureDraft, type CapturedDraft, type DraftState } from "@/lib/drafts/serialize";
+import PhotoStrip from "@/components/share/post/PhotoStrip";
 // [END] CREATED BY Bedirhan
 // [MODIFIED BY Bedirhan]
 import {
@@ -133,9 +137,54 @@ function editSignature(engine: CanvasEngine, music: StoryAudioMeta | null): stri
 }
 
 export default function ShareStoryPage() {
+  // useSearchParams (yanıt modu) Suspense sınırı ister
+  return (
+    <Suspense fallback={null}>
+      <ShareStoryPageInner />
+    </Suspense>
+  );
+}
+
+function ShareStoryPageInner() {
   const [mounted, setMounted] = useState(false);
   const router = useRouter();
   const { profile, loading, refreshProfile } = useAuth();
+
+  // WP-27: /share?replyTo=<postId> -> zincire yanıt modu (yalnızca Gönderi ve Reels)
+  const searchParams = useSearchParams();
+  const [replyDismissed, setReplyDismissed] = useState(false);
+  const replyToId = replyDismissed ? null : searchParams.get("replyTo");
+  const hasReplyParamRef = useRef(false);
+  const replyParamPresent = !!searchParams.get("replyTo");
+  useEffect(() => {
+    hasReplyParamRef.current = replyParamPresent;
+  }, [replyParamPresent]);
+  const [replyParent, setReplyParent] = useState<Post | null>(null);
+  const [replyMissing, setReplyMissing] = useState(false);
+  const replyParentRef = useRef<Post | null>(null);
+
+  // WP-27: Gönderi modunda çoklu fotoğraf (yeni gönderi en çok 7, yanıt en çok 3)
+  interface PhotoSlot {
+    id: string;
+    file: File;
+    captured: CapturedDraft | null;
+  }
+  const [slots, setSlots] = useState<PhotoSlot[]>([]);
+  const [activeSlot, setActiveSlot] = useState(0);
+  const [slotBusy, setSlotBusy] = useState(false);
+  const slotsRef = useRef<PhotoSlot[]>([]);
+  const activeSlotRef = useRef(0);
+  const addPhotosInputRef = useRef<HTMLInputElement | null>(null);
+  const [publishProgress, setPublishProgress] = useState<{ phase: "export" | "upload"; done: number; total: number } | null>(null);
+  const commitSlots = (next: PhotoSlot[], active: number) => {
+    slotsRef.current = next;
+    activeSlotRef.current = active;
+    setSlots(next);
+    setActiveSlot(active);
+  };
+  useEffect(() => {
+    replyParentRef.current = replyParent;
+  }, [replyParent]);
 
   // Canvas ve Motor Referansları
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -244,7 +293,9 @@ export default function ShareStoryPage() {
       // WP-09: kayıtlı taslak varsa geri yükle / sil teklif et; yenilemede taslak yoksa eski yönlendirme
       listDrafts()
         .then((drafts) => {
-          if (drafts.length > 0) setDraftOffer(drafts[0] as DraftRecord<DraftState>);
+          // WP-27: yanıt modunda Hikaye taslağı önerilmez
+          const offer = hasReplyParamRef.current ? drafts.find((d) => d.mode !== "story") : drafts[0];
+          if (offer) setDraftOffer(offer as DraftRecord<DraftState>);
           else if (redirectIfNoDraft) router.replace("/");
         })
         .catch(() => {
@@ -321,6 +372,10 @@ export default function ShareStoryPage() {
     if (baseFileInputRef.current) baseFileInputRef.current.value = "";
     if (overlayFileInputRef.current) overlayFileInputRef.current.value = "";
 
+    slotsRef.current = [];
+    activeSlotRef.current = 0;
+    setSlots([]);
+    setActiveSlot(0);
     setHasMedia(false);
     setSelectedLayer(null);
     setFilterToast(null);
@@ -760,6 +815,7 @@ export default function ShareStoryPage() {
   // 1. MOD SEÇİMİ VE TABAN MEDYA AKIŞI (HİKAYE / REELS / GÖNDERİ)
   const handleSelectMode = useCallback(
     (mode: ShareMode) => {
+      if (mode === "story" && replyParentRef.current) return; // yanıt modunda Hikaye yok
       // F-01/F-02: medya yüklüyken mod değişimi mevcut çalışmayı siler; önce onay iste
       if (hasMedia) {
         if (mode === shareModeRef.current) setIsModeSelectorOpen(false);
@@ -882,6 +938,9 @@ export default function ShareStoryPage() {
 
       const media = await engine.loadMedia(file, undefined, shareModeRef.current === "post");
       baselineSigRef.current = editSignature(engine, selectedMusicRef.current);
+      if (shareModeRef.current === "post" && slotsRef.current.length === 0) {
+        commitSlots([{ id: `s${Date.now().toString(36)}`, file, captured: null }], 0);
+      }
       setHasMedia(true);
       setPostAdjustments(engine.getPostAdjustments());
       setActiveFilterIndex(engine.getCurrentFilterIndex());
@@ -960,11 +1019,105 @@ export default function ShareStoryPage() {
     }
   };
 
+  const maxPhotos = () => (replyParentRef.current ? 3 : 7);
+  const flashToast = (msg: string, ms = 2600) => {
+    setFilterToast(msg);
+    if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
+    toastTimerRef.current = setTimeout(() => setFilterToast(null), ms);
+  };
+
+  // Mevcut gönderiye fotoğraf ekler (üst sınır: 7, yanıtta 3)
+  const addPhotos = (picked: File[]) => {
+    const imgs = picked.filter((f) => f.type.startsWith("image/"));
+    if (imgs.length === 0) return;
+    const max = maxPhotos();
+    const room = max - slotsRef.current.length;
+    if (room <= 0) {
+      flashToast(`En fazla ${max} fotoğraf ekleyebilirsin`);
+      return;
+    }
+    if (imgs.length > room) flashToast(`En fazla ${max} fotoğraf ekleyebilirsin; ilk ${room} tanesi eklendi`);
+    const added = imgs.slice(0, room).map((f, i) => ({ id: `s${Date.now().toString(36)}${i}`, file: f, captured: null as CapturedDraft | null }));
+    commitSlots([...slotsRef.current, ...added], activeSlotRef.current);
+  };
+
+  const captureActiveSlot = async () => {
+    const eng = engineRef.current;
+    const s = slotsRef.current[activeSlotRef.current];
+    if (!eng || !s) return;
+    try {
+      s.captured = await captureDraft(eng, "post", { musicVolume: 0.85 });
+    } catch {
+      /* düzenleme kaydedilemezse fotoğraf özgün haliyle yüklenir */
+    }
+  };
+
+  // Seçili fotoğrafı motora yükler; tek paylaşılan en-boy oranı korunur, fotoğrafın kendi düzenlemeleri geri kurulur
+  const activateSlot = async (j: number, capture = true) => {
+    const target = slotsRef.current[j];
+    const eng0 = engineRef.current;
+    if (!target || !eng0) return;
+    if (capture) await captureActiveSlot();
+    const shared = eng0.getPostAspect();
+    await processBaseFile(target.file);
+    const eng = engineRef.current;
+    if (!eng) return;
+    eng.setPostAspect(shared);
+    if (target.captured) {
+      const files = new Map<string, File>();
+      for (const [k, cb] of target.captured.blobs) {
+        files.set(k, cb.blob instanceof File ? cb.blob : new File([cb.blob], cb.name, { type: cb.type }));
+      }
+      await applyDraft(eng, { ...target.captured.state, postAspect: shared }, files);
+    }
+    activeSlotRef.current = j;
+    setActiveSlot(j);
+    setPostAdjustments(eng.getPostAdjustments());
+    setActiveFilterIndex(eng.getCurrentFilterIndex());
+  };
+
+  const runSlotOp = async (op: () => Promise<void>) => {
+    if (slotBusy || isPublishing) return;
+    setSlotBusy(true);
+    try {
+      await op();
+    } finally {
+      setSlotBusy(false);
+    }
+  };
+  const selectSlot = (j: number) => {
+    if (j === activeSlotRef.current) return;
+    void runSlotOp(() => activateSlot(j));
+  };
+  const removeSlot = (j: number) => {
+    if (slotsRef.current.length <= 1) return;
+    void runSlotOp(async () => {
+      const cur = activeSlotRef.current;
+      const next = slotsRef.current.filter((_, i) => i !== j);
+      if (j === cur) {
+        const idx = Math.min(j, next.length - 1);
+        commitSlots(next, idx);
+        await activateSlot(idx, false);
+      } else {
+        commitSlots(next, j < cur ? cur - 1 : cur);
+      }
+    });
+  };
+  const moveSlot = (j: number, dir: -1 | 1) => {
+    const list = [...slotsRef.current];
+    const k = j + dir;
+    if (k < 0 || k >= list.length) return;
+    [list[j], list[k]] = [list[k], list[j]];
+    const cur = activeSlotRef.current;
+    commitSlots(list, cur === j ? k : cur === k ? j : cur);
+  };
+
   const handleBaseFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
+    const picked = Array.from(e.target.files ?? []);
     e.target.value = "";
-    if (!file) return;
-    await processBaseFile(file);
+    if (picked.length === 0) return;
+    await processBaseFile(picked[0]);
+    if (shareModeRef.current === "post" && picked.length > 1 && engineRef.current?.getMedia()) addPhotos(picked.slice(1));
   };
 
   const handleRootDrop = (e: React.DragEvent) => {
@@ -1255,24 +1408,82 @@ export default function ShareStoryPage() {
   // ─────────────────────────────────────────────────────────────
   // 4. HİKAYEYİ / GÖNDERİYİ PAYLAŞ (GÖRSEL WEBP VEYA VİDEO MP4)
   // ─────────────────────────────────────────────────────────────
+  // WP-27: yanıt modu — üst gönderiyi bul (mock akış servisi), Hikaye'yi dışla
+  useEffect(() => {
+    if (!replyToId || !profile?.uid) return;
+    let dead = false;
+    feedService.setCurrentUser({ id: profile.uid, username: profile.username || profile.displayName || "sen", avatarUrl: profile.photoURL || undefined });
+    void feedService.getPost(replyToId).then((p) => {
+      if (dead) return;
+      if (!p) {
+        setReplyMissing(true);
+        setReplyDismissed(true);
+        return;
+      }
+      setReplyParent(p);
+      if (shareModeRef.current === "story") {
+        shareModeRef.current = "post";
+        setShareMode("post");
+      }
+    });
+    return () => {
+      dead = true;
+    };
+  }, [replyToId, profile?.uid, profile?.username, profile?.displayName, profile?.photoURL]);
+
+  const cancelReplyMode = () => {
+    setReplyParent(null);
+    setReplyDismissed(true);
+    try {
+      window.history.replaceState(window.history.state, "", "/share");
+    } catch {
+      /* yoksay */
+    }
+  };
+
+  // Anketle yanıt: editörden çık, akışta anket sayfasını aç
+  const replyWithPoll = async () => {
+    const parent = replyParentRef.current;
+    if (!parent || isPublishing) return;
+    await backStack.release();
+    resetEditor();
+    router.replace(`/?pollReplyTo=${encodeURIComponent(parent.id)}`);
+  };
+
   const handlePublish = async () => {
     if (!profile?.uid || !engineRef.current || isPublishing || isExportingVideo) return;
+    const replyTarget = replyParentRef.current;
+    const engine = engineRef.current;
 
     try {
       setIsPublishing(true);
       const timestamp = Date.now();
-      let blob: Blob;
-      let filename: string;
-      let contentType: string;
-      let publishedMediaType: "image" | "video" = "image";
+      interface PublishItem {
+        blob: Blob;
+        filename: string;
+        contentType: string;
+        type: "image" | "video";
+        poster?: Blob;
+      }
+      const items: PublishItem[] = [];
+      const multi = shareModeRef.current === "post" && slotsRef.current.length > 1;
 
       if (videoState.isVideo) {
+        // WP-27: yanıt modunda kapak karesi (mevcut kare); alınamazsa posterSiz devam
+        let poster: Blob | undefined;
+        if (replyTarget) {
+          try {
+            poster = await engine.exportImage({ mimeType: "image/jpeg", quality: 0.8 });
+          } catch {
+            poster = undefined;
+          }
+        }
         setIsExportingVideo(true);
         setExportProgress(0);
         const abortCtrl = new AbortController();
         exportAbortRef.current = abortCtrl;
 
-        blob = await VideoExporter.exportToBlob(engineRef.current, {
+        const blob = await VideoExporter.exportToBlob(engine, {
           fps: 30,
           music: selectedMusic,
           musicVolume,
@@ -1282,40 +1493,82 @@ export default function ShareStoryPage() {
         });
         setIsExportingVideo(false);
         const isWebm = blob.type.includes("webm");
-        filename = `${shareMode}_${profile.uid}_${timestamp}.${isWebm ? "webm" : "mp4"}`;
-        contentType = isWebm ? "video/webm" : "video/mp4";
-        publishedMediaType = "video";
+        items.push({
+          blob,
+          filename: `${shareMode}_${profile.uid}_${timestamp}.${isWebm ? "webm" : "mp4"}`,
+          contentType: isWebm ? "video/webm" : "video/mp4",
+          type: "video",
+          poster,
+        });
+      } else if (multi) {
+        // WP-27: çoklu fotoğraf — her fotoğrafı (kendi düzenlemeleriyle) sırayla dışa aktar
+        const total = slotsRef.current.length;
+        setPublishProgress({ phase: "export", done: 0, total });
+        await captureActiveSlot();
+        for (let i = 0; i < total; i++) {
+          await activateSlot(i, false);
+          const blob = await engine.exportImage({ mimeType: "image/webp", quality: 0.92 });
+          items.push({ blob, filename: `${shareMode}_${profile.uid}_${timestamp}_${i + 1}.webp`, contentType: "image/webp", type: "image" });
+          setPublishProgress({ phase: "export", done: i + 1, total });
+        }
       } else {
-        blob = await engineRef.current.exportImage({
+        const blob = await engine.exportImage({
           mimeType: "image/webp",
           quality: 0.92,
         });
-        filename = `${shareMode}_${profile.uid}_${timestamp}.webp`;
-        contentType = "image/webp";
-        publishedMediaType = "image";
+        items.push({ blob, filename: `${shareMode}_${profile.uid}_${timestamp}.webp`, contentType: "image/webp", type: "image" });
       }
 
-      const storageRef = ref(storage, `posts/${profile.uid}/${filename}`);
-
-      await uploadBytes(storageRef, blob, {
-        contentType,
-      });
-
-      const mediaUrl = await getDownloadURL(storageRef);
+      // Yükleme: ayrı dosyalar sırayla (ilerleme göstergesiyle)
+      const media: { url: string; type: "image" | "video"; width?: number; height?: number; posterUrl?: string }[] = [];
+      for (let i = 0; i < items.length; i++) {
+        const it = items[i];
+        if (items.length > 1) setPublishProgress({ phase: "upload", done: i, total: items.length });
+        const storageRef = ref(storage, `posts/${profile.uid}/${it.filename}`);
+        await uploadBytes(storageRef, it.blob, { contentType: it.contentType });
+        const url = await getDownloadURL(storageRef);
+        const entry: (typeof media)[number] = { url, type: it.type };
+        if (it.type === "image") {
+          try {
+            const bm = await createImageBitmap(it.blob);
+            entry.width = bm.width;
+            entry.height = bm.height;
+            bm.close();
+          } catch {
+            /* boyut bilgisi isteğe bağlı */
+          }
+        }
+        if (it.poster) {
+          const posterRef = ref(storage, `posts/${profile.uid}/${it.filename.replace(/\.[a-z0-9]+$/i, "")}_poster.jpg`);
+          await uploadBytes(posterRef, it.poster, { contentType: "image/jpeg" });
+          entry.posterUrl = await getDownloadURL(posterRef);
+        }
+        media.push(entry);
+        if (items.length > 1) setPublishProgress({ phase: "upload", done: i + 1, total: items.length });
+      }
 
       const postData: Record<string, unknown> = {
         authorId: profile.uid,
         authorUsername: profile.username || "kullanici",
         authorDisplayName: profile.displayName || "Kullanıcı",
         authorPhotoURL: profile.photoURL || "",
-        mediaUrl,
-        mediaType: publishedMediaType,
+        // Eski tek-medya alanları ilk öğeyle dolar (profil ızgarası uyumu)
+        mediaUrl: media[0].url,
+        mediaType: media[0].type,
+        media,
         type: shareMode,
         caption: "",
         likesCount: 0,
         commentsCount: 0,
         createdAt: serverTimestamp(),
       };
+      if (replyTarget) {
+        postData.replyTo = {
+          parentId: replyTarget.id,
+          rootId: replyTarget.replyTo?.rootId ?? replyTarget.id,
+          depth: (replyTarget.replyTo?.depth ?? 0) + 1,
+        };
+      }
 
       // Müzik seçildiyse metaveriyi gönderiye ekle (streamUrl: iTunes önizleme adresi)
       if (selectedMusic) {
@@ -1333,26 +1586,42 @@ export default function ShareStoryPage() {
         };
       }
 
-      await addDoc(collection(db, "posts"), postData);
+      // Otomatik test kancası (yalnızca tarayıcı testlerinde tanımlanır): gerçek gönderi oluşturmadan yükü inceler
+      const testSink = (window as unknown as { __SIGAL_TEST_PUBLISH__?: (d: Record<string, unknown>) => string | void }).__SIGAL_TEST_PUBLISH__;
+      const stubId = testSink?.({ ...postData, createdAt: "SERVER_TIMESTAMP" });
+      let newId: string;
+      if (stubId) {
+        newId = stubId;
+      } else {
+        const created = await addDoc(collection(db, "posts"), postData);
+        newId = created.id;
 
-      await updateDoc(doc(db, "users", profile.uid), {
-        "stats.postsCount": increment(1),
-        updatedAt: serverTimestamp(),
-      });
+        await updateDoc(doc(db, "users", profile.uid), {
+          "stats.postsCount": increment(1),
+          updatedAt: serverTimestamp(),
+        });
 
-      await refreshProfile();
+        await refreshProfile();
+      }
 
       // WP-09: yayınlandı -> taslak silinir ve bir daha kaydedilmez
       const autosaver = autosaverRef.current;
       autosaver?.stop();
       await autosaver?.discard(shareModeRef.current as DraftMode);
 
+      if (replyTarget) {
+        // WP-27: rozet kuralları + akışta yeni yanıta dön
+        await feedService.notePublished(true, replyTarget.id);
+        router.replace(`/?highlight=${encodeURIComponent(newId)}`);
+        return;
+      }
       setTimeout(() => {
         router.push("/profile");
       }, 400);
     } catch (err) {
       setIsExportingVideo(false);
       setIsPublishing(false);
+      setPublishProgress(null);
       if ((err as Error)?.name !== "AbortError") {
         console.error("Paylaşım hatası:", err);
       }
@@ -1384,6 +1653,20 @@ export default function ShareStoryPage() {
         ref={baseFileInputRef}
         onChange={handleBaseFileChange}
         accept={shareMode === "post" ? "image/*" : "image/*,video/*"}
+        multiple={shareMode === "post"}
+        className="hidden"
+      />
+      <input
+        type="file"
+        ref={addPhotosInputRef}
+        data-testid="add-photos-input"
+        onChange={(e) => {
+          const picked = Array.from(e.target.files ?? []);
+          e.target.value = "";
+          addPhotos(picked);
+        }}
+        accept="image/*"
+        multiple
         className="hidden"
       />
 
@@ -1415,8 +1698,8 @@ export default function ShareStoryPage() {
         style={{
           ...(shareMode === "post"
             ? {
-                top: "calc(env(safe-area-inset-top, 0px) + 68px)",
-                bottom: hasMedia ? postLayout.bottom : 0,
+                top: `calc(env(safe-area-inset-top, 0px) + ${replyParent ? 116 : 68}px)`,
+                bottom: hasMedia ? postLayout.bottom + 64 : 0,
                 containerType: "size" as const,
               }
             : shareMode === "reels" && hasMedia
@@ -1476,6 +1759,16 @@ export default function ShareStoryPage() {
           {filterToast}
         </div>
       )}
+
+      {publishProgress && isPublishing && (
+        <div role="status" data-testid="publish-progress" className="fixed top-24 left-1/2 -translate-x-1/2 z-50 rounded-full bg-black/75 backdrop-blur-md px-4 py-2 text-xs font-bold text-white">
+          {publishProgress.phase === "export" ? "Hazırlanıyor" : "Yükleniyor"} {Math.min(publishProgress.done + (publishProgress.phase === "upload" && publishProgress.done < publishProgress.total ? 1 : 0), publishProgress.total)}/{publishProgress.total}
+        </div>
+      )}
+      {replyParent && !isTextEditing && !isModeSelectorOpen && (
+        <ReplyBanner parent={replyParent} onCancel={cancelReplyMode} onPoll={() => void replyWithPoll()} disabled={isPublishing} />
+      )}
+      {replyMissing && !isTextEditing && !isModeSelectorOpen && <ReplyMissingNotice onDone={() => setReplyMissing(false)} />}
 
       {/* 5. ÜST BAR: GERİ, ORTADA MOD SEÇİCİ HAP VE SAĞ ÜST PAYLAŞ / İNDİR */}
       {!isTextEditing && !isModeSelectorOpen && (
@@ -1649,8 +1942,20 @@ export default function ShareStoryPage() {
             </button>
           </div>
 
+          <PhotoStrip
+            files={slots.map((s) => s.file)}
+            active={activeSlot}
+            max={replyParent ? 3 : 7}
+            busy={slotBusy || isPublishing}
+            bottom={postLayout.bottom}
+            onSelect={selectSlot}
+            onAdd={() => addPhotosInputRef.current?.click()}
+            onRemove={removeSlot}
+            onMove={moveSlot}
+          />
           {engineRef.current && (
             <PostEditor
+              key={activeSlot}
               engine={engineRef.current}
               canvas={canvasRef.current}
               isPublishing={isPublishing}
@@ -1665,6 +1970,8 @@ export default function ShareStoryPage() {
       <ModeSelectorModal
         isOpen={isModeSelectorOpen}
         activeMode={hasMedia ? shareMode : null}
+        hiddenModes={replyParent ? ["story"] : undefined}
+        notice={replyParent ? `↳ @${feedService.getUser(replyParent.authorId).username}'a yanıt veriyorsun. Gönderi veya Reels seç.` : undefined}
         onSelectMode={handleSelectMode}
         onBack={() => {
           if (hasMedia) {

@@ -1,15 +1,15 @@
 "use client";
 import "./feed.css";
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useRouter } from "next/navigation";
 import { useAuth } from "@/context/AuthContext";
 import { useBackLayer } from "@/lib/chat/useBackLayer";
 import { feedService } from "@/lib/feed/feedService";
-import type { Badge, DurationKey, MediaDraft, Post } from "@/lib/feed/types";
+import type { Badge, DurationKey, Post } from "@/lib/feed/types";
 import { BadgeCelebration } from "./BadgeCelebration";
 import { BadgeIcon } from "./BadgeIcon";
 import { BadgeShelfSheet } from "./BadgeShelfSheet";
 import { ChainSheet } from "./ChainSheet";
-import { ComposerSheet } from "./ComposerSheet";
 import { FeedActionsContext, type FeedActions } from "./FeedContext";
 import { GlyphSprite, Icon } from "./glyphs";
 import { PollComposerSheet } from "./PollComposerSheet";
@@ -19,7 +19,6 @@ import { useFeedUser } from "./UserParts";
 
 type SheetState = (
   | { t: "chain"; rootId: string }
-  | { t: "compose"; parent: Post | null }
   | { t: "poll"; parent: Post | null }
   | { t: "profile"; userId: string }
   | { t: "cel"; badge: Badge }
@@ -46,6 +45,7 @@ function ChainLink({ parent, reply }: { parent: Post; reply: Post }) {
 export default function FeedList() {
   const { user, profile } = useAuth();
   const uid = user?.uid ?? "guest";
+  const router = useRouter();
   const username = profile?.username || profile?.displayName || "sen";
   const photo = profile?.photoURL || undefined;
 
@@ -59,6 +59,9 @@ export default function FeedList() {
   const cursorRef = useRef<string | null>(null);
   const doneRef = useRef(false);
   const itemsRef = useRef<Post[]>([]);
+  /** Editörden dönüş: /?highlight=<yeni yanıt kimliği> */
+  const hlDone = useRef(false);
+  const [hlTarget, setHlTarget] = useState<{ id: string; rootId: string } | null>(null);
   const sentinel = useRef<HTMLDivElement>(null);
   const toastTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
 
@@ -113,8 +116,8 @@ export default function FeedList() {
 
   /** Yeni gönderi/yanıttan sonra yüklenmiş kadar orijinal gönderiyi yeniden çeker. */
   const refresh = useCallback(async (extraOriginal: boolean) => {
-    const originals = itemsRef.current.filter((p) => !p.replyTo).length + (extraOriginal ? 1 : 0);
-    const page = await feedService.listFeed(undefined, Math.max(PAGE, originals));
+    void extraOriginal;
+    const page = await feedService.listFeed(undefined, PAGE);
     setItems(page.items);
     setCursor(page.nextCursor);
     cursorRef.current = page.nextCursor;
@@ -150,7 +153,6 @@ export default function FeedList() {
   const setSheets = useCallback((next: SheetState[]) => { stackRef.current = next; setStack(next); }, []);
   const withQueue = useCallback((next: SheetState[]): SheetState[] => (next.length === 0 && queueRef.current.length ? [{ t: "cel", badge: queueRef.current.shift()!, opener: null }] : next), []);
   const push = useCallback((s: SheetState) => setSheets([...stackRef.current, { ...s, opener: s.opener ?? (document.activeElement as HTMLElement | null) }]), [setSheets]);
-  const replaceTop = useCallback((s: SheetState) => { const st = stackRef.current; setSheets([...st.slice(0, -1), { ...s, opener: st[st.length - 1]?.opener }]); }, [setSheets]);
   const popTop = useCallback((): boolean => { const next = withQueue(stackRef.current.slice(0, -1)); setSheets(next); return next.length > 0; }, [setSheets, withQueue]);
   const closeAll = useCallback(() => setSheets(withQueue([])), [setSheets, withQueue]);
   useBackLayer(stack.length > 0, popTop);
@@ -167,21 +169,60 @@ export default function FeedList() {
     if (stackRef.current.length === 0) closeAll();
   }), [closeAll]);
 
+  // Foto/video yanıtı gerçek editörde verilir (WP-27); anket yanıtı akışta kalır.
+  const goReply = useCallback((parent: Post) => router.push(`/share?replyTo=${encodeURIComponent(parent.id)}`), [router]);
+
+  // Editörden dönüş: yeni yanıtı vurgula ya da anket yanıtı sayfasını aç.
+  useEffect(() => {
+    const q = new URLSearchParams(window.location.search);
+    const hl = q.get("highlight");
+    const pr = q.get("pollReplyTo");
+    if (!hl && !pr) return;
+    window.history.replaceState(null, "", window.location.pathname);
+    if (pr) {
+      void feedService.getPost(pr).then((p) => { if (p) push({ t: "poll", parent: p }); });
+    }
+    if (hl) {
+      setTimeout(() => toast("Yanıtın zincire eklendi", <Icon id="i-check" />), 0);
+      void feedService.getPost(hl).then((p) => {
+        if (p) setHlTarget({ id: p.id, rootId: p.replyTo?.rootId ?? p.id });
+      });
+    }
+    // yalnızca açılışta
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  useEffect(() => {
+    if (!hlTarget || hlDone.current || items.length === 0 || loading) return;
+    const el = document.getElementById(`c-${hlTarget.id}`) ?? document.getElementById(`c-${hlTarget.rootId}`);
+    hlDone.current = true;
+    if (!el) {
+      // Kök gönderi henüz yüklü sayfalarda değil: yanıtı zincir sayfasında göster
+      push({ t: "chain", rootId: hlTarget.rootId });
+      return;
+    }
+    requestAnimationFrame(() => {
+      el.scrollIntoView({ block: "center" });
+      el.classList.add("fd-hl");
+      setTimeout(() => el.classList.remove("fd-hl"), 2600);
+    });
+  }, [hlTarget, items, loading, push]);
+
   const actions = useMemo<FeedActions>(() => ({
     like,
     vote,
     openChain: (rootId, opener) => push({ t: "chain", rootId, opener }),
-    openReply: (parent, opener) => push({ t: "compose", parent, opener }),
+    openReply: (parent) => goReply(parent),
     openProfile: (userId, opener) => push({ t: "profile", userId, opener }),
     toast,
-  }), [like, vote, push, toast]);
+  }), [like, vote, push, toast, goReply]);
 
-  const submitMedia = async (parent: Post | null, d: MediaDraft) => {
-    const created = parent ? await feedService.createReply(parent.id, d) : await feedService.createPost(d);
+  /** Sayfa katmanı kapanırken geri girdisi temizlenir (history.back); gezinmeyi bundan sonra yap. */
+  const replyFromSheet = (p: Post) => {
+    let done = false;
+    const go = () => { if (done) return; done = true; window.removeEventListener("popstate", go); goReply(p); };
+    window.addEventListener("popstate", go);
+    setTimeout(go, 200);
     closeAll();
-    await refresh(!parent);
-    toast(parent ? "Yanıtın zincire eklendi" : "Gönderin paylaşıldı", <Icon id="i-check" />);
-    return created;
   };
   const submitPoll = async (parent: Post | null, d: { question: string; options: string[]; durationKey: DurationKey }) => {
     const draft = { kind: "poll" as const, ...d };
@@ -206,9 +247,7 @@ export default function FeedList() {
   const top = stack[stack.length - 1];
   const sheet = top ? (
     top.t === "chain" ? (
-      <ChainSheet key={`chain-${top.rootId}`} rootId={top.rootId} opener={top.opener} onClose={popTop} onReply={(p) => replaceTop({ t: "compose", parent: p, opener: undefined })} />
-    ) : top.t === "compose" ? (
-      <ComposerSheet key="compose" parent={top.parent} opener={top.opener} onClose={popTop} onPoll={() => replaceTop({ t: "poll", parent: top.parent })} onSubmit={async (d) => { await submitMedia(top.parent, d); }} />
+      <ChainSheet key={`chain-${top.rootId}`} rootId={top.rootId} opener={top.opener} onClose={popTop} onReply={(p) => replyFromSheet(p)} />
     ) : top.t === "poll" ? (
       <PollComposerSheet key="poll" parent={top.parent} opener={top.opener} onClose={popTop} onSubmit={(d) => submitPoll(top.parent, d)} />
     ) : top.t === "profile" ? (
