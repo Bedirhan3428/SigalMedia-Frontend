@@ -1093,6 +1093,7 @@ export default function ChatRoomPage() {
                 stableKeyMapRef.current.get(msg.id) || msg.id;
               const chips = groupReactions(msg.reactions, myUid);
               const emojiOnly = isEmojiOnly(msg.text);
+              const postLink = emojiOnly ? null : parsePostLink(msg.text);
               const isNewMessage =
                 Boolean(msg.optimistic) ||
                 !initialMessageIdsRef.current.has(msg.id);
@@ -1129,15 +1130,18 @@ export default function ChatRoomPage() {
                       } ${radiusClass} ${
                         emojiOnly
                           ? EMOJI_ONLY_CLASS
-                          : `text-[length:var(--fs)] leading-[1.35] ${isMine ? "chat-sent" : "chat-recv"}`
+                          : postLink
+                            ? "text-[length:var(--fs)] leading-[1.35] bg-transparent"
+                            : `text-[length:var(--fs)] leading-[1.35] ${isMine ? "chat-sent" : "chat-recv"}`
                       }`}
-                      style={emojiOnly ? undefined : { padding: "var(--pad)" }}
+                      style={emojiOnly || postLink ? undefined : { padding: "var(--pad)" }}
                     >
                       {(() => {
-                        const pl = parsePostLink(msg.text);
+                        const pl = postLink;
                         return pl ? (
                           <PostPreviewCard
                             link={pl}
+                            noteClassName={isMine ? "chat-sent" : "chat-recv"}
                             onOpen={() => {
                               if (menu || Date.now() - menuOpenedAtRef.current < 700) return;
                               router.push(`/p/${pl.postId}`);
@@ -1276,13 +1280,15 @@ export default function ChatRoomPage() {
                 className={`w-full h-full break-words ${menu.radiusClass} ${
                   isEmojiOnly(m.text)
                     ? EMOJI_ONLY_CLASS
-                    : `text-[length:var(--fs)] leading-[1.35] ${menu.mine ? "chat-sent" : "chat-recv"}`
+                    : parsePostLink(m.text)
+                      ? "text-[length:var(--fs)] leading-[1.35] bg-transparent"
+                      : `text-[length:var(--fs)] leading-[1.35] ${menu.mine ? "chat-sent" : "chat-recv"}`
                 }`}
-                style={isEmojiOnly(m.text) ? undefined : { padding: "var(--pad)" }}
+                style={isEmojiOnly(m.text) || parsePostLink(m.text) ? undefined : { padding: "var(--pad)" }}
               >
                 {(() => {
                   const pl = parsePostLink(m.text);
-                  return pl ? <PostPreviewCard link={pl} interactive={false} /> : <span className="whitespace-pre-wrap">{m.text}</span>;
+                  return pl ? <PostPreviewCard link={pl} interactive={false} noteClassName={menu.mine ? "chat-sent" : "chat-recv"} /> : <span className="whitespace-pre-wrap">{m.text}</span>;
                 })()}
               </div>
             }

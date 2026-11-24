@@ -34,7 +34,7 @@ export const PostCard = memo(function PostCard({ post, child = false }: { post: 
   useEffect(() => { postRef.current = post; });
   useEffect(() => {
     if (!heart) return;
-    const t = setTimeout(() => setHeart(null), 900);
+    const t = setTimeout(() => setHeart(null), 1500);
     return () => clearTimeout(t);
   }, [heart]);
   const onMediaDown = (e: RPointerEvent<HTMLDivElement>) => {
@@ -99,7 +99,7 @@ export const PostCard = memo(function PostCard({ post, child = false }: { post: 
           aria-label="Beğen"
           onClick={() => like(post)}
         >
-          <Icon id="i-heart" /><span>{post.likeCount}</span>
+          <Icon id="i-heart" />
         </button>
         <button type="button" className="fd-ab" aria-label={`Yorumlar, ${post.commentCount}`} onClick={() => toast("Yorumlar yakında.")}>
           <Icon id="i-chat" /><span>{post.commentCount}</span>
@@ -111,7 +111,7 @@ export const PostCard = memo(function PostCard({ post, child = false }: { post: 
           <button
             type="button"
             className="fd-ab fd-rep fd-repn"
-            style={{ paddingLeft: 2, marginLeft: -6 }}
+            style={{ paddingLeft: 0, marginLeft: -8 }}
             aria-label={post.replyCount > 0 ? `${post.replyCount} yanıt, zinciri aç` : "Henüz yanıt yok, yanıtla"}
             onClick={(e) => (post.replyCount > 0 ? openChain(post.id, e.currentTarget) : openReply(post, e.currentTarget))}
           >
