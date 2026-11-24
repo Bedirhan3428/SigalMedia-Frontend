@@ -1,7 +1,7 @@
 // Sahte akış servisi (yalnızca ön yüz). Gerçek arka uç bağlandığında FeedService arayüzü aynı kalır, bu dosya değişir.
 // Durum bellekte tutulur; beğeni/oy/oluşturulan gönderiler localStorage'a (try/catch) yazılır.
 import { BADGES, SHELF_IDS, VOTES_FOR_KAHIN, evaluateAfterCreate, evaluateAfterVote, sortBadgeIds, type RuleState } from "./badgeRules";
-import { countReplies, fetchOriginals, fetchPost, fetchReplies, type RemotePost } from "./firestoreSource";
+import { countReplies, fetchOriginals, fetchPost, fetchReplies, fetchRepliesBatch, type RemotePost } from "./firestoreSource";
 import { ART_KEYS, FEED_ORDER, MOCK_USERS, buildSeedPosts } from "./mockData";
 import type {
   ArtKey, Badge, ChainSort, CurrentUserInfo, FeedService, FeedUser, Page, PollDraft, Post, PostDraft,
@@ -138,18 +138,9 @@ class MockFeedService implements FeedService {
     return [...[...this.seeds.values()].map((s) => s.post), ...this.remote.values(), ...this.state.created];
   }
 
+  /** Zincirler düzdür: bir kökün tüm yanıtları (eski, derin veriler dahil) rootId ile bulunur. */
   private descendants(id: string, all: Post[]): Post[] {
-    const out: Post[] = [];
-    const walk = (pid: string) => {
-      for (const p of all) {
-        if (p.replyTo?.parentId === pid) {
-          out.push(p);
-          walk(p.id);
-        }
-      }
-    };
-    walk(id);
-    return out;
+    return all.filter((p) => p.replyTo?.rootId === id && p.id !== id);
   }
 
   /** Beğeni/oy/yanıt sayılarını ve geçici rozetleri uygular. */
@@ -161,6 +152,8 @@ class MockFeedService implements FeedService {
     if (!p.replyTo && desc > 0 && !postBadges.includes("zincir")) postBadges.push("zincir");
     const base = {
       ...p,
+      // Eski veride derinlik > 1 olabilir: düzleştirilmiş gösterilir (ebeveyn = kök, derinlik 1).
+      replyTo: p.replyTo ? { parentId: p.replyTo.rootId, rootId: p.replyTo.rootId, depth: 1 } : undefined,
       likedByMe: liked,
       likeCount: p.likeCount + (liked ? 1 : 0),
       replyCount: extra + Math.max(desc, this.remoteCounts.get(p.id) ?? 0),
@@ -208,6 +201,34 @@ class MockFeedService implements FeedService {
     }
   }
 
+  /** Bir sayfadaki köklerin yanıtlarını tek `in` sorgusuyla yükler (kök başına sorgu yok). */
+  private async loadReplies(rootIds: string[]) {
+    const stale = rootIds.filter((id) => {
+      const at = this.chainLoaded.get(id);
+      return !at || Date.now() - at >= 15000;
+    });
+    if (!stale.length) return;
+    stale.forEach((id) => this.chainLoaded.set(id, Date.now()));
+    try {
+      const rs = await this.remoteCall(() => fetchRepliesBatch(stale));
+      this.ingest(rs);
+      const per = new Map<string, number>();
+      rs.forEach((r) => r.post.replyTo && per.set(r.post.replyTo.rootId, (per.get(r.post.replyTo.rootId) ?? 0) + 1));
+      for (const [id, n] of per) if (n >= 100) this.remoteCounts.set(id, await this.remoteCall(() => countReplies(id)));
+    } catch {
+      /* çevrimdışı: yalnızca örnek içerik */
+    }
+  }
+
+  getPopularReplies(rootId: string, n = 2): Post[] {
+    const all = this.rawAll();
+    return this.descendants(rootId, all)
+      .map((p) => this.materialize(p, all))
+      .filter((p) => p.likeCount >= 1)
+      .sort((a, b) => b.likeCount - a.likeCount || b.createdAt.localeCompare(a.createdAt))
+      .slice(0, n);
+  }
+
   async notePublished(isReply: boolean, parentId?: string): Promise<void> {
     let trending = false;
     if (isReply && parentId) {
@@ -241,14 +262,10 @@ class MockFeedService implements FeedService {
   async listFeed(cursor?: string, limit = 5): Promise<Page<Post>> {
     await delay();
     const items: Post[] = [];
-    const addWithReply = (id: string, all: Post[]) => {
+    // Üst düzey akışta yalnızca orijinal gönderiler olur; yanıtlar kartın altındaki ReplyRail'de görünür.
+    const addOriginal = (id: string, all: Post[]) => {
       const p = all.find((x) => x.id === id);
-      if (!p) return;
-      items.push(this.materialize(p, all));
-      const first = all
-        .filter((x) => x.replyTo?.parentId === id && x.replyTo.depth === 1)
-        .sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0];
-      if (first) items.push(this.materialize(first, all));
+      if (p && !p.replyTo) items.push(this.materialize(p, all));
     };
     // 1) gerçek gönderiler (en yeni önce, 10'luk sayfalar), 2) örnek içerik
     if (!cursor || cursor.startsWith("r:")) {
@@ -260,24 +277,22 @@ class MockFeedService implements FeedService {
         this.ingest(r.items);
         ids = r.items.map((x) => x.post.id);
         nextMs = r.nextMs;
-        await Promise.all(ids.map((id) => this.loadChain(id, true)));
+        await this.loadReplies(ids);
       } catch {
         /* çevrimdışı */
       }
       const mine = cursor ? [] : this.state.created.filter((p) => !p.replyTo).sort((a, b) => b.createdAt.localeCompare(a.createdAt)).map((p) => p.id);
       if (!ids.length && !nextMs && !mine.length) return this.listFeed("m:0", limit);
       const all = this.rawAll();
-      for (const id of [...mine, ...ids]) addWithReply(id, all);
+      for (const id of [...mine, ...ids]) addOriginal(id, all);
       return { items, nextCursor: nextMs ? `r:${nextMs}` : "m:0" };
     }
     const order = FEED_ORDER;
     const start = parseInt(cursor.slice(2), 10) || 0;
     const slice = order.slice(start, start + limit);
-    await Promise.all(slice.map((id) => this.loadChain(id, true)));
+    await this.loadReplies(slice);
     const all = this.rawAll();
-    for (const id of slice) {
-      addWithReply(id, all);
-    }
+    for (const id of slice) addOriginal(id, all);
     const next = start + limit;
     return { items, nextCursor: next < order.length ? `m:${next}` : null };
   }
@@ -289,18 +304,10 @@ class MockFeedService implements FeedService {
     const all = this.rawAll();
     const root = all.find((p) => p.id === rootId);
     if (!root) throw new Error("Gönderi bulunamadı");
-    const kids = (pid: string) => all.filter((p) => p.replyTo?.parentId === pid);
-    const tops = kids(rootId).sort((a, b) =>
-      sort === "popular"
-        ? b.likeCount + (this.state.likes[b.id] ? 1 : 0) - (a.likeCount + (this.state.likes[a.id] ? 1 : 0))
-        : b.createdAt.localeCompare(a.createdAt),
-    );
-    const replies: Post[] = [];
-    const walk = (p: Post) => {
-      replies.push(this.materialize(p, all));
-      kids(p.id).sort((a, b) => a.createdAt.localeCompare(b.createdAt)).forEach(walk);
-    };
-    tops.forEach(walk);
+    // Düz zincir: kökün tüm yanıtları tek seviyede
+    const replies = this.descendants(rootId, all)
+      .map((p) => this.materialize(p, all))
+      .sort((a, b) => (sort === "popular" ? b.likeCount - a.likeCount || b.createdAt.localeCompare(a.createdAt) : b.createdAt.localeCompare(a.createdAt)));
     return { root: this.materialize(root, all), replies };
   }
 
@@ -358,7 +365,8 @@ class MockFeedService implements FeedService {
       replyCount: 0,
       likedByMe: false,
       postBadges: ["yeni"],
-      replyTo: parent ? { parentId: parent.id, rootId: parent.replyTo?.rootId ?? parent.id, depth: (parent.replyTo?.depth ?? 0) + 1 } : undefined,
+      // Yanıta yanıt kökün yanıtıdır: ebeveyn her zaman kök, derinlik 1.
+      replyTo: parent ? { parentId: parent.replyTo?.rootId ?? parent.id, rootId: parent.replyTo?.rootId ?? parent.id, depth: 1 } : undefined,
     };
     if (draft.kind === "poll") {
       const d = draft as PollDraft;

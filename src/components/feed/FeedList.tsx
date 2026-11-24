@@ -14,8 +14,7 @@ import { FeedActionsContext, type FeedActions } from "./FeedContext";
 import { GlyphSprite, Icon } from "./glyphs";
 import { PollComposerSheet } from "./PollComposerSheet";
 import { PostCard } from "./PostCard";
-import { ReplyConnector } from "./ReplyConnector";
-import { useFeedUser } from "./UserParts";
+import { ReplyRail } from "./ReplyRail";
 
 type SheetState = (
   | { t: "chain"; rootId: string }
@@ -34,12 +33,6 @@ function Skeleton() {
       <i style={{ marginTop: 10, width: "70%", height: 14 }} />
     </div>
   );
-}
-
-function ChainLink({ parent, reply }: { parent: Post; reply: Post }) {
-  const p = useFeedUser(parent.authorId);
-  const r = useFeedUser(reply.authorId);
-  return <ReplyConnector rootId={parent.replyTo?.rootId ?? parent.id} parentUsername={p.username} replyUsername={r.username} count={parent.replyCount} />;
 }
 
 export default function FeedList() {
@@ -170,7 +163,8 @@ export default function FeedList() {
   }), [closeAll]);
 
   // Foto/video yanıtı gerçek editörde verilir (WP-27); anket yanıtı akışta kalır.
-  const goReply = useCallback((parent: Post) => router.push(`/share?replyTo=${encodeURIComponent(parent.id)}`), [router]);
+  // Yanıta yanıt yoktur: yanıt kartındaki ok da kökü hedefler.
+  const goReply = useCallback((parent: Post) => router.push(`/share?replyTo=${encodeURIComponent(parent.replyTo?.rootId ?? parent.id)}`), [router]);
 
   // Editörden dönüş: yeni yanıtı vurgula ya da anket yanıtı sayfasını aç.
   useEffect(() => {
@@ -232,18 +226,6 @@ export default function FeedList() {
     toast(parent ? "Anketin zincire eklendi" : "Anketin yayında", <Icon id="i-check" />);
   };
 
-  // Ebeveyn + ilk yanıt gruplama
-  const groups = useMemo(() => {
-    const out: { post: Post; reply?: Post }[] = [];
-    for (let i = 0; i < items.length; i++) {
-      const p = items[i];
-      if (p.replyTo) continue;
-      const n = items[i + 1];
-      if (n?.replyTo && n.replyTo.parentId === p.id) { out.push({ post: p, reply: n }); i++; } else out.push({ post: p });
-    }
-    return out;
-  }, [items]);
-
   const top = stack[stack.length - 1];
   const sheet = top ? (
     top.t === "chain" ? (
@@ -262,12 +244,11 @@ export default function FeedList() {
       <div className="fd-root" data-testid="fd-feed">
         <GlyphSprite />
         <div role="feed" aria-label="Gönderi akışı" aria-busy={loading}>
-          {groups.map(({ post, reply }) =>
-            reply ? (
+          {items.map((post) =>
+            post.replyCount > 0 ? (
               <div className="fd-grp" key={post.id}>
                 <PostCard post={post} />
-                <ChainLink parent={post} reply={reply} />
-                <PostCard post={reply} child />
+                <ReplyRail root={post} />
               </div>
             ) : (
               <PostCard key={post.id} post={post} />

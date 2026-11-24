@@ -13,4 +13,6 @@ export interface Post {
   likesCount: number;
   commentsCount: number;
   createdAt: Timestamp | any;
+  /** Yanıt ise (WP-28): zincirler düz, parentId = rootId, depth = 1. */
+  replyTo?: { parentId: string; rootId: string; depth: number };
 }

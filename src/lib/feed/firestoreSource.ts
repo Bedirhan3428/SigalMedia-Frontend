@@ -23,13 +23,15 @@ export function docToPost(id: string, d: DocumentData): RemotePost | null {
   const first = media[0];
   if (!first?.url) return null;
   const rt = d.replyTo as Partial<ReplyRef> | undefined;
-  const replyTo: ReplyRef | undefined = rt?.parentId ? { parentId: rt.parentId, rootId: rt.rootId ?? rt.parentId, depth: rt.depth ?? 1 } : undefined;
+  // Zincirler düzdür: eski (derinlik > 1) veriler de köke bağlı, derinlik 1 olarak okunur.
+  const rootId = rt?.rootId ?? rt?.parentId;
+  const replyTo: ReplyRef | undefined = rt?.parentId && rootId ? { parentId: rootId, rootId, depth: 1 } : undefined;
   const base = {
     id,
     authorId: String(d.authorId ?? ""),
     createdAt: toIso(d.createdAt),
     caption: d.caption || undefined,
-    likeCount: Number(d.likesCount) || 0,
+    likeCount: Number(d.likesCount ?? d.likes) || 0,
     commentCount: Number(d.commentsCount) || 0,
     replyCount: 0,
     likedByMe: false,
@@ -88,6 +90,20 @@ export async function fetchOriginals(beforeMs: number | undefined, want = 10): P
 export async function fetchReplies(rootId: string): Promise<RemotePost[]> {
   const snap = await within(getDocs(query(collection(db, "posts"), where("replyTo.rootId", "==", rootId), limit(100))));
   return snap.docs.map((s) => docToPost(s.id, s.data())).filter((x): x is RemotePost => !!x);
+}
+
+/** Bir sayfadaki tüm köklerin yanıtları: `in` sorgusu başına en çok 30 kök (sayfa başına tek sorgu). */
+export async function fetchRepliesBatch(rootIds: string[]): Promise<RemotePost[]> {
+  const out: RemotePost[] = [];
+  for (let i = 0; i < rootIds.length; i += RAW) {
+    const ids = rootIds.slice(i, i + RAW);
+    const snap = await within(getDocs(query(collection(db, "posts"), where("replyTo.rootId", "in", ids), limit(300))));
+    for (const s of snap.docs) {
+      const r = docToPost(s.id, s.data());
+      if (r) out.push(r);
+    }
+  }
+  return out;
 }
 
 export async function fetchPost(id: string): Promise<RemotePost | null> {

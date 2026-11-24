@@ -102,6 +102,12 @@ export default function ProfilePage() {
     if (!profile?.uid) return;
     try {
       setLoadingPosts(true);
+      // Yalnızca testler için (Firestore'a dokunmadan karo işaretini doğrulamak): normal kullanımda tanımsızdır.
+      const injected = (window as unknown as { __SIGAL_TEST_PROFILE_POSTS__?: Post[] }).__SIGAL_TEST_PROFILE_POSTS__;
+      if (injected) {
+        setPosts(injected);
+        return;
+      }
       const q = query(
         collection(db, "posts"),
         where("authorId", "==", profile.uid)
@@ -398,6 +404,16 @@ export default function ProfilePage() {
                       alt={post.caption || "Gönderi"}
                       className="w-full h-full object-cover group-hover:scale-105 transition-transform"
                     />
+                  )}
+                  {post.replyTo && (
+                    <span
+                      data-testid="pf-reply-mark"
+                      title="Yanıt"
+                      aria-label="Yanıt gönderisi"
+                      className="absolute top-1.5 left-1.5 w-5 h-5 rounded-full bg-black/55 text-white text-[13px] leading-5 text-center drop-shadow z-10"
+                    >
+                      ↪
+                    </span>
                   )}
                   {post.type === "reels" && (
                     <FaPhotoFilm className="w-4 h-4 text-white absolute top-1.5 right-1.5 drop-shadow" />
