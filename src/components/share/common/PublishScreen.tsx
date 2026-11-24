@@ -7,6 +7,7 @@ import { EDITOR_Z } from "./layers";
 import { useBackLayer } from "./hooks/useEditorBackStack";
 import { useBodyScrollLock } from "./hooks/useBodyScrollLock";
 import { useVisualViewport, useVisualViewportFrameStyle } from "./hooks/useVisualViewport";
+import { parseHashtags, SUGGESTED_HASHTAGS } from "./hashtags";
 
 /** Maximum caption length (Instagram parity). */
 export const CAPTION_MAX_LENGTH = 2200;
@@ -17,6 +18,8 @@ export interface PublishScreenProps {
   open: boolean;
   /** Header title (default "Yeni gönderi"; e.g. "Yeni Reels"). */
   title?: string;
+  /** Small line under the title (e.g. "@x'e yanıt"). */
+  subtitle?: string;
   /**
    * Preview slot (an `<img>`, `<video>` or `<canvas>` that fills its box with `object-cover`).
    * Rendered in a rounded box at most ~42% of the viewport tall.
@@ -65,6 +68,7 @@ export function PublishScreen(props: PublishScreenProps) {
 
 function PublishPanel({
   title = "Yeni gönderi",
+  subtitle,
   preview,
   previewAspect,
   coverPicker,
@@ -83,6 +87,7 @@ function PublishPanel({
   const [innerCaption, setInnerCaption] = useState(defaultCaption.slice(0, CAPTION_MAX_LENGTH));
   const caption = controlledCaption ?? innerCaption;
   const [locked, setLocked] = useState(false);
+  const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const lockRef = useRef(false);
   const unlockTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const mountedRef = useRef(true);
@@ -106,6 +111,27 @@ function PublishPanel({
     const clamped = next.slice(0, CAPTION_MAX_LENGTH);
     if (controlledCaption === undefined) setInnerCaption(clamped);
     onCaptionChange?.(clamped);
+  };
+
+  const tags = parseHashtags(caption);
+  const suggestions = SUGGESTED_HASHTAGS.filter((t) => !tags.includes(t.toLocaleLowerCase("tr")));
+
+  /** Inserts `#tag ` at the cursor (spaced from neighbours). */
+  const insertTag = (tag: string) => {
+    const el = textareaRef.current;
+    const pos = el && document.activeElement === el ? el.selectionEnd : caption.length;
+    const before = caption.slice(0, pos);
+    const after = caption.slice(pos);
+    const lead = before.length > 0 && !/s$/.test(before) ? " " : "";
+    const next = `${before}${lead}#${tag} ${after.replace(/^s+/, "")}`;
+    setCaption(next);
+    const caret = (before + lead + "#" + tag + " ").length;
+    requestAnimationFrame(() => {
+      const t = textareaRef.current;
+      if (!t) return;
+      t.focus({ preventScroll: true });
+      t.setSelectionRange(caret, caret);
+    });
   };
 
   const unlock = () => {
@@ -162,7 +188,10 @@ function PublishPanel({
             >
               <ChevronLeft className="w-6 h-6" />
             </button>
-            <h2 className="flex-1 text-center text-[15px] font-semibold truncate">{title}</h2>
+            <div className="flex-1 min-w-0 text-center">
+              <h2 className="text-[15px] font-semibold truncate">{title}</h2>
+              {subtitle && <p data-testid="publish-subtitle" className="text-[11px] text-[var(--ed-tx3,#8a94a3)] truncate">{subtitle}</p>}
+            </div>
             <div className="w-11" />
           </div>
         </div>
@@ -186,6 +215,7 @@ function PublishPanel({
 
             <div className="flex flex-col gap-1.5">
               <textarea
+                ref={textareaRef}
                 value={caption}
                 onChange={(e) => setCaption(e.target.value)}
                 maxLength={CAPTION_MAX_LENGTH}
@@ -203,6 +233,43 @@ function PublishPanel({
               >
                 {count}/{CAPTION_MAX_LENGTH}
               </span>
+            </div>
+
+            {/* # Etiketler: yazdıkça ayrıştırılır; öneriye dokununca eklenir */}
+            <div className="flex flex-col gap-2" data-testid="hashtag-section">
+              <span className="text-[13px] font-semibold text-[var(--ed-tx,#e8ecf1)]">Etiketler</span>
+              {tags.length > 0 ? (
+                <ul aria-label="Eklenen etiketler" data-testid="hashtag-chips" className="flex flex-wrap gap-1.5">
+                  {tags.map((t) => (
+                    <li
+                      key={t}
+                      className="h-7 px-2.5 rounded-full bg-[var(--ed-ac,#38d5c8)]/15 text-[var(--ed-ac,#38d5c8)] text-[13px] font-semibold flex items-center max-w-full"
+                    >
+                      <span className="truncate">#{t}</span>
+                    </li>
+                  ))}
+                </ul>
+              ) : (
+                <p className="text-[12px] text-[var(--ed-tx3,#5b6574)]">Açıklamaya #etiket yaz veya aşağıdan seç.</p>
+              )}
+              <div
+                role="group"
+                aria-label="Önerilen etiketler"
+                data-testid="hashtag-suggestions"
+                className="flex gap-1.5 overflow-x-auto no-scrollbar -mx-4 px-4"
+              >
+                {suggestions.map((t) => (
+                  <button
+                    key={t}
+                    type="button"
+                    disabled={busy}
+                    onClick={() => insertTag(t)}
+                    className="h-9 px-3 shrink-0 rounded-full border border-[var(--ed-line,#2a303a)] bg-[var(--ed-bg2,#1a1e25)] text-[13px] text-[var(--ed-tx,#e8ecf1)] active:scale-95 transition-transform disabled:opacity-50"
+                  >
+                    #{t}
+                  </button>
+                ))}
+              </div>
             </div>
           </div>
         </div>

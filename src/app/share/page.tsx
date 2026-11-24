@@ -48,6 +48,8 @@ import {
 import StoryEditor from "@/components/share/story/StoryEditor";
 import ReelsEditor from "@/components/share/reels/ReelsEditor";
 import PostEditor from "@/components/share/post/PostEditor";
+import { PublishStep, type PublishCover } from "@/components/share/common/PublishStep";
+import { parseHashtags } from "@/components/share/common/hashtags";
 import { DraftAutosaver } from "@/lib/drafts/DraftAutosaver";
 import { deleteDraft, listDrafts, loadDraftFiles, requestPersistence, type DraftMode, type DraftRecord } from "@/lib/drafts/DraftStore";
 import { adoptBlobKey, applyDraft, baseMediaKeyOf, captureDraft, type CapturedDraft, type DraftState } from "@/lib/drafts/serialize";
@@ -252,6 +254,9 @@ function ShareStoryPageInner() {
 
   // İşlem Durumları
   const [isPublishing, setIsPublishing] = useState(false);
+  // WP-34: Reels / Gönderi için paylaşım ekranı (Hikaye doğrudan paylaşır)
+  const [publishOpen, setPublishOpen] = useState(false);
+  const [publishCaption, setPublishCaption] = useState("");
   const [showExitConfirm, setShowExitConfirm] = useState(false);
   // F-01/F-02: medya yüklüyken seçilen farklı mod, onay bekler
   const [pendingMode, setPendingMode] = useState<ShareMode | null>(null);
@@ -396,6 +401,8 @@ function ShareStoryPageInner() {
     setMusicVolume(0.85);
     setIsExportingVideo(false);
     setIsReelsCropping(false);
+    setPublishOpen(false);
+    setPublishCaption("");
     setExportProgress(0);
     setPostAdjustments(DEFAULT_POST_ADJUSTMENTS);
     setActiveFilterIndex(0);
@@ -1456,7 +1463,14 @@ function ShareStoryPageInner() {
     router.replace(`/?pollReplyTo=${encodeURIComponent(parent.id)}`);
   };
 
-  const handlePublish = async () => {
+  /** Reels / Gönderi: son düğme paylaşmaz, paylaşım ekranını açar. */
+  const getEngineForPublish = () => engineRef.current;
+  const openPublishScreen = () => {
+    if (isPublishing || isExportingVideo) return;
+    setPublishOpen(true);
+  };
+
+  const handlePublish = async (opts?: { caption: string; cover: PublishCover }) => {
     if (!profile?.uid || !engineRef.current || isPublishing || isExportingVideo) return;
     const replyTarget = replyParentRef.current;
     const engine = engineRef.current;
@@ -1477,8 +1491,10 @@ function ShareStoryPageInner() {
       if (videoState.isVideo) {
         // WP-27: yanıt modunda kapak karesi (mevcut kare); alınamazsa posterSiz devam
         let poster: Blob | undefined;
-        if (replyTarget) {
+        if (replyTarget || opts?.cover.ms != null) {
           try {
+            // WP-34: seçilen kapak karesi (yoksa mevcut kare)
+            if (opts?.cover.ms != null) await engine.seekVideo(opts.cover.ms / 1000);
             poster = await engine.exportImage({ mimeType: "image/jpeg", quality: 0.8 });
           } catch {
             poster = undefined;
@@ -1511,8 +1527,12 @@ function ShareStoryPageInner() {
         const total = slotsRef.current.length;
         setPublishProgress({ phase: "export", done: 0, total });
         await captureActiveSlot();
-        for (let i = 0; i < total; i++) {
-          await activateSlot(i, false);
+        // WP-34: kapak seçilen fotoğraf ilk sıraya alınır (editördeki sıra değişmez)
+        const coverIdx = Math.min(Math.max(opts?.cover.slot ?? 0, 0), total - 1);
+        const order = [coverIdx, ...Array.from({ length: total }, (_, k) => k).filter((k) => k !== coverIdx)];
+        for (let n = 0; n < total; n++) {
+          await activateSlot(order[n], false);
+          const i = n;
           const blob = await engine.exportImage({ mimeType: "image/webp", quality: 0.92 });
           items.push({ blob, filename: `${shareMode}_${profile.uid}_${timestamp}_${i + 1}.webp`, contentType: "image/webp", type: "image" });
           setPublishProgress({ phase: "export", done: i + 1, total });
@@ -1563,11 +1583,13 @@ function ShareStoryPageInner() {
         mediaType: media[0].type,
         media,
         type: shareMode,
-        caption: "",
+        caption: opts?.caption ?? "",
+        hashtags: parseHashtags(opts?.caption ?? ""),
         likesCount: 0,
         commentsCount: 0,
         createdAt: serverTimestamp(),
       };
+      if (videoState.isVideo && opts?.cover.ms != null) postData.coverTimeMs = opts.cover.ms;
       if (replyTarget) {
         postData.replyTo = {
           // Zincirler düz: ebeveyn her zaman kök, derinlik 1
@@ -1821,7 +1843,7 @@ function ShareStoryPageInner() {
           {shareMode === "reels" && hasMedia ? (
             <button
               type="button"
-              onClick={handlePublish}
+              onClick={openPublishScreen}
               disabled={isPublishing}
               aria-label="İleri"
               className="w-11 h-11 rounded-full bg-white text-black hover:bg-zinc-200 active:scale-90 transition-all shadow-xl flex items-center justify-center disabled:opacity-50"
@@ -1872,7 +1894,7 @@ function ShareStoryPageInner() {
           <div className="fixed right-4 bottom-6 z-40 pointer-events-auto animate-in fade-in duration-200">
             <button
               type="button"
-              onClick={handlePublish}
+              onClick={() => void handlePublish()}
               disabled={isPublishing}
               className="group flex items-center gap-2 pl-4 pr-1.5 py-1.5 rounded-full bg-white text-black font-semibold text-sm shadow-2xl hover:bg-neutral-100 active:scale-95 transition-all disabled:opacity-50"
             >
@@ -1966,11 +1988,35 @@ function ShareStoryPageInner() {
               engine={engineRef.current}
               canvas={canvasRef.current}
               isPublishing={isPublishing}
-              onPublish={handlePublish}
+              onPublish={openPublishScreen}
               onLayout={setPostLayout}
             />
           )}
         </>
+      )}
+
+      {/* WP-34: Reels / Gönderi paylaşım ekranı (açıklama, #etiket, kapak) */}
+      {publishOpen && hasMedia && (shareMode === "reels" || shareMode === "post") && (
+        <PublishStep
+          mode={shareMode}
+          getEngine={getEngineForPublish}
+          slots={slots}
+          activeSlot={activeSlot}
+          aspect={postLayout.ratio}
+          caption={publishCaption}
+          onCaptionChange={setPublishCaption}
+          subtitle={replyParent ? `@${feedService.getUser(replyParent.authorId).username}'e yanıt` : undefined}
+          busy={isPublishing || isExportingVideo}
+          busyProgress={
+            isExportingVideo
+              ? exportProgress
+              : publishProgress
+                ? (publishProgress.done + (publishProgress.phase === "upload" ? publishProgress.total : 0)) / (publishProgress.total * 2)
+                : undefined
+          }
+          onBack={() => setPublishOpen(false)}
+          onShare={(caption, cover) => handlePublish({ caption, cover })}
+        />
       )}
 
       {/* 3 MOD SEÇİCİ MODAL (Hikaye / Reels / Gönderi) */}
