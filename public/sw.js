@@ -14,6 +14,32 @@ function samePath(clientUrl, path) {
   }
 }
 
+function normPath(p) {
+  return String(p || "").replace(/[/]+$/, "") || "/";
+}
+
+// Chat path of the incoming push: prefer the explicit chatId, else the pathname of the payload url.
+function chatPathOf(data, url) {
+  if (data.chatId) return "/messages/" + data.chatId;
+  try {
+    return normPath(new URL(url, self.location.origin).pathname);
+  } catch {
+    return normPath(url);
+  }
+}
+
+// True when a visible window is showing exactly this chat (query strings like ?reply=1 are ignored).
+function isViewingChat(wins, chatPath) {
+  return wins.some(function (c) {
+    if (c.visibilityState !== "visible" || c.focused === false) return false;
+    try {
+      return normPath(new URL(c.url).pathname) === chatPath;
+    } catch {
+      return false;
+    }
+  });
+}
+
 function tagOf(data) {
   return data.tag || (data.chatId ? "chat-" + data.chatId : "chat");
 }
@@ -60,7 +86,18 @@ self.addEventListener("push", function (event) {
     (async function () {
       var wins = await self.clients.matchAll({ type: "window", includeUncontrolled: true });
       // The user is already looking at this chat: no notification.
-      if (wins.some(function (c) { return c.visibilityState === "visible" && samePath(c.url, url); })) return;
+      // (Chrome may show a generic "site updated in the background" notification when a push shows nothing too often.)
+      var chatPath = chatPathOf(data, url);
+      if (isViewingChat(wins, chatPath)) {
+        wins.forEach(function (c) {
+          try {
+            if (c.visibilityState === "visible") c.postMessage({ type: "push-suppressed", chatId: data.chatId || null });
+          } catch {
+            /* ignore */
+          }
+        });
+        return;
+      }
       var existing = await self.registration.getNotifications({ tag: tag });
       var prev = (existing[0] && existing[0].data) || {};
       var lines = (Array.isArray(prev.lines) ? prev.lines : []).concat([data.body || ""]).slice(-MAX_LINES);

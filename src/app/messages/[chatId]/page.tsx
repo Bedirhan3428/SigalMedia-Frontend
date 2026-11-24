@@ -48,6 +48,23 @@ import {
   type ChatMessage,
 } from "@/services/messageService";
 
+import { formatSeenLabel } from "@/lib/chat/seenLabel";
+
+const TYPING_HEARTBEAT_MS = 20000; // yazıyor durumu bu aralıkla yenilenir (alıcı 45 sn sonra bayat sayar)
+const TYPING_EXIT_MS = 200;
+
+type TestWin = Window & {
+  __SIGAL_TEST_TYPING__?: (typing: boolean) => void;
+  __SIGAL_TEST_PEER_TYPING__?: { set?: (typing: boolean) => void };
+};
+
+// Test kancaları yalnızca tarayıcı testlerinde tanımlanır; normal kullanımda etkisizdir.
+function emitTyping(chatId: string, uid: string, typing: boolean) {
+  const hook = typeof window !== "undefined" ? (window as TestWin).__SIGAL_TEST_TYPING__ : undefined;
+  if (hook) hook(typing);
+  else void setTypingStatus(chatId, uid, typing);
+}
+
 const GROUP_TIME_THRESHOLD_MS = 3 * 60 * 1000; // 3 dakika
 const TIME_HEADER_INTERVAL_MS = 20 * 60 * 1000; // 20 dakika
 
@@ -282,6 +299,9 @@ export default function ChatRoomPage() {
   } | null>(() => memRec?.peer ?? null);
   const [peerOnline, setPeerOnline] = useState(false);
   const [peerTyping, setPeerTyping] = useState(false);
+  // Yazıyor balonu: kapanırken 200 ms çıkış animasyonu için peerTyping'den ayrı tutulur.
+  const [typingShown, setTypingShown] = useState(false);
+  const [seenNow, setSeenNow] = useState(() => Date.now());
 
   const myUid = profile?.uid ?? bootUid ?? undefined;
   // Auth (profile fetch) is slow: with cached bubbles on hand the chat paints without waiting for it.
@@ -298,7 +318,8 @@ export default function ChatRoomPage() {
   const prevListLenRef = useRef<number>(0);
   const bottomRef = useRef<HTMLDivElement | null>(null);
   const inputRef = useRef<HTMLTextAreaElement | null>(null);
-  const typingTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const typingHeartbeatRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const typingApiRef = useRef<{ start: () => void; stop: () => void }>({ start: () => {}, stop: () => {} });
   const isLocalTypingRef = useRef<boolean>(false);
   const initialMessageIdsRef = useRef<Set<string>>(new Set(memRec?.messages.map((m) => m.id) ?? []));
   const stableKeyMapRef = useRef<Map<string, string>>(new Map());
@@ -526,9 +547,13 @@ export default function ChatRoomPage() {
     return () => {
       feed.unsubscribe();
       if (feedRef.current === feed) feedRef.current = null;
+      if (typingHeartbeatRef.current) {
+        clearInterval(typingHeartbeatRef.current);
+        typingHeartbeatRef.current = null;
+      }
       if (isLocalTypingRef.current) {
         isLocalTypingRef.current = false;
-        setTypingStatus(chatId, uid, false);
+        emitTyping(chatId, uid, false);
       }
     };
   }, [chatId, authUid]);
@@ -537,9 +562,12 @@ export default function ChatRoomPage() {
     if (!chatId || !authedPeerUid) return;
     const peerUid = authedPeerUid;
 
-    const unsubTyping = listenPeerTyping(chatId, peerUid, (typing) => {
-      setPeerTyping(typing);
-    });
+    // Test kancası varsa gerçek RTDB dinleyicisi yerine kanca sürer.
+    const unsubTyping = (window as TestWin).__SIGAL_TEST_PEER_TYPING__
+      ? () => {}
+      : listenPeerTyping(chatId, peerUid, (typing) => {
+          setPeerTyping(typing);
+        });
 
     const unsubPresence = listenPeerPresence(peerUid, (pres) => {
       setPeerOnline(
@@ -552,6 +580,21 @@ export default function ChatRoomPage() {
       unsubPresence();
     };
   }, [chatId, authedPeerUid, peerProfile?.showOnlineStatus]);
+
+  // Test kancası: karşı tarafın yazıyor durumunu elle çevirir (yalnızca kanca nesnesi tanımlıysa).
+  useEffect(() => {
+    const hook = (window as TestWin).__SIGAL_TEST_PEER_TYPING__;
+    if (hook) hook.set = (v: boolean) => setPeerTyping(Boolean(v));
+  }, []);
+
+  // Yazıyor balonu girişte hemen görünür, çıkışta 200 ms'lik animasyonla kaybolur.
+  if (peerTyping && !typingShown) setTypingShown(true);
+  const typingLeaving = typingShown && !peerTyping;
+  useEffect(() => {
+    if (peerTyping || !typingShown) return;
+    const t = setTimeout(() => setTypingShown(false), TYPING_EXIT_MS);
+    return () => clearTimeout(t);
+  }, [peerTyping, typingShown]);
 
   const displayedMessages = useMemo(() => {
     // Test kancası (yalnızca tarayıcı testlerinde tanımlanır): gerçek mesaj göndermeden önizleme kartını gösterir.
@@ -626,7 +669,23 @@ export default function ChatRoomPage() {
     void inner.offsetHeight;
     inner.style.transition = `transform ${LIST_SLIDE_MS}ms ${LIST_SLIDE_EASING}`;
     inner.style.transform = "translateY(0px)";
-  }, [displayedMessages.length, peerTyping]);
+  }, [displayedMessages.length, typingShown]);
+
+  // "Görüldü" etiketi yalnızca benim son mesajımsa ve okunduysa; gizlilik: okundu bilgisi zaten yalnızca alıcının
+  // readReceipts ayarı açıkken yazılır, karşı profil kapalı diyorsa ayrıca gizlenir.
+  const lastMsg = displayedMessages.length > 0 ? displayedMessages[displayedMessages.length - 1] : null;
+  const showSeen = Boolean(
+    lastMsg &&
+      lastMsg.senderUid === myUid &&
+      !lastMsg.optimistic &&
+      lastMsg.status === "read" &&
+      peerProfile?.readReceipts !== false
+  );
+  useEffect(() => {
+    if (!showSeen) return;
+    const t = setInterval(() => setSeenNow(Date.now()), 60000);
+    return () => clearInterval(t);
+  }, [showSeen, lastMsg?.id]);
 
   // Tepki çipleri görününce/değişince liste en alttaysa yeniden sabitle (animasyon yok, FLIP'e dokunmaz).
   const reactionSig = displayedMessages
@@ -672,6 +731,47 @@ export default function ChatRoomPage() {
   }, [uiReady, hasList]);
 
   useEffect(() => {
+    typingApiRef.current = {
+      start: () => {
+        if (!chatId || !profile?.uid || isLocalTypingRef.current) return;
+        if (typeof document !== "undefined" && document.visibilityState === "hidden") return;
+        const uid = profile.uid;
+        isLocalTypingRef.current = true;
+        emitTyping(chatId, uid, true);
+        if (typingHeartbeatRef.current) clearInterval(typingHeartbeatRef.current);
+        typingHeartbeatRef.current = setInterval(() => {
+          const has = (inputRef.current?.value ?? "").trim().length > 0;
+          if (has && document.visibilityState !== "hidden") emitTyping(chatId, uid, true);
+        }, TYPING_HEARTBEAT_MS);
+      },
+      stop: () => {
+        if (typingHeartbeatRef.current) {
+          clearInterval(typingHeartbeatRef.current);
+          typingHeartbeatRef.current = null;
+        }
+        if (!chatId || !profile?.uid || !isLocalTypingRef.current) return;
+        isLocalTypingRef.current = false;
+        emitTyping(chatId, profile.uid, false);
+      },
+    };
+  });
+
+  // Sayfa gizlenince yazıyor kapanır; geri gelince kutuda metin varsa yeniden açılır.
+  useEffect(() => {
+    const onVis = () => {
+      if (document.visibilityState === "hidden") typingApiRef.current.stop();
+      else if ((inputRef.current?.value ?? "").trim().length > 0) typingApiRef.current.start();
+    };
+    const onHide = () => typingApiRef.current.stop();
+    document.addEventListener("visibilitychange", onVis);
+    window.addEventListener("pagehide", onHide);
+    return () => {
+      document.removeEventListener("visibilitychange", onVis);
+      window.removeEventListener("pagehide", onHide);
+    };
+  }, []);
+
+  useEffect(() => {
     peerRef.current = peerProfile;
     loadOlderRef.current = () => {
       const feed = feedRef.current;
@@ -700,25 +800,9 @@ export default function ChatRoomPage() {
 
     if (!chatId || !profile?.uid) return;
 
-    if (val.trim().length > 0) {
-      if (!isLocalTypingRef.current) {
-        isLocalTypingRef.current = true;
-        setTypingStatus(chatId, profile.uid, true);
-      }
-      if (typingTimeoutRef.current) {
-        clearTimeout(typingTimeoutRef.current);
-      }
-      typingTimeoutRef.current = setTimeout(() => {
-        isLocalTypingRef.current = false;
-        setTypingStatus(chatId, profile.uid, false);
-      }, 2000);
-    } else if (isLocalTypingRef.current) {
-      isLocalTypingRef.current = false;
-      if (typingTimeoutRef.current) {
-        clearTimeout(typingTimeoutRef.current);
-      }
-      setTypingStatus(chatId, profile.uid, false);
-    }
+    // Yazıyor: kutuda metin olduğu sürece açık (boşalınca / gönderince / sayfa gizlenince kapanır).
+    if (val.trim().length > 0) typingApiRef.current.start();
+    else typingApiRef.current.stop();
   };
 
   const handleSend = () => {
@@ -765,13 +849,7 @@ export default function ChatRoomPage() {
 
     setPendingMessages((prev) => [...prev, optimisticMsg]);
 
-    if (typingTimeoutRef.current) {
-      clearTimeout(typingTimeoutRef.current);
-    }
-    if (isLocalTypingRef.current && chatId) {
-      isLocalTypingRef.current = false;
-      setTypingStatus(chatId, profile.uid, false);
-    }
+    typingApiRef.current.stop();
 
     void sendEncryptedMessage(peerUid, clean)
       .then((result) => {
@@ -1035,9 +1113,9 @@ export default function ChatRoomPage() {
         ref={mainScrollRef}
         className="relative z-10 flex-1 max-w-md lg:max-w-2xl w-full mx-auto px-3 py-3 overflow-y-auto overscroll-y-contain flex flex-col [overflow-anchor:none]"
       >
-        {displayedMessages.length === 0 && !peerTyping && !feedReady ? (
+        {displayedMessages.length === 0 && !typingShown && !feedReady ? (
           <ChatSkeletonBubbles />
-        ) : displayedMessages.length === 0 && !peerTyping ? (
+        ) : displayedMessages.length === 0 && !typingShown ? (
           <div className="m-auto text-center text-xs select-none rounded-full px-3 py-1 bg-[var(--chip)] text-[var(--chip-t)]">
             Henüz mesaj yok.
           </div>
@@ -1072,13 +1150,16 @@ export default function ChatRoomPage() {
                     GROUP_TIME_THRESHOLD_MS
               );
 
-              const nextSameCluster = Boolean(
-                !nextShowsTimeHeader &&
-                  nextMsg &&
-                  nextMsg.senderUid === msg.senderUid &&
-                  Math.abs((nextMsg.timestamp || 0) - (msg.timestamp || 0)) <=
-                    GROUP_TIME_THRESHOLD_MS
-              );
+              const nextSameCluster =
+                Boolean(
+                  !nextShowsTimeHeader &&
+                    nextMsg &&
+                    nextMsg.senderUid === msg.senderUid &&
+                    Math.abs((nextMsg.timestamp || 0) - (msg.timestamp || 0)) <=
+                      GROUP_TIME_THRESHOLD_MS
+                ) ||
+                // Yazıyor balonu bu mesajın hemen altında: avatar balonun yanında görünür.
+                (idx === displayedMessages.length - 1 && typingShown && !isMine);
 
               const radiusClass = getBubbleRadiusClass(isMine, prevSameCluster);
 
@@ -1182,6 +1263,14 @@ export default function ChatRoomPage() {
                       )}
                     </div>
                   </div>
+                  {showSeen && idx === displayedMessages.length - 1 && (
+                    <div
+                      data-testid="seen-label"
+                      className="mt-0.5 pr-1 text-right text-[11px] leading-[14px] text-zinc-500 select-none"
+                    >
+                      {formatSeenLabel(msg.readAt, seenNow)}
+                    </div>
+                  )}
                 </div>
               );
             })}
@@ -1189,17 +1278,30 @@ export default function ChatRoomPage() {
           </div>
         )}
 
-        {/* Yazıyor göstergesi */}
-        {peerTyping && (
-          <div className="mt-[var(--gap)] flex items-end gap-[7px] justify-start">
+        {/* Yazıyor göstergesi: akışın son öğesi, tek satırlık gelen balonla aynı ölçü/renk */}
+        {typingShown && (
+          <div
+            data-testid="typing-row"
+            className={`${typingLeaving ? "chat-typing-out" : "chat-typing-in"} ${
+              lastMsg && lastMsg.senderUid !== myUid ? "mt-[var(--gapc)]" : "mt-[var(--gap)]"
+            } flex items-end gap-[7px] justify-start`}
+          >
             {!view.compact && peerAvatar}
             <div
+              data-testid="typing-bubble"
+              role="status"
               aria-label="Yazıyor"
-              className="chat-recv px-3.5 py-3 rounded-[var(--r)] rounded-bl-[var(--rt)] inline-flex items-center gap-[5px] transform-gpu msg-bubble-slide-up"
+              className={`chat-recv text-[length:var(--fs)] leading-[1.35] ${getBubbleRadiusClass(
+                false,
+                Boolean(lastMsg && lastMsg.senderUid !== myUid)
+              )}`}
+              style={{ padding: "var(--pad)" }}
             >
-              <span className="chat-typing-dot w-[7px] h-[7px] rounded-full bg-[var(--acc)]" />
-              <span className="chat-typing-dot w-[7px] h-[7px] rounded-full bg-[var(--acc)] [animation-delay:150ms]" />
-              <span className="chat-typing-dot w-[7px] h-[7px] rounded-full bg-[var(--acc)] [animation-delay:300ms]" />
+              <span className="flex items-center gap-[5px] h-[1.35em]">
+                <span className="chat-typing-dot w-[7px] h-[7px] rounded-full bg-[var(--acc)]" />
+                <span className="chat-typing-dot w-[7px] h-[7px] rounded-full bg-[var(--acc)] [animation-delay:150ms]" />
+                <span className="chat-typing-dot w-[7px] h-[7px] rounded-full bg-[var(--acc)] [animation-delay:300ms]" />
+              </span>
             </div>
           </div>
         )}

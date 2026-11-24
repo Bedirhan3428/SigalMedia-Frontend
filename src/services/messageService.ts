@@ -40,6 +40,8 @@ export interface ChatMessage {
   text: string;
   timestamp: number;
   status: "sent" | "delivered" | "read";
+  /** Okundu zamanı (ms). Eski verilerde / kurallar reddederse yoktur. */
+  readAt?: number;
   replyTo?: string | null;
   optimistic?: boolean;
   /** uid -> emoji (kişi başına tek tepki) */
@@ -577,12 +579,15 @@ export async function markChatAsRead(
     const updates: Record<string, unknown> = {
       [`user_chats/${currentUid}/${chatId}/unreadCount`]: 0,
     };
+    const readAtUpdates: Record<string, unknown> = {};
+    const readAtNow = Date.now();
 
     if (readReceiptsEnabled) {
       if (existingMessages) {
         for (const msg of existingMessages) {
           if (msg.recipientUid === currentUid && msg.status !== "read") {
             updates[`chats/${chatId}/messages/${msg.id}/status`] = "read";
+            readAtUpdates[`chats/${chatId}/messages/${msg.id}/readAt`] = readAtNow;
           }
         }
       } else {
@@ -592,6 +597,7 @@ export async function markChatAsRead(
           Object.entries(msgs).forEach(([msgId, msg]) => {
             if (msg.recipientUid === currentUid && msg.status !== "read") {
               updates[`chats/${chatId}/messages/${msgId}/status`] = "read";
+              readAtUpdates[`chats/${chatId}/messages/${msgId}/readAt`] = readAtNow;
             }
           });
         }
@@ -599,6 +605,15 @@ export async function markChatAsRead(
     }
 
     await update(ref(rtdb), updates);
+
+    // Okundu zamanı ayrı ve "best effort": canlı kurallar yeni alanı reddederse okundu durumu yine de yazılmış olur.
+    if (Object.keys(readAtUpdates).length > 0) {
+      try {
+        await update(ref(rtdb), readAtUpdates);
+      } catch {
+        // readAt yoksa arayüz yalnızca "Görüldü" gösterir
+      }
+    }
   } catch {
     // Sessizce geç
   }
@@ -617,22 +632,40 @@ export async function setMessageReaction(
   });
 }
 
+// Yazıyor durumu: true için zaman damgası (ms) yazılır (kalp atışı); eski istemciler true/false yazar.
+// Canlı kurallar sayıyı reddederse bir kez true'ya düşülür (alıcı boolean'ı da anlar).
+let typingNumericRejected = false;
+
 export async function setTypingStatus(
   chatId: string,
   uid: string,
   isTyping: boolean
 ): Promise<void> {
   if (!chatId || !uid) return;
+  const typingRef = ref(rtdb, `typing/${chatId}/${uid}`);
   try {
-    const typingRef = ref(rtdb, `typing/${chatId}/${uid}`);
-    await set(typingRef, isTyping);
-    if (isTyping) {
-      onDisconnect(typingRef).set(false);
+    if (!isTyping) {
+      await set(typingRef, false);
+      return;
     }
+    if (!typingNumericRejected) {
+      try {
+        await set(typingRef, Date.now());
+      } catch {
+        typingNumericRejected = true;
+        await set(typingRef, true);
+      }
+    } else {
+      await set(typingRef, true);
+    }
+    onDisconnect(typingRef).set(false);
   } catch {
     // Sessizce geç
   }
 }
+
+/** Sayısal değer (kalp atışı) bu süre değişmezse bayat sayılır; alıcının kendi saatiyle ölçülür (saat farkından etkilenmez). */
+export const TYPING_STALE_MS = 45000;
 
 export function listenPeerTyping(
   chatId: string,
@@ -641,16 +674,33 @@ export function listenPeerTyping(
 ): () => void {
   if (!chatId || !peerUid) return () => {};
   const peerTypingRef = ref(rtdb, `typing/${chatId}/${peerUid}`);
+  let staleTimer: ReturnType<typeof setTimeout> | null = null;
+  const clear = () => {
+    if (staleTimer) {
+      clearTimeout(staleTimer);
+      staleTimer = null;
+    }
+  };
   const unsubscribe = onValue(
     peerTypingRef,
     (snap) => {
-      callback(Boolean(snap.val()));
+      clear();
+      const val = snap.val();
+      const typing = Boolean(val);
+      callback(typing);
+      if (typing && typeof val === "number") {
+        staleTimer = setTimeout(() => callback(false), TYPING_STALE_MS);
+      }
     },
     () => {
+      clear();
       callback(false);
     }
   );
-  return () => unsubscribe();
+  return () => {
+    clear();
+    unsubscribe();
+  };
 }
 
 export function listenPeerPresence(
