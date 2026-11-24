@@ -55,6 +55,11 @@ export function PostPreviewCard({ link, onOpen, interactive = true, footer, note
   const thumb = post ? thumbOf(post) : undefined;
   const text = post ? (post.type === "poll" ? post.question : post.caption) : undefined;
   const kind = post ? (post.type === "poll" ? "Anket" : post.type === "video" ? "Video" : "Fotoğraf") : "";
+  // Oran: gönderinin kendi oranı, ama en fazla 3:4 kadar uzun (daha uzunsa kırpılır). Boyut yoksa görsel yüklenince ölçülür.
+  const [natural, setNatural] = useState<number | null>(null);
+  const p0 = post?.type === "photo" ? post.photos?.[0] : undefined;
+  const known = p0?.width && p0.height ? p0.width / p0.height : null;
+  const ratio = Math.max(known ?? natural ?? 1, 3 / 4);
 
   const cap = { display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", overflow: "hidden" } as const;
   const body = (
@@ -74,11 +79,11 @@ export function PostPreviewCard({ link, onOpen, interactive = true, footer, note
           </>
         )}
       </span>
-      <span className="relative block w-full overflow-hidden bg-black/40" style={{ aspectRatio: "3 / 4" }} data-testid="post-card-thumb">
+      <span className="relative block w-full overflow-hidden bg-black/40" style={{ aspectRatio: String(ratio) }} data-testid="post-card-thumb">
         {s.status === "loading" ? (
           <span className="absolute inset-0 animate-pulse bg-white/10" data-testid="post-card-skeleton" />
         ) : thumb ? (
-          <img src={thumb} alt="" loading="lazy" decoding="async" referrerPolicy="no-referrer" className="absolute inset-0 h-full w-full object-cover" />
+          <img src={thumb} alt="" loading="lazy" decoding="async" referrerPolicy="no-referrer" className="absolute inset-0 h-full w-full object-cover" onLoad={(e) => { const i = e.currentTarget; if (i.naturalWidth && i.naturalHeight) setNatural(i.naturalWidth / i.naturalHeight); }} />
         ) : (
           <span className="absolute inset-0 grid place-items-center px-4 text-center text-[13px] font-semibold opacity-80">
             {s.status === "missing" ? "Gönderi bulunamadı" : post?.type === "poll" ? (
