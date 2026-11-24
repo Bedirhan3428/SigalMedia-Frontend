@@ -1019,14 +1019,15 @@ function ShareStoryPageInner() {
     }
   };
 
-  const maxPhotos = () => (replyParentRef.current ? 3 : 7);
+  // WP-28: yanıtta da gönderi gibi en çok 7 fotoğraf
+  const maxPhotos = () => 7;
   const flashToast = (msg: string, ms = 2600) => {
     setFilterToast(msg);
     if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
     toastTimerRef.current = setTimeout(() => setFilterToast(null), ms);
   };
 
-  // Mevcut gönderiye fotoğraf ekler (üst sınır: 7, yanıtta 3)
+  // Mevcut gönderiye fotoğraf ekler (üst sınır: 7)
   const addPhotos = (picked: File[]) => {
     const imgs = picked.filter((f) => f.type.startsWith("image/"));
     if (imgs.length === 0) return;
@@ -1413,7 +1414,12 @@ function ShareStoryPageInner() {
     if (!replyToId || !profile?.uid) return;
     let dead = false;
     feedService.setCurrentUser({ id: profile.uid, username: profile.username || profile.displayName || "sen", avatarUrl: profile.photoURL || undefined });
-    void feedService.getPost(replyToId).then((p) => {
+    void feedService.getPost(replyToId).then(async (found) => {
+      if (dead) return;
+      // WP-28: yanıta yanıt yoktur; hedef bir yanıtsa kökü kullanılır (banner kök yazarını gösterir)
+      let p = found;
+      const rootId = found?.replyTo?.rootId;
+      if (found && rootId && rootId !== found.id) p = (await feedService.getPost(rootId)) ?? found;
       if (dead) return;
       if (!p) {
         setReplyMissing(true);
@@ -1564,9 +1570,10 @@ function ShareStoryPageInner() {
       };
       if (replyTarget) {
         postData.replyTo = {
-          parentId: replyTarget.id,
+          // Zincirler düz: ebeveyn her zaman kök, derinlik 1
+          parentId: replyTarget.replyTo?.rootId ?? replyTarget.id,
           rootId: replyTarget.replyTo?.rootId ?? replyTarget.id,
-          depth: (replyTarget.replyTo?.depth ?? 0) + 1,
+          depth: 1,
         };
       }
 
@@ -1945,7 +1952,7 @@ function ShareStoryPageInner() {
           <PhotoStrip
             files={slots.map((s) => s.file)}
             active={activeSlot}
-            max={replyParent ? 3 : 7}
+            max={7}
             busy={slotBusy || isPublishing}
             bottom={postLayout.bottom}
             onSelect={selectSlot}

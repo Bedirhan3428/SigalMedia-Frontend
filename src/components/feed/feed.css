@@ -208,3 +208,20 @@
 .fd-root .fd-cnav:disabled{opacity:.3}
 .fd-root .fd-cnav.fd-prev{left:6px}.fd-root .fd-cnav.fd-next{right:6px}
 @media (hover:hover) and (pointer:fine){.fd-root .fd-cnav{display:grid}}
+
+/* WP-28: tek ortak dikey ray + kıvrık oklu dallar (akış ve zincir sayfası) */
+.fd-root .fd-rail{position:relative}
+.fd-root .fd-br{position:relative;padding-left:44px}
+.fd-root .fd-br::before,.fd-root .fd-rp::before{content:"";position:absolute;left:20px;top:0;bottom:0;width:1.3px;background:var(--ac);opacity:.9}
+.fd-root .fd-br:last-child::before{bottom:auto;height:10px}
+.fd-root .fd-br svg.fd-bc,.fd-root .fd-rp svg.fd-bc{position:absolute;left:20px;width:24px;height:44px;fill:none;stroke:var(--ac);stroke-width:1.3;stroke-linecap:round;stroke-linejoin:round;opacity:.9;overflow:visible}
+.fd-root .fd-br .fd-card{border-bottom:0}
+.fd-root .fd-br .fd-card .fd-ch{padding-left:0}
+.fd-root .fd-br .fd-card .fd-act{padding-left:0}
+.fd-root .fd-br .fd-cap{padding-left:0}
+.fd-root .fd-br .fd-link{padding:0 12px 0 0}
+.fd-root .fd-rail-flat{display:flex;flex-direction:column}
+.fd-root .fd-ci.fd-rp{padding-left:44px;margin-left:0}
+.fd-root .fd-ci.fd-rp svg.fd-bc{top:2px}
+.fd-root .fd-ci.fd-rp:last-child::before{bottom:auto;height:14px}
+.fd-root .fd-ci.fd-rp::after{display:none}

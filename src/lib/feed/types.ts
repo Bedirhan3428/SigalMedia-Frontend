@@ -19,7 +19,7 @@ export interface Badge {
 export interface ReplyRef {
   parentId: string;
   rootId: string;
-  /** >= 1 */
+  /** Her zaman 1: zincirler düzdür, yanıt hep köke gider. */
   depth: number;
 }
 
@@ -129,8 +129,10 @@ export interface CurrentUserInfo {
 export interface FeedService {
   setCurrentUser(u: CurrentUserInfo): void;
   getUser(id: string): FeedUser;
-  /** Orijinal gönderiler; her birini en yeni birinci derece yanıtı izler (düz liste). */
+  /** Yalnızca orijinal gönderiler (yanıtlar akışta ayrı kart olmaz; kartın altında ReplyRail ile görünür). */
   listFeed(cursor?: string, limit?: number): Promise<Page<Post>>;
+  /** Kökün en popüler yanıtları (beğeni >= 1; çok beğenilen önce, eşitlikte yeni önce). Eşzamanlı, yüklü önbellekten. */
+  getPopularReplies(rootId: string, n?: number): Post[];
   /** Tek gönderi (yoksa undefined). */
   getPost(id: string): Promise<Post | undefined>;
   /** Editörde Firebase'e yayımlanan bir yanıt için rozet kurallarını işletir. */

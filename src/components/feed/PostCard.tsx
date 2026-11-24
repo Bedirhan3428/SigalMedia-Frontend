@@ -63,18 +63,20 @@ export const PostCard = memo(function PostCard({ post, child = false }: { post: 
         <button type="button" className="fd-ab" aria-label={`Yorumlar, ${post.commentCount}`} onClick={() => toast("Yorumlar yakında.")}>
           <Icon id="i-chat" /><span>{post.commentCount}</span>
         </button>
-        <button type="button" className="fd-ab fd-rep" aria-label="Yanıtla" onClick={(e) => openReply(post, e.currentTarget)}>
+        <button type="button" className="fd-ab fd-rep" aria-label={post.replyTo ? "Zincire yanıt ver" : "Yanıtla"} onClick={(e) => openReply(post, e.currentTarget)}>
           <Icon id="i-reply" />
         </button>
-        <button
-          type="button"
-          className="fd-ab fd-rep fd-repn"
-          style={{ paddingLeft: 2, marginLeft: -6 }}
-          aria-label={post.replyCount > 0 ? `${post.replyCount} yanıt, zinciri aç` : "Henüz yanıt yok, yanıtla"}
-          onClick={(e) => (post.replyCount > 0 ? openChain(post.replyTo?.rootId ?? post.id, e.currentTarget) : openReply(post, e.currentTarget))}
-        >
-          <span>{post.replyCount}</span>
-        </button>
+        {post.replyTo ? null : (
+          <button
+            type="button"
+            className="fd-ab fd-rep fd-repn"
+            style={{ paddingLeft: 2, marginLeft: -6 }}
+            aria-label={post.replyCount > 0 ? `${post.replyCount} yanıt, zinciri aç` : "Henüz yanıt yok, yanıtla"}
+            onClick={(e) => (post.replyCount > 0 ? openChain(post.id, e.currentTarget) : openReply(post, e.currentTarget))}
+          >
+            <span>{post.replyCount}</span>
+          </button>
+        )}
         <span className="fd-sp" />
       </div>
     </article>

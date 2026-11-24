@@ -50,6 +50,7 @@ export const SEEDS: Seed[] = [
   { id: "p13", type: "photo", authorId: "ece", art: "sunset", arts: ["sunset", "wave", "hills", "city", "pink"], min: 40, likes: 310, comments: 22, pills: ["yeni"], caption: "Haftanın fotoğraf dizisi: beş kare, beş ruh hali." },
   { id: "p14", type: "photo", authorId: "selin", art: "city", arts: ["city", "pink", "hills"], min: 150, likes: 87, comments: 6, caption: "Üç kare, tek gezi." },
   { id: "p7", type: "photo", authorId: "mert", art: "hills", min: 380, likes: 72, comments: 5, caption: "Sabah koşusu, bugün 8 km. Kahve hak edildi." },
+  { id: "r4", type: "photo", authorId: "ece", art: "sunset", min: 30, likes: 0, comments: 0, reply: { parentId: "p7", depth: 1 }, caption: "Ben de yarın koşuya çıkıyorum." },
   { id: "p8", type: "poll", authorId: "ece", min: 3000, likes: 51, comments: 9, question: "En iyi mevsim hangisi?", endsInMin: -120, options: [
     { id: "a", text: "Yaz", votes: 220 }, { id: "b", text: "Sonbahar", votes: 340 }, { id: "c", text: "Kış", votes: 90 }] },
   { id: "p9", type: "video", authorId: "selin", art: "city", dur: 22, min: 460, likes: 301, comments: 18, caption: "Kadıköy iskelesinde akşam, ses açık dinleyin." },
