@@ -40,6 +40,7 @@
 .fd-root .fd-mc p{font-size:15px;margin:4px 0 14px}
 .fd-root .fd-mcb{display:flex;gap:10px}
 .fd-root .fd-mb{flex:1;min-height:48px;border-radius:12px;border:1px solid var(--line2);background:var(--s2);color:var(--tx);font-size:15px;font-weight:600}
+.fd-root .fd-mb.fd-dng{background:var(--hot);border-color:var(--hot);color:#fff}
 .fd-root .fd-ab:hover{background:var(--s3);color:var(--tx)}
 .fd-root .fd-ab.fd-on{color:var(--hot)}
 .fd-root .fd-ab.fd-on svg{fill:var(--hot)}
