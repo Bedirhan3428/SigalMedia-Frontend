@@ -21,7 +21,25 @@
 .fd-root .fd-pill[data-p=gunun]{color:var(--altin);border-color:#ffd24a66}
 .fd-root .fd-pill[data-p=zincir]{color:var(--ac);border-color:#a99bff66}
 .fd-root .fd-act{display:flex;align-items:center;gap:2px;padding:2px 6px 0}
-.fd-root .fd-ab{display:inline-flex;align-items:center;gap:6px;min-height:44px;min-width:44px;padding:0 10px;border:0;background:none;border-radius:12px;color:var(--tx2);font-size:14px}
+.fd-root .fd-ab{display:inline-flex;align-items:center;gap:6px;min-height:48px;min-width:48px;padding:0 10px;border:0;background:none;border-radius:12px;color:var(--tx2);font-size:15px}
+.fd-root .fd-ab svg.fd-i{width:26px;height:26px}
+.fd-root .fd-save.fd-on{color:var(--tx)}
+.fd-root .fd-save.fd-on svg{fill:var(--tx)}
+.fd-root .fd-pm{flex:none;width:44px;height:44px;margin:-8px -8px -8px 0;display:grid;place-items:center;background:none;border:0;border-radius:12px;color:var(--tx2)}
+.fd-root .fd-pm:hover{background:var(--s3);color:var(--tx)}
+.fd-root .fd-pm svg.fd-i{fill:currentColor;stroke:none;width:24px;height:24px}
+.fd-root .fd-dt{touch-action:manipulation;user-select:none;-webkit-user-select:none}
+.fd-root .fd-bigheart{position:absolute;left:50%;top:50%;width:96px;height:96px;margin:-48px 0 0 -48px;fill:#fff;stroke:none;pointer-events:none;z-index:3;filter:drop-shadow(0 2px 10px rgba(0,0,0,.45));animation:fd-bh .7s cubic-bezier(.2,.8,.2,1) forwards}
+@keyframes fd-bh{0%{transform:scale(.3);opacity:0}20%{transform:scale(1.2);opacity:1}40%{transform:scale(1);opacity:1}75%{transform:scale(1);opacity:1}100%{transform:scale(1.1);opacity:0}}
+@media (prefers-reduced-motion:reduce){.fd-root .fd-bigheart{animation:fd-bhr .7s linear forwards}@keyframes fd-bhr{0%{opacity:0}15%{opacity:1}70%{opacity:1}100%{opacity:0}}}
+.fd-root .fd-ml{list-style:none;margin:0;padding:6px 8px 12px}
+.fd-root .fd-mi{display:flex;align-items:center;width:100%;min-height:52px;padding:0 12px;background:none;border:0;border-radius:12px;color:var(--tx);font-size:16px;text-align:left}
+.fd-root .fd-mi:hover,.fd-root .fd-mb:hover{background:var(--s3)}
+.fd-root .fd-dng{color:var(--hot)}
+.fd-root .fd-mc{padding:8px 18px 18px}
+.fd-root .fd-mc p{font-size:15px;margin:4px 0 14px}
+.fd-root .fd-mcb{display:flex;gap:10px}
+.fd-root .fd-mb{flex:1;min-height:48px;border-radius:12px;border:1px solid var(--line2);background:var(--s2);color:var(--tx);font-size:15px;font-weight:600}
 .fd-root .fd-ab:hover{background:var(--s3);color:var(--tx)}
 .fd-root .fd-ab.fd-on{color:var(--hot)}
 .fd-root .fd-ab.fd-on svg{fill:var(--hot)}
@@ -218,6 +236,7 @@
 .fd-root .fd-br .fd-card{border-bottom:0}
 .fd-root .fd-br .fd-card .fd-ch{padding-left:0}
 .fd-root .fd-br .fd-card .fd-act{padding-left:0}
+.fd-root .fd-br .fd-ab{min-height:44px;min-width:44px}
 .fd-root .fd-br .fd-cap{padding-left:0}
 .fd-root .fd-br .fd-link{padding:0 12px 0 0}
 .fd-root .fd-rail-flat{display:flex;flex-direction:column}

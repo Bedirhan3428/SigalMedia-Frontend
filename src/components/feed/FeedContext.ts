@@ -2,8 +2,22 @@
 import { createContext, useContext, useEffect, useRef, type ReactNode } from "react";
 import type { Post } from "@/lib/feed/types";
 
+/** Gönderi ayarları sayfasındaki bir öğe; `confirm` verilirse seçilince onay adımı sorulur. */
+export interface PostMenuItem {
+  label: string;
+  danger?: boolean;
+  confirm?: string;
+  onSelect: () => void;
+}
+
 export interface FeedActions {
   like: (post: Post) => void;
+  /** Gönderiyi beğenir; zaten beğenilmişse beğenmeyi geri almaz (çift dokunma). */
+  likeOnly: (post: Post) => void;
+  save: (post: Post) => void;
+  /** Sayfanın eklediği ek menü öğeleri. */
+  postMenu?: (post: Post) => PostMenuItem[];
+  openMenu: (post: Post, opener?: HTMLElement | null) => void;
   vote: (pollId: string, optionId: string) => void;
   openChain: (rootId: string, opener?: HTMLElement | null) => void;
   openReply: (parent: Post, opener?: HTMLElement | null) => void;

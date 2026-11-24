@@ -45,6 +45,8 @@ interface PostBase {
   /** Zincirdeki tüm alt yanıtların sayısı. */
   replyCount: number;
   likedByMe: boolean;
+  /** Yerel kaydedilenler (localStorage); yoksa kaydedilmemiş sayılır. */
+  savedByMe?: boolean;
   postBadges: string[];
   replyTo?: ReplyRef;
 }
@@ -145,6 +147,8 @@ export interface FeedService {
   notePublished(isReply: boolean, parentId?: string): Promise<void>;
   getChain(rootId: string, sort: ChainSort): Promise<{ root: Post; replies: Post[] }>;
   toggleLike(postId: string): Promise<Post>;
+  /** Yerel kaydedilenler; yeni durumu döndürür. */
+  toggleSave(postId: string): Promise<boolean>;
   vote(pollId: string, optionId: string): Promise<PollPost>;
   createPost(draft: PostDraft): Promise<Post>;
   createReply(parentId: string, draft: PostDraft): Promise<Post>;

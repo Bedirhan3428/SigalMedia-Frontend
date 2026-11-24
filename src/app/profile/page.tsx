@@ -25,7 +25,6 @@ import {
   Menu,
   X,
   Loader2,
-  Trash2,
   Check,
 } from "lucide-react";
 import BottomNav from "@/components/BottomNav";
@@ -472,19 +471,7 @@ export default function ProfilePage() {
           index={Math.max(0, detail.list.findIndex((x) => x.id === detail.id))}
           onIndexChange={(i) => !isDeletingPost && setDetail((d) => (d ? { ...d, id: d.list[i].id } : d))}
           onClose={() => !isDeletingPost && setDetail(null)}
-          headerActions={(fp) => (
-            <button
-              type="button"
-              onClick={() => handleDeletePost(fp.id)}
-              disabled={isDeletingPost}
-              title="Sil"
-              aria-label="Sil"
-              className="fd-pd-b"
-              style={{ color: "#f87171" }}
-            >
-              {isDeletingPost ? <Loader2 className="w-4 h-4 animate-spin" /> : <Trash2 className="w-4 h-4" />}
-            </button>
-          )}
+          postMenu={(fp) => [{ label: "Sil", danger: true, confirm: "Bu gönderi kalıcı olarak silinsin mi?", onSelect: () => { if (!isDeletingPost) void handleDeletePost(fp.id); } }]}
         />
       )}
 

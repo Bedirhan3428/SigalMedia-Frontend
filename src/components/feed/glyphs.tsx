@@ -17,6 +17,9 @@ export const GlyphSprite = memo(function GlyphSprite() {
         <symbol id="fd-i-reply" viewBox="0 0 24 24"><path d="M20 5v6a4 4 0 0 1-4 4H5" /><path d="M9 11l-4 4 4 4" /></symbol>
         <symbol id="fd-i-heart" viewBox="0 0 24 24"><path d="M12 20s-7-4.400-7-10a4 4 0 0 1 7-2.500A4 4 0 0 1 19 10c0 5.600-7 10-7 10z" /></symbol>
         <symbol id="fd-i-chat" viewBox="0 0 24 24"><path d="M5 5h14a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2h-7l-5 4v-4H5a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2z" /></symbol>
+        <symbol id="fd-i-back" viewBox="0 0 24 24"><path d="M15 5l-7 7 7 7" /></symbol>
+        <symbol id="fd-i-more" viewBox="0 0 24 24"><circle cx="5" cy="12" r="1.2" /><circle cx="12" cy="12" r="1.2" /><circle cx="19" cy="12" r="1.2" /></symbol>
+        <symbol id="fd-i-bookmark" viewBox="0 0 24 24"><path d="M6 4h12v17l-6-4-6 4z" /></symbol>
         <symbol id="fd-i-x" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18" /></symbol>
         <symbol id="fd-i-check" viewBox="0 0 24 24"><path d="M5 12l5 5 9-10" /></symbol>
         <symbol id="fd-i-img" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2" /><circle cx="9" cy="10" r="2" /><path d="M3 18l6-5 4 3 3-2 5 4" /></symbol>
