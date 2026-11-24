@@ -391,18 +391,18 @@ export default function ProfilePage() {
         </div>
 
         {/* Sekme İçeriği (Gönderiler Izgarası veya Boş Durum) */}
-        <div className="py-4">
+        <div className="pb-4">
           {loadingPosts ? (
             <div className="py-12 flex justify-center">
               <Loader2 className="w-6 h-6 text-zinc-500 animate-spin" />
             </div>
           ) : tabPosts.length > 0 ? (
-            <div className={themed ? "pf-grid" : "grid grid-cols-3 gap-1"}>
+            <div className="-mx-4 grid grid-cols-3 gap-px" data-testid="profile-grid">
               {tabPosts.map((post) => (
                 <div
                   key={post.id}
                   onClick={() => openDetail(post)}
-                  className={themed ? "pf-tile" : "aspect-square bg-zinc-900 border border-zinc-850 rounded-lg overflow-hidden cursor-pointer relative group"}
+                  className="relative aspect-square overflow-hidden bg-zinc-900 cursor-pointer group"
                 >
                   {post.mediaType === "video" ? (
                     <video
