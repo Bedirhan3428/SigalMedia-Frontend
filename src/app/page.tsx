@@ -6,6 +6,7 @@ import { useAuth } from "@/context/AuthContext";
 import { Plus, User as UserIcon } from "lucide-react";
 import { AiOutlineFire } from "react-icons/ai";
 import BottomNav from "@/components/BottomNav";
+import FeedList from "@/components/feed/FeedList";
 
 export default function HomePage() {
   const [mounted, setMounted] = useState(false);
@@ -47,10 +48,8 @@ export default function HomePage() {
             <Plus className="w-6 h-6" />
           </Link>
 
-          {/* Orta: Sadece SigalMedia Yazısı (Logo yok) */}
-          <span className="text-xl font-bold tracking-tight text-white select-none">
-            SigalMedia
-          </span>
+          {/* Orta: Shovrum yazısı (logo yok) */}
+          <span className="fd-brand select-none">Shovrum</span>
 
           {/* Sağ: Bildirimler (Alev İkonu) */}
           <button
@@ -128,8 +127,8 @@ export default function HomePage() {
       </section>
 
       {/* Ana İçerik / Akış Alanı */}
-      <main className="flex-1 max-w-md w-full mx-auto p-4 flex flex-col items-center justify-center text-center">
-        <p className="text-sm text-zinc-500">Akış yakında burada olacak.</p>
+      <main className="flex-1 max-w-md w-full mx-auto min-w-0">
+        <FeedList />
       </main>
 
       {/* Alt Navigasyon Barı */}
