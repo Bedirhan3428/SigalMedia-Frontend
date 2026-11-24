@@ -533,7 +533,7 @@ export default function VisitedProfilePage() {
                     <div
                       key={post.id}
                       onClick={() => openDetail(post)}
-                      className="relative aspect-square overflow-hidden bg-zinc-900 cursor-pointer group"
+                      className="relative aspect-[3/4] overflow-hidden bg-zinc-900 cursor-pointer group"
                     >
                       {post.mediaType === "video" ? (
                         <video

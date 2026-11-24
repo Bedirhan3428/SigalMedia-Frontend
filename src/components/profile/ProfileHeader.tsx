@@ -55,13 +55,8 @@ export default function ProfileHeader(p: Props) {
       </>
     );
     const linkCls = "flex flex-col items-center flex-1";
-    return (
+    const body = (
       <>
-        {p.banner && (
-          <div className="pf-banner-sade">
-            <ProfileBanner id={p.banner} />
-          </div>
-        )}
         <div className="flex items-center gap-4">
           {p.onAvatarClick ? (
             <button
@@ -90,6 +85,16 @@ export default function ProfileHeader(p: Props) {
         {p.songSlot && <div className="mt-3">{p.songSlot}</div>}
         <div className="mt-4">{p.actions}</div>
       </>
+    );
+    if (!p.banner) return body;
+    // Sade + banner: banner profilin arkasında tam genişlik arka plan, aşağı doğru soluklaşıp kaybolur.
+    return (
+      <div className="pf-sade-hero">
+        <div className="pf-banner-sade">
+          <ProfileBanner id={p.banner} />
+        </div>
+        {body}
+      </div>
     );
   }
 
