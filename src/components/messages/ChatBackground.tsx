@@ -52,7 +52,11 @@ export const CHAT_CSS = `
 .chat-recv{background:var(--recv-bg);color:var(--recv-t)}
 .chat-typing-dot{animation:chatTypingBounce 1.1s infinite ease-in-out}
 @keyframes chatTypingBounce{0%,60%,100%{transform:translateY(0);opacity:.55}30%{transform:translateY(-4px);opacity:1}}
-@media (prefers-reduced-motion: reduce){.chat-typing-dot{animation:none}.chat-root *{transition:none!important}.msg-bubble-slide-up{animation:none!important}}
+.chat-typing-in{animation:chatTypingIn 220ms cubic-bezier(.22,1,.36,1) both;transform-origin:left bottom}
+.chat-typing-out{animation:chatTypingOut 200ms ease-in both;transform-origin:left bottom;overflow:hidden;pointer-events:none}
+@keyframes chatTypingIn{from{opacity:0;transform:translateY(8px) scale(.85)}to{opacity:1;transform:none}}
+@keyframes chatTypingOut{from{opacity:1;transform:none;max-height:80px}to{opacity:0;transform:scale(.85);max-height:0;margin-top:0}}
+@media (prefers-reduced-motion: reduce){.chat-typing-in{animation:none!important}.chat-typing-out{display:none}.chat-typing-dot{animation:none}.chat-root *{transition:none!important}.msg-bubble-slide-up{animation:none!important}}
 `;
 
 export const CHAT_MENU_CSS = `
