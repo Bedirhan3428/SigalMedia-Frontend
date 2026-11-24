@@ -27,14 +27,14 @@ export const PostCard = memo(function PostCard({ post, child = false }: { post: 
   }, [post.likedByMe]);
 
   // Çift dokunma: 300 ms içinde, az hareketle iki dokunuş. Kaydırma pointercancel/büyük hareket olduğundan sayılmaz; düğmeler hariç.
-  const [heart, setHeart] = useState(0);
+  const [heart, setHeart] = useState<{ n: number; x: number; y: number; r: number } | null>(null);
   const tapRef = useRef<{ t: number; x: number; y: number; dx: number; dy: number; at: number } | null>(null);
   const lastTap = useRef<{ t: number; x: number; y: number } | null>(null);
   const postRef = useRef(post);
   useEffect(() => { postRef.current = post; });
   useEffect(() => {
     if (!heart) return;
-    const t = setTimeout(() => setHeart(0), 720);
+    const t = setTimeout(() => setHeart(null), 900);
     return () => clearTimeout(t);
   }, [heart]);
   const onMediaDown = (e: RPointerEvent<HTMLDivElement>) => {
@@ -53,7 +53,8 @@ export const PostCard = memo(function PostCard({ post, child = false }: { post: 
     if (prev && d.at - prev.t <= 320 && Math.hypot(e.clientX - prev.x, e.clientY - prev.y) < 40) {
       lastTap.current = null;
       likeOnly(postRef.current);
-      setHeart((h) => h + 1);
+      const box = e.currentTarget.getBoundingClientRect();
+      setHeart((h) => ({ n: (h?.n ?? 0) + 1, x: e.clientX - box.left, y: e.clientY - box.top, r: Math.round(Math.random() * 24 - 12) }));
     } else lastTap.current = { t: d.at, x: e.clientX, y: e.clientY };
   };
 
@@ -69,7 +70,12 @@ export const PostCard = memo(function PostCard({ post, child = false }: { post: 
           <div className="fd-media fd-dt" onPointerDown={onMediaDown} onPointerMove={onMediaMove} onPointerUp={onMediaUp} onPointerCancel={() => { tapRef.current = null; }} style={post.photos?.[0]?.width && post.photos[0].height ? { aspectRatio: `${post.photos[0].width} / ${post.photos[0].height}` } : undefined}>
             {post.photos && post.photos.length > 1 ? <PhotoCarousel photos={post.photos} alt={post.caption ?? "Gönderi görseli"} /> : post.mediaUrl ? <img src={post.mediaUrl} alt={post.caption ?? "Gönderi görseli"} loading="lazy" decoding="async" /> : <Art k={post.art} />}
             <div className="fd-pills">{post.postBadges.map((b) => <PostPill key={b} id={b} />)}</div>
-            {heart ? <svg key={heart} className="fd-bigheart" data-testid="fd-bigheart" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 20s-7-4.4-7-10a4 4 0 0 1 7-2.5A4 4 0 0 1 19 10c0 5.6-7 10-7 10z" /></svg> : null}
+            {heart ? (
+              <svg key={heart.n} className="fd-bigheart" data-testid="fd-bigheart" viewBox="0 0 24 24" aria-hidden="true" style={{ left: heart.x, top: heart.y, ["--r" as string]: `${heart.r}deg` }}>
+                <defs><linearGradient id={`fd-hg-${post.id}`} x1="0" y1="0" x2="1" y2="1"><stop offset="0" stopColor="#ff7eb3" /><stop offset=".5" stopColor="#ff3d6e" /><stop offset="1" stopColor="#ff9a3d" /></linearGradient></defs>
+                <path d="M12 20.6l-1.3-1.2C6.1 15.2 3.2 12.6 3.2 9.4 3.2 6.8 5.2 4.8 7.8 4.8c1.6 0 3.2.8 4.2 2 1-1.2 2.6-2 4.2-2 2.6 0 4.6 2 4.6 4.6 0 3.2-2.9 5.8-7.5 10z" fill={`url(#fd-hg-${post.id})`} />
+              </svg>
+            ) : null}
           </div>
           {post.caption ? <p className="fd-cap">{post.caption}</p> : null}
         </>

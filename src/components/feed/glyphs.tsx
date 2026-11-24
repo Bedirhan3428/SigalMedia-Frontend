@@ -15,8 +15,8 @@ export const GlyphSprite = memo(function GlyphSprite() {
         <symbol id="fd-g-bolt" viewBox="0 0 24 24"><path d="M13 2L5 14h6l-1 8 8-12h-6z" /></symbol>
         <symbol id="fd-g-vote" viewBox="0 0 24 24"><path d="M4 20V10M10 20V4M16 20v-7M22 20H2" /></symbol>
         <symbol id="fd-i-reply" viewBox="0 0 24 24"><path d="M20 5v6a4 4 0 0 1-4 4H5" /><path d="M9 11l-4 4 4 4" /></symbol>
-        <symbol id="fd-i-heart" viewBox="0 0 24 24"><path d="M12 20s-7-4.400-7-10a4 4 0 0 1 7-2.500A4 4 0 0 1 19 10c0 5.600-7 10-7 10z" /></symbol>
-        <symbol id="fd-i-chat" viewBox="0 0 24 24"><path d="M5 5h14a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2h-7l-5 4v-4H5a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2z" /></symbol>
+        <symbol id="fd-i-heart" viewBox="0 0 24 24"><path d="M12 20.6l-1.3-1.2C6.1 15.2 3.2 12.6 3.2 9.4 3.2 6.8 5.2 4.8 7.8 4.8c1.6 0 3.2.8 4.2 2 1-1.2 2.6-2 4.2-2 2.6 0 4.6 2 4.6 4.6 0 3.2-2.9 5.8-7.5 10z" /></symbol>
+        <symbol id="fd-i-chat" viewBox="0 0 24 24"><path d="M20.6 11.6a8.4 8.4 0 0 1-12.2 7.5L3.6 20.4l1.4-4.5a8.4 8.4 0 1 1 15.6-4.3z" /></symbol>
         <symbol id="fd-i-back" viewBox="0 0 24 24"><path d="M15 5l-7 7 7 7" /></symbol>
         <symbol id="fd-i-more" viewBox="0 0 24 24"><circle cx="5" cy="12" r="1.2" /><circle cx="12" cy="12" r="1.2" /><circle cx="19" cy="12" r="1.2" /></symbol>
         <symbol id="fd-i-bookmark" viewBox="0 0 24 24"><path d="M6 4h12v17l-6-4-6 4z" /></symbol>
