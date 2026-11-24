@@ -16,6 +16,12 @@ function toIso(v: unknown): string {
   return new Date().toISOString();
 }
 
+function musicLine(a: unknown): string | undefined {
+  const m = a as { title?: unknown; artist?: unknown } | undefined;
+  if (!m || typeof m.title !== "string" || !m.title) return undefined;
+  return typeof m.artist === "string" && m.artist ? `${m.title} · ${m.artist}` : m.title;
+}
+
 /** Firestore `posts` belgesini akış gönderisine çevirir; hikaye ve medyasız belgeler null döner. */
 export function docToPost(id: string, d: DocumentData): RemotePost | null {
   if (d.type === "story") return null;
@@ -41,7 +47,7 @@ export function docToPost(id: string, d: DocumentData): RemotePost | null {
   const art = ART_KEYS[hash(id) % ART_KEYS.length];
   const post: Post =
     first.type === "video" || d.mediaType === "video"
-      ? { ...base, type: "video", art, mediaUrl: first.url, posterUrl: first.posterUrl, durationSec: Number(d.duration) || 0 }
+      ? { ...base, type: "video", art, mediaUrl: first.url, posterUrl: first.posterUrl, durationSec: Number(d.duration) || 0, music: musicLine(d.audio) }
       : {
           ...base,
           type: "photo",
@@ -84,6 +90,31 @@ export async function fetchOriginals(beforeMs: number | undefined, want = 10): P
   }
   const more = snap.docs.length === RAW || items.length >= want;
   return { items, nextMs: more && lastMs ? lastMs : null };
+}
+
+/**
+ * Reels için oynatılabilir video gönderiler (yanıt olmayan), en yeni önce. Yalnızca tek alanlı createdAt sıralaması kullanılır
+ * (bileşik dizin yok): sayfalar çekilip istemcide videoya süzülür, yeterince video bulunana kadar en çok 4 sayfa okunur.
+ * Hem `type: "reels"` hem de normal gönderi olarak paylaşılan videolar medyasından tanınır.
+ */
+export async function fetchReels(beforeMs: number | undefined, want = 4): Promise<{ items: RemotePost[]; nextMs: number | null }> {
+  const col = collection(db, "posts");
+  const items: RemotePost[] = [];
+  let cursorMs = beforeMs;
+  for (let page = 0; page < 4; page++) {
+    const q = cursorMs ? query(col, orderBy("createdAt", "desc"), where("createdAt", "<", Timestamp.fromMillis(cursorMs)), limit(RAW)) : query(col, orderBy("createdAt", "desc"), limit(RAW));
+    const snap = await within(getDocs(q));
+    let lastSeen: number | null = null;
+    for (const s of snap.docs) {
+      const r = docToPost(s.id, s.data());
+      lastSeen = new Date(toIso(s.data().createdAt)).getTime();
+      if (r && !r.post.replyTo && r.post.type === "video" && r.post.mediaUrl) items.push(r);
+      if (items.length >= want) return { items, nextMs: lastSeen };
+    }
+    if (snap.docs.length < RAW || !lastSeen) return { items, nextMs: null };
+    cursorMs = lastSeen;
+  }
+  return { items, nextMs: cursorMs ?? null };
 }
 
 /** Bir kökün tüm yanıtları (en çok 100). */

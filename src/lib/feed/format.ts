@@ -20,3 +20,10 @@ export function timeLeft(endsAt: string, now = Date.now()): string {
 export function fmtDur(sec: number): string {
   return `${Math.floor(sec / 60)}:${String(Math.round(sec % 60)).padStart(2, "0")}`;
 }
+
+/** Sayaçlar için kısa biçim: 999, 1,2 B, 3 Mn. */
+export function fmtCount(n: number): string {
+  if (n < 1000) return String(n);
+  const f = (v: number) => (Math.round(v * 10) / 10).toString().replace(".", ",");
+  return n < 1_000_000 ? `${f(n / 1000)} B` : `${f(n / 1_000_000)} Mn`;
+}
