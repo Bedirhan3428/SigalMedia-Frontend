@@ -12,6 +12,7 @@ import { BadgeShelfSheet } from "./BadgeShelfSheet";
 import { ChainSheet } from "./ChainSheet";
 import { FeedActionsContext, type FeedActions, type PostMenuItem } from "./FeedContext";
 import { PostMenuSheet } from "./PostMenuSheet";
+import { ShareSheet } from "./ShareSheet";
 import { GlyphSprite, Icon } from "./glyphs";
 import { PollComposerSheet } from "./PollComposerSheet";
 
@@ -21,6 +22,7 @@ type SheetState = (
   | { t: "profile"; userId: string }
   | { t: "cel"; badge: Badge }
   | { t: "menu"; post: Post }
+  | { t: "share"; post: Post }
 ) & { opener?: HTMLElement | null };
 
 interface Props {
@@ -144,6 +146,7 @@ function Root({ children, testId = "fd-prov", onPollPublished, postMenu }: Props
     save,
     postMenu,
     openMenu: (post, opener) => { clearTimeout(toastTimer.current); setToastState(null); push({ t: "menu", post, opener }); },
+    openShare: (post, opener) => { clearTimeout(toastTimer.current); setToastState(null); push({ t: "share", post, opener }); },
     vote,
     openChain: (rootId, opener) => push({ t: "chain", rootId, opener }),
     openReply: (parent) => goReply(parent),
@@ -180,6 +183,8 @@ function Root({ children, testId = "fd-prov", onPollPublished, postMenu }: Props
       <BadgeShelfSheet key={`prof-${top.userId}`} userId={top.userId} opener={top.opener} onClose={popTop} />
     ) : top.t === "menu" ? (
       <PostMenuSheet key={`menu-${top.post.id}`} post={top.post} opener={top.opener} onClose={popTop} onDone={closeAll} />
+    ) : top.t === "share" ? (
+      <ShareSheet key={`share-${top.post.id}`} post={top.post} opener={top.opener} onClose={popTop} />
     ) : (
       <BadgeCelebration key={`cel-${top.badge.id}`} badge={top.badge} opener={top.opener} onClose={popTop} />
     )

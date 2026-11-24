@@ -15,6 +15,7 @@ import {
   X,
 } from "lucide-react";
 import { useAuth } from "@/context/AuthContext";
+import { parsePostLink } from "@/lib/chat/postLink";
 import BottomNav from "@/components/BottomNav";
 import PushPrompt from "@/components/notifications/PushPrompt";
 // [START] CREATED BY Umut
@@ -85,7 +86,9 @@ export default function MessagesPage() {
     const showOnline = profile.messageSettings?.showOnlineStatus ?? true;
     syncPresenceVisibility(profile.uid, showOnline);
 
-    const unsubscribe = listenUserChats(uid, (list) => {
+    const unsubscribe = listenUserChats(uid, (live) => {
+      // Test kancası (yalnızca tarayıcı testlerinde tanımlanır): gerçek veriye dokunmadan liste önizlemesini gösterir.
+      const list = (window as unknown as { __SIGAL_TEST_SHARE_CHATS__?: UserChatSummary[] }).__SIGAL_TEST_SHARE_CHATS__ ?? live;
       liveListRef.current = true;
       setChats(list);
       setLoadingChats(false);
@@ -345,7 +348,7 @@ export default function MessagesPage() {
                         }`}
                       >
                         {chat.lastSenderUid === myUid ? "Sen: " : ""}
-                        {chat.lastMessage}
+                        {parsePostLink(chat.lastMessage) ? "Bir gönderi paylaştı" : chat.lastMessage}
                       </p>
 
                       {unread > 0 && (

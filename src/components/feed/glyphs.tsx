@@ -19,6 +19,7 @@ export const GlyphSprite = memo(function GlyphSprite() {
         <symbol id="fd-i-chat" viewBox="0 0 24 24"><path d="M5 5h14a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2h-7l-5 4v-4H5a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2z" /></symbol>
         <symbol id="fd-i-back" viewBox="0 0 24 24"><path d="M15 5l-7 7 7 7" /></symbol>
         <symbol id="fd-i-more" viewBox="0 0 24 24"><circle cx="5" cy="12" r="1.2" /><circle cx="12" cy="12" r="1.2" /><circle cx="19" cy="12" r="1.2" /></symbol>
+        <symbol id="fd-i-send" viewBox="0 0 24 24"><path d="M21 3L3 10.500l7 3 3 7z" /><path d="M21 3L10 13.500" /></symbol>
         <symbol id="fd-i-bookmark" viewBox="0 0 24 24"><path d="M6 4h12v17l-6-4-6 4z" /></symbol>
         <symbol id="fd-i-x" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18" /></symbol>
         <symbol id="fd-i-check" viewBox="0 0 24 24"><path d="M5 12l5 5 9-10" /></symbol>

@@ -18,6 +18,8 @@ export interface FeedActions {
   /** Sayfanın eklediği ek menü öğeleri. */
   postMenu?: (post: Post) => PostMenuItem[];
   openMenu: (post: Post, opener?: HTMLElement | null) => void;
+  /** "Paylaş" sayfası: sohbetlere gönder, bağlantıyı kopyala. */
+  openShare: (post: Post, opener?: HTMLElement | null) => void;
   vote: (pollId: string, optionId: string) => void;
   openChain: (rootId: string, opener?: HTMLElement | null) => void;
   openReply: (parent: Post, opener?: HTMLElement | null) => void;
