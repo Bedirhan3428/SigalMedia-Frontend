@@ -485,8 +485,9 @@ export default function PostEditor({ engine, canvas, isPublishing, onPublish, on
           </div>
         </div>
 
-        {/* İçerik: sabit yükseklik (sahne boyutu zıplamasın) */}
-        <div className="h-[108px] overflow-hidden">
+        {/* İçerik: adım başına sabit yükseklik (sahne boyutu zıplamasın). Düzenle adımı: sekmeler 36 + yoğunluk 44 +
+            filtre küçük resimleri ~96 (+boşluk) = 185px; 108px'e sığmadığı için alt kısım kırpılıp ekran dışına taşıyordu (WP-35). */}
+        <div className={`${step === "edit" ? "h-[188px]" : "h-[108px]"} overflow-hidden`}>
           {step === "crop" && (
             <div className="flex flex-col gap-2">
               <div className="flex items-center gap-2 overflow-x-auto no-scrollbar">

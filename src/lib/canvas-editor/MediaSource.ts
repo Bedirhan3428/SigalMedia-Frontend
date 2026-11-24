@@ -67,7 +67,13 @@ function loadImageElement(src: string, crossOrigin: boolean, timeoutMs: number):
         finish(new MediaLoadError('decode', 'image'));
         return;
       }
-      finish(null);
+      // WP-35: onload yalnızca başlık/veri geldiğini söyler;  ile çözme ilk çizime
+      // (ctx.drawImage → ana iş parçacığında eşzamanlı çözme + raster) kalıyordu. 12 MP bir fotoğrafta bu,
+      // fotoğraf geçişinde 4x yavaşlatılmış CPU'da ~360 ms'lik tek bir uzun görev demekti. Çözmeyi burada,
+      // iş parçacığı dışında bitirip çizimi ucuz bırakıyoruz. Başarısız olursa eski yola düşer.
+      const done = () => finish(null);
+      if (typeof img.decode === 'function') img.decode().then(done, done);
+      else done();
     };
     img.onerror = () => finish(new MediaLoadError('decode', 'image'));
     img.src = src;
@@ -84,14 +90,47 @@ function canvasToBlob(canvas: HTMLCanvasElement, type: string, quality: number):
   });
 }
 
+/** WP-35: küçültülmüş çalışma kopyaları (özgün Blob/File başına bir kez üretilir; geçişte yeniden çözülmez/kodlanmaz). */
+interface WorkCopy {
+  blob: Blob;
+  cap: number;
+  width: number;
+  height: number;
+  originalWidth: number;
+  originalHeight: number;
+}
+const workCopies = new WeakMap<Blob, WorkCopy>();
+
 export class MediaSourceManager {
   /**
    * Görseli yükler; uzun kenar MAX_IMAGE_DECODE_PX'i (veya alan ~16M px'i) aşıyorsa küçültür.
    * Dönen medyanın `objectUrl` alanı varsa sahibi (motor) `release()` ile serbest bırakmalıdır.
    */
-  public static async loadImage(source: string | Blob | File): Promise<EditorMedia> {
+  public static async loadImage(source: string | Blob | File, maxLongSide?: number): Promise<EditorMedia> {
     if (typeof source !== 'string' && source.type && !source.type.startsWith('image/')) {
       throw new MediaLoadError('unsupported', 'image');
+    }
+
+    // Önceden üretilmiş çalışma kopyası varsa onu yükle (özgünü yeniden çözme + JPEG kodlama yok)
+    const hit = typeof source !== 'string' && maxLongSide ? workCopies.get(source) : undefined;
+    if (hit && hit.cap === maxLongSide) {
+      const url = URL.createObjectURL(hit.blob);
+      try {
+        const img = await loadImageElement(url, false, MEDIA_LOAD_TIMEOUT_MS);
+        return {
+          type: 'image',
+          element: img,
+          width: img.naturalWidth || hit.width,
+          height: img.naturalHeight || hit.height,
+          source: hit.blob,
+          objectUrl: url,
+          originalWidth: hit.originalWidth,
+          originalHeight: hit.originalHeight,
+        };
+      } catch {
+        try { URL.revokeObjectURL(url); } catch {}
+        // kopya kullanılamadı: normal yola düş
+      }
     }
 
     let objectUrl: string | null = null;
@@ -124,7 +163,7 @@ export class MediaSourceManager {
 
     const natW = img.naturalWidth || img.width;
     const natH = img.naturalHeight || img.height;
-    const target = this.getDownscaleTarget(natW, natH);
+    const target = this.getDownscaleTarget(natW, natH, maxLongSide);
 
     if (target) {
       const mime =
@@ -135,6 +174,16 @@ export class MediaSourceManager {
           try { URL.revokeObjectURL(objectUrl); } catch {}
         }
         img.src = '';
+        if (typeof source !== 'string' && maxLongSide) {
+          workCopies.set(source, {
+            blob: downscaled.blob,
+            cap: maxLongSide,
+            width: downscaled.img.naturalWidth || target.width,
+            height: downscaled.img.naturalHeight || target.height,
+            originalWidth: natW,
+            originalHeight: natH,
+          });
+        }
         return {
           type: 'image',
           element: downscaled.img,
@@ -162,10 +211,10 @@ export class MediaSourceManager {
   }
 
   /** Küçültme gerekiyorsa hedef boyutu döner, gerekmiyorsa null. */
-  public static getDownscaleTarget(w: number, h: number): { width: number; height: number } | null {
+  public static getDownscaleTarget(w: number, h: number, maxLongSide?: number): { width: number; height: number } | null {
     if (!w || !h) return null;
     const longSide = Math.max(w, h);
-    const scale = Math.min(1, MAX_IMAGE_DECODE_PX / longSide, Math.sqrt(MAX_IMAGE_DECODE_AREA / (w * h)));
+    const scale = Math.min(1, Math.min(MAX_IMAGE_DECODE_PX, maxLongSide ?? Infinity) / longSide, Math.sqrt(MAX_IMAGE_DECODE_AREA / (w * h)));
     if (scale >= 0.999) return null;
     return {
       width: Math.max(1, Math.floor(w * scale)),
@@ -333,14 +382,25 @@ export class MediaSourceManager {
     });
   }
 
-  public static async load(source: string | Blob | File, forcedType?: MediaType): Promise<EditorMedia> {
+  /** Çalışma kopyasını önceden üretir (boşta); medya hemen bırakılır, yalnızca küçük kopya önbellekte kalır. */
+  public static async prepareWorkingCopy(source: Blob, maxLongSide: number): Promise<void> {
+    if (workCopies.get(source)?.cap === maxLongSide) return;
+    try {
+      const media = await this.loadImage(source, maxLongSide);
+      this.release(media);
+    } catch {
+      /* hazırlık başarısızsa geçişte normal yol çalışır */
+    }
+  }
+
+  public static async load(source: string | Blob | File, forcedType?: MediaType, maxLongSide?: number): Promise<EditorMedia> {
     if (forcedType === 'video') return this.loadVideo(source);
-    if (forcedType === 'image') return this.loadImage(source);
+    if (forcedType === 'image') return this.loadImage(source, maxLongSide);
 
     if (typeof source !== 'string') {
       const mime = source.type || '';
       if (mime.startsWith('video/')) return this.loadVideo(source);
-      if (mime.startsWith('image/')) return this.loadImage(source);
+      if (mime.startsWith('image/')) return this.loadImage(source, maxLongSide);
       // iOS bazen boş MIME verir: uzantıya bak
       const name = source instanceof File ? source.name : '';
       if (VIDEO_EXTENSIONS.includes(getExtension(name))) return this.loadVideo(source);
@@ -350,7 +410,7 @@ export class MediaSourceManager {
     }
 
     try {
-      return await this.loadImage(source);
+      return await this.loadImage(source, maxLongSide);
     } catch (imgErr) {
       try {
         return await this.loadVideo(source);

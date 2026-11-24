@@ -37,6 +37,7 @@ import {
   DEFAULT_POST_ASPECT,
   VERTICAL_LOGICAL_SIZE,
   MAX_VIDEO_SEC,
+  POST_WORK_IMAGE_PX,
   FontPreset,
   TextBgPreset,
 } from './types';
@@ -919,12 +920,12 @@ export class CanvasEngine {
    * İlk başarılı yüklemeden sonra mod kilitlenir.
    * @param _autoResizeCanvas @deprecated Yok sayılır: tuval boyutu medyadan türetilmez (B2).
    */
-  public async loadMedia(source: string | Blob | File, forcedType?: MediaType, _autoResizeCanvas = false): Promise<EditorMedia> {
-    void _autoResizeCanvas;
+  public async loadMedia(source: string | Blob | File, forcedType?: MediaType, postWorkingCopy = false): Promise<EditorMedia> {
     if (this.destroyed) throw new DOMException('Engine destroyed', 'AbortError');
     const token = ++this.loadToken;
 
-    const media = await MediaSourceManager.load(source, forcedType);
+    // postWorkingCopy: Gönderi düzenleyicisi (WP-35) 2560 px'lik çalışma kopyası ister
+    const media = await MediaSourceManager.load(source, forcedType, postWorkingCopy ? POST_WORK_IMAGE_PX : undefined);
 
     if (this.destroyed || token !== this.loadToken) {
       MediaSourceManager.release(media);

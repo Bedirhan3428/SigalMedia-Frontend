@@ -1,7 +1,60 @@
 "use client";
 
-import { useEffect, useMemo } from "react";
+import { useEffect, useState } from "react";
 import { ChevronLeft, ChevronRight, Plus, X } from "lucide-react";
+
+// WP-35: şerit küçük resimleri 80px'lik küçük kopyalardır. Eskiden her render'da 7 tam çözünürlüklü fotoğrafın
+// yeni blob URL'si üretilip yeniden çözülüyordu (her sayfa render'ında + her fotoğraf geçişinde ana iş parçacığı
+// kilitleniyordu). Küçük kopya dosya başına bir kez üretilir, WeakMap'te tutulur.
+const THUMB_PX = 80;
+const resolved = new WeakMap<File, string | null>();
+const thumbCache = new WeakMap<File, Promise<string | null>>();
+function makeThumb(file: File): Promise<string | null> {
+  let p = thumbCache.get(file);
+  if (!p) {
+    p = (async () => {
+      try {
+        const bmp = await createImageBitmap(file, { resizeWidth: THUMB_PX * 2, resizeQuality: "medium" });
+        const c = document.createElement("canvas");
+        c.width = THUMB_PX;
+        c.height = THUMB_PX;
+        const ctx = c.getContext("2d");
+        if (!ctx) {
+          bmp.close();
+          return null;
+        }
+        const k = Math.max(THUMB_PX / bmp.width, THUMB_PX / bmp.height);
+        const w = bmp.width * k;
+        const h = bmp.height * k;
+        ctx.drawImage(bmp, (THUMB_PX - w) / 2, (THUMB_PX - h) / 2, w, h);
+        bmp.close();
+        return c.toDataURL("image/jpeg", 0.75);
+      } catch {
+        return null;
+      }
+    })();
+    thumbCache.set(file, p);
+  }
+  return p;
+}
+
+function useThumbs(files: File[]): (string | null)[] {
+  const [, bump] = useState(0);
+  useEffect(() => {
+    let alive = true;
+    const todo = files.filter((f) => !resolved.has(f));
+    for (const f of todo) {
+      void makeThumb(f).then((u) => {
+        resolved.set(f, u);
+        if (alive) bump((n) => n + 1);
+      });
+    }
+    return () => {
+      alive = false;
+    };
+  }, [files]);
+  return files.map((f) => resolved.get(f) ?? null);
+}
 
 export interface PhotoStripProps {
   files: File[];
@@ -19,8 +72,7 @@ export interface PhotoStripProps {
 
 /** WP-27: Gönderi modunda çoklu fotoğraf şeridi: seç, ekle, sırala (oklar), sil. Sayaç "2/7". */
 export default function PhotoStrip({ files, active, max, busy, onSelect, onAdd, onRemove, onMove, bottom }: PhotoStripProps) {
-  const urls = useMemo(() => files.map((f) => URL.createObjectURL(f)), [files]);
-  useEffect(() => () => urls.forEach((u) => URL.revokeObjectURL(u)), [urls]);
+  const urls = useThumbs(files);
   const many = files.length > 1;
   const btn = "w-8 h-8 rounded-full bg-white/10 text-white flex items-center justify-center active:scale-90 disabled:opacity-30 shrink-0";
   return (
@@ -33,9 +85,9 @@ export default function PhotoStrip({ files, active, max, busy, onSelect, onAdd, 
         <span className="text-[11px] font-bold text-white/80 shrink-0 tabular-nums" data-testid="photo-count">
           {active + 1}/{files.length}
         </span>
-        {urls.map((u, i) => (
+        {files.map((_, i) => (
           <button
-            key={u}
+            key={`${i}`}
             type="button"
             disabled={busy}
             onClick={() => onSelect(i)}
@@ -44,8 +96,12 @@ export default function PhotoStrip({ files, active, max, busy, onSelect, onAdd, 
             data-testid="photo-thumb"
             className={`relative w-10 h-10 rounded-lg overflow-hidden shrink-0 border-2 ${i === active ? "border-white" : "border-transparent opacity-70"}`}
           >
-            {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img src={u} alt="" className="w-full h-full object-cover" draggable={false} />
+            {urls[i] ? (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img src={urls[i] as string} alt="" className="w-full h-full object-cover" draggable={false} />
+            ) : (
+              <span className="block w-full h-full bg-white/10" />
+            )}
           </button>
         ))}
         {files.length < max ? (
