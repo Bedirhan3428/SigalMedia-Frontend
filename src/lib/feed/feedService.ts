@@ -1,7 +1,7 @@
 // Sahte akış servisi (yalnızca ön yüz). Gerçek arka uç bağlandığında FeedService arayüzü aynı kalır, bu dosya değişir.
 // Durum bellekte tutulur; beğeni/oy/oluşturulan gönderiler localStorage'a (try/catch) yazılır.
 import { BADGES, SHELF_IDS, VOTES_FOR_KAHIN, evaluateAfterCreate, evaluateAfterVote, sortBadgeIds, type RuleState } from "./badgeRules";
-import { countReplies, fetchOriginals, fetchPost, fetchReplies, fetchRepliesBatch, type RemotePost } from "./firestoreSource";
+import { countReplies, docToPost, fetchOriginals, fetchPost, fetchReplies, fetchRepliesBatch, type RemotePost } from "./firestoreSource";
 import { ART_KEYS, FEED_ORDER, MOCK_USERS, buildSeedPosts } from "./mockData";
 import type {
   ArtKey, Badge, ChainSort, CurrentUserInfo, FeedService, FeedUser, Page, PollDraft, Post, PostDraft,
@@ -242,6 +242,22 @@ class MockFeedService implements FeedService {
     this.write();
     this.emit();
     this.fireBadges(unlocked);
+  }
+
+  peekPost(id: string): Post | undefined {
+    return this.find(id);
+  }
+
+  adoptLegacy(id: string, data: Record<string, unknown>): Post | undefined {
+    const r = docToPost(id, data);
+    if (!r) return undefined;
+    this.ingest([r]);
+    return this.find(id);
+  }
+
+  async prepareReplies(rootId: string): Promise<void> {
+    await this.loadChain(rootId);
+    this.emit();
   }
 
   async getPost(id: string): Promise<Post | undefined> {

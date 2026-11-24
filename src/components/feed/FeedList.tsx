@@ -1,27 +1,13 @@
 "use client";
 import "./feed.css";
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { useRouter } from "next/navigation";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useAuth } from "@/context/AuthContext";
-import { useBackLayer } from "@/lib/chat/useBackLayer";
 import { feedService } from "@/lib/feed/feedService";
-import type { Badge, DurationKey, Post } from "@/lib/feed/types";
-import { BadgeCelebration } from "./BadgeCelebration";
-import { BadgeIcon } from "./BadgeIcon";
-import { BadgeShelfSheet } from "./BadgeShelfSheet";
-import { ChainSheet } from "./ChainSheet";
-import { FeedActionsContext, type FeedActions } from "./FeedContext";
-import { GlyphSprite, Icon } from "./glyphs";
-import { PollComposerSheet } from "./PollComposerSheet";
-import { PostCard } from "./PostCard";
-import { ReplyRail } from "./ReplyRail";
-
-type SheetState = (
-  | { t: "chain"; rootId: string }
-  | { t: "poll"; parent: Post | null }
-  | { t: "profile"; userId: string }
-  | { t: "cel"; badge: Badge }
-) & { opener?: HTMLElement | null };
+import type { Post } from "@/lib/feed/types";
+import { useFeedActions } from "./FeedContext";
+import { FeedPost } from "./FeedPost";
+import { FeedProvider } from "./FeedProvider";
+import { Icon } from "./glyphs";
 
 const PAGE = 5;
 
@@ -35,32 +21,33 @@ function Skeleton() {
   );
 }
 
+/** Ana akış: yalnızca liste ve sayfalama; gönderi sunumu ve sayfa yığını FeedProvider/FeedPost'tadır. */
 export default function FeedList() {
-  const { user, profile } = useAuth();
+  // Anket yayımlanınca akış yeniden çekilir (provider dışında tutulan liste durumu).
+  const refreshRef = useRef<() => Promise<void>>(async () => {});
+  return (
+    <FeedProvider testId="fd-feed" onPollPublished={() => refreshRef.current()}>
+      <FeedListBody refreshRef={refreshRef} />
+    </FeedProvider>
+  );
+}
+
+function FeedListBody({ refreshRef }: { refreshRef: React.MutableRefObject<() => Promise<void>> }) {
+  const { user } = useAuth();
   const uid = user?.uid ?? "guest";
-  const router = useRouter();
-  const username = profile?.username || profile?.displayName || "sen";
-  const photo = profile?.photoURL || undefined;
+  const { openChain, openPoll, toast } = useFeedActions();
 
   const [items, setItems] = useState<Post[]>([]);
   const [cursor, setCursor] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(false);
-  const [stack, setStack] = useState<SheetState[]>([]);
-  const [toastState, setToastState] = useState<{ id: number; msg: string; icon?: ReactNode } | null>(null);
   const loadingRef = useRef(false);
   const cursorRef = useRef<string | null>(null);
   const doneRef = useRef(false);
-  const itemsRef = useRef<Post[]>([]);
   /** Editörden dönüş: /?highlight=<yeni yanıt kimliği> */
   const hlDone = useRef(false);
   const [hlTarget, setHlTarget] = useState<{ id: string; rootId: string } | null>(null);
   const sentinel = useRef<HTMLDivElement>(null);
-  const toastTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
-
-  useEffect(() => { itemsRef.current = items; }, [items]);
-
-  // Güncel kullanıcı servise bildirilir, sonra ilk sayfa yüklenir.
 
   const loadMore = useCallback(async (first = false) => {
     if (loadingRef.current) return;
@@ -86,14 +73,10 @@ export default function FeedList() {
   }, []);
 
   useEffect(() => {
-    feedService.setCurrentUser({ id: uid, username, avatarUrl: photo });
-  }, [uid, username, photo]);
-  useEffect(() => {
     doneRef.current = false;
     cursorRef.current = null;
     void loadMore(true);
     // yalnızca kullanıcı değişince yeniden yükle
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [uid, loadMore]);
 
   // Sonsuz kaydırma
@@ -107,64 +90,16 @@ export default function FeedList() {
     return () => io.disconnect();
   }, [loadMore, items.length]);
 
-  /** Yeni gönderi/yanıttan sonra yüklenmiş kadar orijinal gönderiyi yeniden çeker. */
-  const refresh = useCallback(async (extraOriginal: boolean) => {
-    void extraOriginal;
-    const page = await feedService.listFeed(undefined, PAGE);
-    setItems(page.items);
-    setCursor(page.nextCursor);
-    cursorRef.current = page.nextCursor;
-    doneRef.current = page.nextCursor === null;
-  }, []);
-
-  const toast = useCallback((msg: string, icon?: ReactNode) => {
-    clearTimeout(toastTimer.current);
-    setToastState({ id: Date.now(), msg, icon });
-    toastTimer.current = setTimeout(() => setToastState(null), 2600);
-  }, []);
-  useEffect(() => () => clearTimeout(toastTimer.current), []);
-
-  const patch = useCallback((p: Post) => setItems((prev) => prev.map((x) => (x.id === p.id ? p : x))), []);
-
-  const like = useCallback((post: Post) => {
-    const flipped = { ...post, likedByMe: !post.likedByMe, likeCount: post.likeCount + (post.likedByMe ? -1 : 1) } as Post;
-    patch(flipped);
-    feedService.toggleLike(post.id).then(patch).catch(() => patch(post));
-  }, [patch]);
-
-  const vote = useCallback((pollId: string, optionId: string) => {
-    feedService.vote(pollId, optionId).then((p) => {
-      patch(p);
-      const left = feedService.votesToKahin();
-      toast(left > 0 ? `Oyun kaydedildi. Kahin rozetine ${left} oy kaldı!` : "Oyun kaydedildi.", <BadgeIcon id="kahin" />);
-    }).catch(() => toast("Oy verilemedi."));
-  }, [patch, toast]);
-
-  // Sayfa yığını (tek geri katmanı), rozet kutlaması kuyruğu
-  const stackRef = useRef<SheetState[]>([]);
-  const queueRef = useRef<Badge[]>([]);
-  const setSheets = useCallback((next: SheetState[]) => { stackRef.current = next; setStack(next); }, []);
-  const withQueue = useCallback((next: SheetState[]): SheetState[] => (next.length === 0 && queueRef.current.length ? [{ t: "cel", badge: queueRef.current.shift()!, opener: null }] : next), []);
-  const push = useCallback((s: SheetState) => setSheets([...stackRef.current, { ...s, opener: s.opener ?? (document.activeElement as HTMLElement | null) }]), [setSheets]);
-  const popTop = useCallback((): boolean => { const next = withQueue(stackRef.current.slice(0, -1)); setSheets(next); return next.length > 0; }, [setSheets, withQueue]);
-  const closeAll = useCallback(() => setSheets(withQueue([])), [setSheets, withQueue]);
-  useBackLayer(stack.length > 0, popTop);
+  /** Yeni gönderi/yanıttan sonra akışın ilk sayfasını yeniden çeker. */
   useEffect(() => {
-    if (!stack.length) return;
-    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") { e.preventDefault(); popTop(); } };
-    document.addEventListener("keydown", onKey);
-    const prev = document.body.style.overflow;
-    document.body.style.overflow = "hidden";
-    return () => { document.removeEventListener("keydown", onKey); document.body.style.overflow = prev; };
-  }, [stack.length, popTop]);
-  useEffect(() => feedService.onBadgeUnlocked((b) => {
-    queueRef.current.push(b);
-    if (stackRef.current.length === 0) closeAll();
-  }), [closeAll]);
-
-  // Foto/video yanıtı gerçek editörde verilir (WP-27); anket yanıtı akışta kalır.
-  // Yanıta yanıt yoktur: yanıt kartındaki ok da kökü hedefler.
-  const goReply = useCallback((parent: Post) => router.push(`/share?replyTo=${encodeURIComponent(parent.replyTo?.rootId ?? parent.id)}`), [router]);
+    refreshRef.current = async () => {
+      const page = await feedService.listFeed(undefined, PAGE);
+      setItems(page.items);
+      setCursor(page.nextCursor);
+      cursorRef.current = page.nextCursor;
+      doneRef.current = page.nextCursor === null;
+    };
+  }, [refreshRef]);
 
   // Editörden dönüş: yeni yanıtı vurgula ya da anket yanıtı sayfasını aç.
   useEffect(() => {
@@ -174,7 +109,7 @@ export default function FeedList() {
     if (!hl && !pr) return;
     window.history.replaceState(null, "", window.location.pathname);
     if (pr) {
-      void feedService.getPost(pr).then((p) => { if (p) push({ t: "poll", parent: p }); });
+      void feedService.getPost(pr).then((p) => { if (p) openPoll(p); });
     }
     if (hl) {
       setTimeout(() => toast("Yanıtın zincire eklendi", <Icon id="i-check" />), 0);
@@ -191,7 +126,7 @@ export default function FeedList() {
     hlDone.current = true;
     if (!el) {
       // Kök gönderi henüz yüklü sayfalarda değil: yanıtı zincir sayfasında göster
-      push({ t: "chain", rootId: hlTarget.rootId });
+      openChain(hlTarget.rootId);
       return;
     }
     requestAnimationFrame(() => {
@@ -199,74 +134,22 @@ export default function FeedList() {
       el.classList.add("fd-hl");
       setTimeout(() => el.classList.remove("fd-hl"), 2600);
     });
-  }, [hlTarget, items, loading, push]);
-
-  const actions = useMemo<FeedActions>(() => ({
-    like,
-    vote,
-    openChain: (rootId, opener) => push({ t: "chain", rootId, opener }),
-    openReply: (parent) => goReply(parent),
-    openProfile: (userId, opener) => push({ t: "profile", userId, opener }),
-    toast,
-  }), [like, vote, push, toast, goReply]);
-
-  /** Sayfa katmanı kapanırken geri girdisi temizlenir (history.back); gezinmeyi bundan sonra yap. */
-  const replyFromSheet = (p: Post) => {
-    let done = false;
-    const go = () => { if (done) return; done = true; window.removeEventListener("popstate", go); goReply(p); };
-    window.addEventListener("popstate", go);
-    setTimeout(go, 200);
-    closeAll();
-  };
-  const submitPoll = async (parent: Post | null, d: { question: string; options: string[]; durationKey: DurationKey }) => {
-    const draft = { kind: "poll" as const, ...d };
-    if (parent) await feedService.createReply(parent.id, draft); else await feedService.createPost(draft);
-    closeAll();
-    await refresh(!parent);
-    toast(parent ? "Anketin zincire eklendi" : "Anketin yayında", <Icon id="i-check" />);
-  };
-
-  const top = stack[stack.length - 1];
-  const sheet = top ? (
-    top.t === "chain" ? (
-      <ChainSheet key={`chain-${top.rootId}`} rootId={top.rootId} opener={top.opener} onClose={popTop} onReply={(p) => replyFromSheet(p)} />
-    ) : top.t === "poll" ? (
-      <PollComposerSheet key="poll" parent={top.parent} opener={top.opener} onClose={popTop} onSubmit={(d) => submitPoll(top.parent, d)} />
-    ) : top.t === "profile" ? (
-      <BadgeShelfSheet key={`prof-${top.userId}`} userId={top.userId} opener={top.opener} onClose={popTop} />
-    ) : (
-      <BadgeCelebration key={`cel-${top.badge.id}`} badge={top.badge} opener={top.opener} onClose={popTop} />
-    )
-  ) : null;
+  }, [hlTarget, items, loading, openChain]);
 
   return (
-    <FeedActionsContext.Provider value={actions}>
-      <div className="fd-root" data-testid="fd-feed">
-        <GlyphSprite />
-        <div role="feed" aria-label="Gönderi akışı" aria-busy={loading}>
-          {items.map((post) =>
-            post.replyCount > 0 ? (
-              <div className="fd-grp" key={post.id}>
-                <PostCard post={post} />
-                <ReplyRail root={post} />
-              </div>
-            ) : (
-              <PostCard key={post.id} post={post} />
-            ),
-          )}
-          {loading ? <><Skeleton /><Skeleton /></> : null}
-        </div>
-        {error ? (
-          <div className="fd-empty">
-            Akış yüklenemedi.{" "}
-            <button type="button" className="fd-ghost" style={{ padding: "0 14px" }} onClick={() => void loadMore(items.length === 0)}>Tekrar dene</button>
-          </div>
-        ) : null}
-        {!loading && !error && cursor === null && items.length > 0 ? <p className="fd-empty">Hepsi bu kadar. Yeni gönderiler için daha sonra gel.</p> : null}
-        <div ref={sentinel} style={{ height: 1 }} aria-hidden="true" />
-        {toastState ? <div className="fd-toast" role="status" aria-live="polite" key={toastState.id}>{toastState.icon}<p>{toastState.msg}</p></div> : null}
-        {sheet}
+    <>
+      <div role="feed" aria-label="Gönderi akışı" aria-busy={loading}>
+        {items.map((post) => <FeedPost key={post.id} post={post} />)}
+        {loading ? <><Skeleton /><Skeleton /></> : null}
       </div>
-    </FeedActionsContext.Provider>
+      {error ? (
+        <div className="fd-empty">
+          Akış yüklenemedi.{" "}
+          <button type="button" className="fd-ghost" style={{ padding: "0 14px" }} onClick={() => void loadMore(items.length === 0)}>Tekrar dene</button>
+        </div>
+      ) : null}
+      {!loading && !error && cursor === null && items.length > 0 ? <p className="fd-empty">Hepsi bu kadar. Yeni gönderiler için daha sonra gel.</p> : null}
+      <div ref={sentinel} style={{ height: 1 }} aria-hidden="true" />
+    </>
   );
 }
