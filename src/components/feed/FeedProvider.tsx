@@ -10,7 +10,8 @@ import { BadgeCelebration } from "./BadgeCelebration";
 import { BadgeIcon } from "./BadgeIcon";
 import { BadgeShelfSheet } from "./BadgeShelfSheet";
 import { ChainSheet } from "./ChainSheet";
-import { FeedActionsContext, type FeedActions } from "./FeedContext";
+import { FeedActionsContext, type FeedActions, type PostMenuItem } from "./FeedContext";
+import { PostMenuSheet } from "./PostMenuSheet";
 import { GlyphSprite, Icon } from "./glyphs";
 import { PollComposerSheet } from "./PollComposerSheet";
 
@@ -19,6 +20,7 @@ type SheetState = (
   | { t: "poll"; parent: Post | null }
   | { t: "profile"; userId: string }
   | { t: "cel"; badge: Badge }
+  | { t: "menu"; post: Post }
 ) & { opener?: HTMLElement | null };
 
 interface Props {
@@ -27,6 +29,8 @@ interface Props {
   testId?: string;
   /** Anket yayımlanınca (liste sahibi akışı yenileyebilsin diye). */
   onPollPublished?: (parent: Post | null) => void | Promise<void>;
+  /** Gönderi ayarları sayfasına eklenecek sayfaya özel öğeler (örn. Sil). */
+  postMenu?: (post: Post) => PostMenuItem[];
 }
 
 /**
@@ -39,7 +43,7 @@ export function FeedProvider(props: Props) {
   return <Root {...props} />;
 }
 
-function Root({ children, testId = "fd-prov", onPollPublished }: Props) {
+function Root({ children, testId = "fd-prov", onPollPublished, postMenu }: Props) {
   const { user, profile } = useAuth();
   const uid = user?.uid ?? "guest";
   const router = useRouter();
@@ -71,6 +75,17 @@ function Root({ children, testId = "fd-prov", onPollPublished }: Props) {
     setOpt((o) => ({ ...o, [post.id]: flipped }));
     feedService.toggleLike(post.id).then(clear).catch(clear);
   }, []);
+
+  const likeOnly = useCallback((post: Post) => { if (!post.likedByMe) like(post); }, [like]);
+
+  const save = useCallback((post: Post) => {
+    const next = !post.savedByMe;
+    const flipped = { ...post, savedByMe: next } as Post;
+    const clear = () => setOpt((o) => { const { [post.id]: _drop, ...rest } = o; void _drop; return rest; });
+    setOpt((o) => ({ ...o, [post.id]: flipped }));
+    feedService.toggleSave(post.id).then(clear).catch(clear);
+    toast(next ? "Kaydedildi" : "Kaydedilenlerden çıkarıldı", next ? <Icon id="i-bookmark" /> : undefined);
+  }, [toast]);
 
   const vote = useCallback((pollId: string, optionId: string) => {
     feedService.vote(pollId, optionId).then(() => {
@@ -125,6 +140,10 @@ function Root({ children, testId = "fd-prov", onPollPublished }: Props) {
 
   const actions = useMemo<FeedActions>(() => ({
     like,
+    likeOnly,
+    save,
+    postMenu,
+    openMenu: (post, opener) => { clearTimeout(toastTimer.current); setToastState(null); push({ t: "menu", post, opener }); },
     vote,
     openChain: (rootId, opener) => push({ t: "chain", rootId, opener }),
     openReply: (parent) => goReply(parent),
@@ -133,7 +152,7 @@ function Root({ children, testId = "fd-prov", onPollPublished }: Props) {
     toast,
     resolve: (p) => opt[p.id] ?? feedService.peekPost(p.id) ?? p,
     registerBase,
-  }), [like, vote, push, toast, goReply, opt, registerBase]);
+  }), [like, likeOnly, save, postMenu, vote, push, toast, goReply, opt, registerBase]);
 
   /** Sayfa katmanı kapanırken geri girdisi temizlenir (history.back); gezinmeyi bundan sonra yap. */
   const replyFromSheet = (p: Post) => {
@@ -159,6 +178,8 @@ function Root({ children, testId = "fd-prov", onPollPublished }: Props) {
       <PollComposerSheet key="poll" parent={top.parent} opener={top.opener} onClose={popTop} onSubmit={(d) => submitPoll(top.parent, d)} />
     ) : top.t === "profile" ? (
       <BadgeShelfSheet key={`prof-${top.userId}`} userId={top.userId} opener={top.opener} onClose={popTop} />
+    ) : top.t === "menu" ? (
+      <PostMenuSheet key={`menu-${top.post.id}`} post={top.post} opener={top.opener} onClose={popTop} onDone={closeAll} />
     ) : (
       <BadgeCelebration key={`cel-${top.badge.id}`} badge={top.badge} opener={top.opener} onClose={popTop} />
     )

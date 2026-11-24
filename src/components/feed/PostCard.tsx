@@ -1,5 +1,5 @@
 "use client";
-import { memo, useEffect, useRef, useState } from "react";
+import { memo, useEffect, useRef, useState, type PointerEvent as RPointerEvent } from "react";
 import type { Post } from "@/lib/feed/types";
 import { timeAgo } from "@/lib/feed/format";
 import { Art } from "./Art";
@@ -12,7 +12,7 @@ import { useFeedActions } from "./FeedContext";
 import { PhotoCarousel } from "./PhotoCarousel";
 
 export const PostCard = memo(function PostCard({ post, child = false }: { post: Post; child?: boolean }) {
-  const { like, openReply, openChain, toast } = useFeedActions();
+  const { like, likeOnly, save, openMenu, openReply, openChain, toast } = useFeedActions();
   const author = useFeedUser(post.authorId);
   const [pop, setPop] = useState(false);
   const prevLiked = useRef(post.likedByMe);
@@ -26,15 +26,50 @@ export const PostCard = memo(function PostCard({ post, child = false }: { post: 
     prevLiked.current = post.likedByMe;
   }, [post.likedByMe]);
 
+  // Çift dokunma: 300 ms içinde, az hareketle iki dokunuş. Kaydırma pointercancel/büyük hareket olduğundan sayılmaz; düğmeler hariç.
+  const [heart, setHeart] = useState(0);
+  const tapRef = useRef<{ t: number; x: number; y: number; dx: number; dy: number; at: number } | null>(null);
+  const lastTap = useRef<{ t: number; x: number; y: number } | null>(null);
+  const postRef = useRef(post);
+  useEffect(() => { postRef.current = post; });
+  useEffect(() => {
+    if (!heart) return;
+    const t = setTimeout(() => setHeart(0), 720);
+    return () => clearTimeout(t);
+  }, [heart]);
+  const onMediaDown = (e: RPointerEvent<HTMLDivElement>) => {
+    if ((e.target as HTMLElement).closest("button")) { tapRef.current = null; return; }
+    tapRef.current = { t: e.timeStamp, x: e.clientX, y: e.clientY, dx: 0, dy: 0, at: Date.now() };
+  };
+  const onMediaMove = (e: RPointerEvent<HTMLDivElement>) => {
+    const d = tapRef.current;
+    if (d && (Math.abs(e.clientX - d.x) > 10 || Math.abs(e.clientY - d.y) > 10)) tapRef.current = null;
+  };
+  const onMediaUp = (e: RPointerEvent<HTMLDivElement>) => {
+    const d = tapRef.current;
+    tapRef.current = null;
+    if (!d || e.timeStamp - d.t > 350) { lastTap.current = null; return; }
+    const prev = lastTap.current;
+    if (prev && d.at - prev.t <= 320 && Math.hypot(e.clientX - prev.x, e.clientY - prev.y) < 40) {
+      lastTap.current = null;
+      likeOnly(postRef.current);
+      setHeart((h) => h + 1);
+    } else lastTap.current = { t: d.at, x: e.clientX, y: e.clientY };
+  };
+
   return (
     <article className={`fd-card${child ? " fd-child" : ""}`} id={`c-${post.id}`} data-post={post.id} aria-label={`@${author.username} gönderisi`}>
-      <div className="fd-ch"><Who userId={post.authorId} time={timeAgo(post.createdAt)} /></div>
+      <div className="fd-ch">
+        <Who userId={post.authorId} time={timeAgo(post.createdAt)} />
+        <button type="button" className="fd-pm" aria-label="Gönderi seçenekleri" aria-haspopup="dialog" onClick={(e) => openMenu(post, e.currentTarget)}><Icon id="i-more" /></button>
+      </div>
 
       {post.type === "photo" ? (
         <>
-          <div className="fd-media" style={post.photos?.[0]?.width && post.photos[0].height ? { aspectRatio: `${post.photos[0].width} / ${post.photos[0].height}` } : undefined}>
+          <div className="fd-media fd-dt" onPointerDown={onMediaDown} onPointerMove={onMediaMove} onPointerUp={onMediaUp} onPointerCancel={() => { tapRef.current = null; }} style={post.photos?.[0]?.width && post.photos[0].height ? { aspectRatio: `${post.photos[0].width} / ${post.photos[0].height}` } : undefined}>
             {post.photos && post.photos.length > 1 ? <PhotoCarousel photos={post.photos} alt={post.caption ?? "Gönderi görseli"} /> : post.mediaUrl ? <img src={post.mediaUrl} alt={post.caption ?? "Gönderi görseli"} loading="lazy" decoding="async" /> : <Art k={post.art} />}
             <div className="fd-pills">{post.postBadges.map((b) => <PostPill key={b} id={b} />)}</div>
+            {heart ? <svg key={heart} className="fd-bigheart" data-testid="fd-bigheart" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 20s-7-4.4-7-10a4 4 0 0 1 7-2.5A4 4 0 0 1 19 10c0 5.6-7 10-7 10z" /></svg> : null}
           </div>
           {post.caption ? <p className="fd-cap">{post.caption}</p> : null}
         </>
@@ -78,6 +113,15 @@ export const PostCard = memo(function PostCard({ post, child = false }: { post: 
           </button>
         )}
         <span className="fd-sp" />
+        <button
+          type="button"
+          className={`fd-ab fd-save${post.savedByMe ? " fd-on" : ""}`}
+          aria-pressed={!!post.savedByMe}
+          aria-label={post.savedByMe ? "Kaydedildi" : "Kaydet"}
+          onClick={() => save(post)}
+        >
+          <Icon id="i-bookmark" />
+        </button>
       </div>
     </article>
   );

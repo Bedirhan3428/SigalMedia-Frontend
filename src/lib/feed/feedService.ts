@@ -13,6 +13,7 @@ const DUR_MIN: Record<string, number> = { "1s": 60, "1g": 1440, "3g": 4320, "7g"
 interface Persisted {
   v: 1;
   likes: Record<string, boolean>;
+  saves: Record<string, boolean>;
   votes: Record<string, string>;
   created: Post[];
   rule: RuleState;
@@ -21,6 +22,7 @@ interface Persisted {
 const emptyState = (): Persisted => ({
   v: 1,
   likes: {},
+  saves: {},
   votes: {},
   created: [],
   rule: { postsCreated: 0, repliesCreated: 0, votesCast: 0, unlocked: [] },
@@ -155,6 +157,7 @@ class MockFeedService implements FeedService {
       // Eski veride derinlik > 1 olabilir: düzleştirilmiş gösterilir (ebeveyn = kök, derinlik 1).
       replyTo: p.replyTo ? { parentId: p.replyTo.rootId, rootId: p.replyTo.rootId, depth: 1 } : undefined,
       likedByMe: liked,
+      savedByMe: !!this.state.saves[p.id],
       likeCount: p.likeCount + (liked ? 1 : 0),
       replyCount: extra + Math.max(desc, this.remoteCounts.get(p.id) ?? 0),
       postBadges,
@@ -342,6 +345,15 @@ class MockFeedService implements FeedService {
     this.write();
     this.emit();
     return this.find(postId)!;
+  }
+
+  /** Kaydet/kaydetmeyi bırak: yalnızca yerel (localStorage). */
+  async toggleSave(postId: string): Promise<boolean> {
+    this.state.saves[postId] = !this.state.saves[postId];
+    if (!this.state.saves[postId]) delete this.state.saves[postId];
+    this.write();
+    this.emit();
+    return !!this.state.saves[postId];
   }
 
   async vote(pollId: string, optionId: string) {
