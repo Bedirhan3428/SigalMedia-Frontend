@@ -7,26 +7,47 @@ import { updateProfile } from "firebase/auth";
 import { doc, updateDoc, serverTimestamp } from "firebase/firestore";
 import { ref, uploadBytes, getDownloadURL } from "firebase/storage";
 import { auth, db, storage } from "@/lib/firebase";
-import { ChevronLeft, Loader2, User as UserIcon, Check, X } from "lucide-react";
-import { IoCamera } from "react-icons/io5";
+import {
+  ChevronLeft,
+  ChevronRight,
+  Loader2,
+  User as UserIcon,
+  Check,
+  X,
+  Camera,
+  AtSign,
+  FileText,
+  Lock,
+  Maximize2,
+  Trash2,
+} from "lucide-react";
 import ImageCropper from "@/components/ImageCropper";
+
+type SubView = "menu" | "name" | "bio";
+
+type SaveOverrides = {
+  displayName?: string;
+  bio?: string;
+  avatarFile?: File | null;
+  photoRemoved?: boolean;
+};
 
 export default function EditProfilePage() {
   const [mounted, setMounted] = useState(false);
   const router = useRouter();
   const { profile, loading, refreshProfile } = useAuth();
 
-  const [displayName, setDisplayName] = useState("");
-  const [bio, setBio] = useState("");
-  const [avatarFile, setAvatarFile] = useState<File | null>(null);
   const [avatarPreview, setAvatarPreview] = useState<string | null>(null);
   const [cropperImage, setCropperImage] = useState<string | null>(null);
-  const [photoRemoved, setPhotoRemoved] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
   const [isViewingAvatar, setIsViewingAvatar] = useState(false);
+  const [view, setView] = useState<SubView>("menu");
+  const [draft, setDraft] = useState("");
+  const [sheetOpen, setSheetOpen] = useState(false);
 
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const pushedRef = useRef(false);
 
   useEffect(() => {
     setMounted(true);
@@ -35,13 +56,40 @@ export default function EditProfilePage() {
 
   useEffect(() => {
     if (profile) {
-      setDisplayName(profile.displayName || "");
-      setBio(profile.bio || "");
       setAvatarPreview(profile.photoURL || null);
-      setPhotoRemoved(false);
       setIsSaving(false);
     }
   }, [profile]);
+
+  // Toast otomatik kapanır
+  useEffect(() => {
+    if (!toastMessage) return;
+    const t = setTimeout(() => setToastMessage(null), 2200);
+    return () => clearTimeout(t);
+  }, [toastMessage]);
+
+  // Tarayıcı / Android geri tuşu: alt ekrandan menüye döner
+  useEffect(() => {
+    const onPop = () => {
+      pushedRef.current = false;
+      setView("menu");
+      setSheetOpen(false);
+    };
+    window.addEventListener("popstate", onPop);
+    return () => window.removeEventListener("popstate", onPop);
+  }, []);
+
+  const openSub = (v: "name" | "bio") => {
+    setDraft(v === "name" ? profile?.displayName || "" : profile?.bio || "");
+    window.history.pushState(window.history.state, "", window.location.href);
+    pushedRef.current = true;
+    setView(v);
+  };
+
+  const closeSub = () => {
+    if (pushedRef.current) window.history.back();
+    else setView("menu");
+  };
 
   // Fotoğraf Seçildiğinde Kırpma Ekranını Aç
   const handleAvatarChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -58,53 +106,54 @@ export default function EditProfilePage() {
     }
   };
 
-  // Kırpma Tamamlandığında
+  // Kırpma Tamamlandığında fotoğrafı hemen kaydet
   const handleCropComplete = (croppedFile: File, previewUrl: string) => {
-    setAvatarFile(croppedFile);
     setAvatarPreview(previewUrl);
-    setPhotoRemoved(false);
     setCropperImage(null);
+    void handleSave({ avatarFile: croppedFile, photoRemoved: false });
   };
 
-  // Kırpma İptal Edildiğinde
   const handleCropCancel = () => {
     setCropperImage(null);
   };
 
-  // Fotoğrafı Kaldır
+  // Fotoğrafı Kaldır (hemen kaydedilir)
   const handleRemovePhoto = () => {
-    setAvatarFile(null);
     setAvatarPreview(null);
-    setPhotoRemoved(true);
+    setSheetOpen(false);
+    void handleSave({ avatarFile: null, photoRemoved: true });
   };
 
-  // Profili Kaydet
-  const handleSave = async (e?: React.FormEvent) => {
-    if (e) e.preventDefault();
-    if (!profile?.uid || isSaving || !displayName.trim()) return;
+  // Profili Kaydet: mevcut kaydetme mantığı; yalnızca değişen alan(lar) geçilir, kalanlar profilden gelir
+  const handleSave = async (o: SaveOverrides = {}) => {
+    const name = (o.displayName ?? profile?.displayName ?? "").trim();
+    const bioValue = (o.bio ?? profile?.bio ?? "").trim();
+    const file = o.avatarFile ?? null;
+    const removed = o.photoRemoved ?? false;
+    if (!profile?.uid || isSaving || !name) return;
 
     try {
       setIsSaving(true);
       let photoURL = profile.photoURL || "";
 
-      if (photoRemoved) {
+      if (removed) {
         photoURL = "";
-      } else if (avatarFile) {
-        const fileExt = avatarFile.name.split(".").pop() || "jpg";
+      } else if (file) {
+        const fileExt = file.name.split(".").pop() || "jpg";
         const avatarRef = ref(
           storage,
           `avatars/${profile.uid}/avatar_${Date.now()}.${fileExt}`
         );
-        await uploadBytes(avatarRef, avatarFile, {
-          contentType: avatarFile.type || "image/jpeg",
+        await uploadBytes(avatarRef, file, {
+          contentType: file.type || "image/jpeg",
         });
         photoURL = await getDownloadURL(avatarRef);
       }
 
       // Firestore Kullanıcı Belgesini Güncelle
       await updateDoc(doc(db, "users", profile.uid), {
-        displayName: displayName.trim(),
-        bio: bio.trim(),
+        displayName: name,
+        bio: bioValue,
         photoURL,
         updatedAt: serverTimestamp(),
       });
@@ -113,7 +162,7 @@ export default function EditProfilePage() {
       if (auth.currentUser) {
         try {
           await updateProfile(auth.currentUser, {
-            displayName: displayName.trim(),
+            displayName: name,
             photoURL: photoURL || undefined,
           });
         } catch {
@@ -122,18 +171,20 @@ export default function EditProfilePage() {
       }
 
       await refreshProfile();
-      setToastMessage("Profil başarıyla güncellendi");
-      setIsSaving(false);
-
-      setTimeout(() => {
-        router.back();
-      }, 600);
+      setToastMessage("Profil güncellendi");
+      if (pushedRef.current) closeSub();
     } catch (err) {
       console.error("Profil güncelleme hatası:", err);
-      setToastMessage("Fotoğraf veya profil güncellenemedi");
+      setToastMessage("Profil güncellenemedi");
+      setAvatarPreview(profile.photoURL || null);
     } finally {
       setIsSaving(false);
     }
+  };
+
+  const saveSub = () => {
+    if (view === "name") void handleSave({ displayName: draft });
+    else if (view === "bio") void handleSave({ bio: draft });
   };
 
   if (!mounted || loading) {
@@ -144,8 +195,21 @@ export default function EditProfilePage() {
     );
   }
 
+  const rowCls =
+    "w-full flex items-center justify-between gap-3 px-4 py-3.5 hover:bg-zinc-900 transition-colors text-sm font-medium text-zinc-100 btn-press-subtle text-left";
+  const draftInvalid = view === "name" && !draft.trim();
+
   return (
-    <div className="min-h-[100dvh] bg-zinc-950 text-zinc-100 flex flex-col pb-safe">
+    <div className="min-h-[100dvh] bg-zinc-950 text-zinc-100 flex flex-col pb-safe overflow-x-hidden">
+      <input
+        type="file"
+        ref={fileInputRef}
+        onChange={handleAvatarChange}
+        accept="image/*"
+        className="hidden"
+        aria-label="Fotoğraf seç"
+      />
+
       {/* Kırpma Bileşeni (Fotoğraf seçilince açılır) */}
       {cropperImage && (
         <ImageCropper
@@ -157,7 +221,10 @@ export default function EditProfilePage() {
 
       {/* Toast Bildirimi */}
       {toastMessage && (
-        <div className="fixed top-5 left-1/2 -translate-x-1/2 z-50 bg-zinc-800 text-white text-xs font-semibold px-4 py-2 rounded-full shadow-xl border border-zinc-700 flex items-center gap-2 select-none animate-in fade-in duration-150">
+        <div
+          role="status"
+          className="fixed top-5 left-1/2 -translate-x-1/2 z-50 bg-zinc-800 text-white text-xs font-semibold px-4 py-2 rounded-full shadow-xl border border-zinc-700 flex items-center gap-2 select-none animate-in fade-in duration-150"
+        >
           <Check className="w-4 h-4 text-emerald-400" />
           <span>{toastMessage}</span>
         </div>
@@ -168,7 +235,7 @@ export default function EditProfilePage() {
         <div className="max-w-md mx-auto px-4 h-14 flex items-center justify-between">
           <button
             type="button"
-            onClick={() => router.back()}
+            onClick={() => (view === "menu" ? router.back() : closeSub())}
             disabled={isSaving}
             title="Geri"
             aria-label="Geri"
@@ -178,36 +245,34 @@ export default function EditProfilePage() {
           </button>
 
           <h1 className="text-base font-bold tracking-tight text-white">
-            Profili Düzenle
+            {view === "menu" ? "Profili Düzenle" : view === "name" ? "Ad" : "Biyografi"}
           </h1>
 
-          <button
-            type="button"
-            onClick={() => handleSave()}
-            disabled={isSaving || !displayName.trim()}
-            className="text-sm font-bold text-white hover:text-zinc-200 disabled:opacity-40 transition-colors btn-press-subtle p-2 -mr-2 flex items-center gap-1.5"
-          >
-            {isSaving ? <Loader2 className="w-4 h-4 animate-spin" /> : "Kaydet"}
-          </button>
+          {view === "menu" ? (
+            <span className="w-10 flex justify-center" aria-hidden="true">
+              {isSaving && <Loader2 className="w-4 h-4 animate-spin text-zinc-400" />}
+            </span>
+          ) : (
+            <button
+              type="button"
+              onClick={saveSub}
+              disabled={isSaving || draftInvalid}
+              className="text-sm font-bold text-white hover:text-zinc-200 disabled:opacity-40 transition-colors btn-press-subtle p-2 -mr-2 flex items-center gap-1.5"
+            >
+              {isSaving ? <Loader2 className="w-4 h-4 animate-spin" /> : "Kaydet"}
+            </button>
+          )}
         </div>
       </header>
 
-      {/* Ferah ve Tam Ekran Form Alanı */}
-      <main className="flex-1 max-w-md w-full mx-auto px-6 py-8 flex flex-col justify-between">
-        <form onSubmit={handleSave} className="space-y-8">
-          {/* Profil Fotoğrafı Alanı */}
-          <div className="flex flex-col items-center">
-            <input
-              type="file"
-              ref={fileInputRef}
-              onChange={handleAvatarChange}
-              accept="image/*"
-              className="hidden"
-            />
-
-            <div
-              onClick={() => fileInputRef.current?.click()}
-              className="w-28 h-28 rounded-full bg-zinc-900 border-2 border-zinc-800 hover:border-zinc-700 flex items-center justify-center overflow-hidden cursor-pointer relative group transition-all shadow-lg"
+      {view === "menu" ? (
+        <main className="flex-1 max-w-md w-full mx-auto p-4 space-y-6 pb-[calc(2rem+env(safe-area-inset-bottom,0px))]">
+          <div className="flex flex-col items-center pt-2">
+            <button
+              type="button"
+              onClick={() => setSheetOpen(true)}
+              aria-label="Profil fotoğrafı seçenekleri"
+              className="w-28 h-28 rounded-full bg-zinc-900 border-2 border-zinc-800 hover:border-zinc-700 flex items-center justify-center overflow-hidden transition-all shadow-lg"
             >
               {avatarPreview ? (
                 <img
@@ -215,121 +280,165 @@ export default function EditProfilePage() {
                   alt="Profil Fotoğrafı"
                   draggable={false}
                   onContextMenu={(e) => e.preventDefault()}
-                  className="w-full h-full object-cover group-hover:opacity-75 transition-opacity select-none no-select"
+                  className="w-full h-full object-cover select-none no-select"
                 />
               ) : (
                 <UserIcon className="w-12 h-12 text-zinc-600" />
               )}
-
-              <div className="absolute inset-0 bg-black/40 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity">
-                <IoCamera className="w-8 h-8 text-white" />
-              </div>
-            </div>
-
-            {/* Fotoğraf Butonları */}
-            <div className="flex items-center gap-3 mt-3">
-              <button
-                type="button"
-                onClick={() => fileInputRef.current?.click()}
-                className="text-sm font-semibold text-white hover:text-zinc-300 transition-colors"
-              >
-                Fotoğrafı Değiştir
-              </button>
-
-              {avatarPreview && (
-                <>
-                  <span className="text-zinc-600 text-xs">•</span>
-                  <button
-                    type="button"
-                    onClick={() => setIsViewingAvatar(true)}
-                    className="text-sm font-semibold text-zinc-400 hover:text-white transition-colors"
-                  >
-                    Büyüt
-                  </button>
-                  <span className="text-zinc-600 text-xs">•</span>
-                  <button
-                    type="button"
-                    onClick={handleRemovePhoto}
-                    className="text-sm font-semibold text-red-400 hover:text-red-300 transition-colors"
-                  >
-                    Kaldır
-                  </button>
-                </>
-              )}
-            </div>
+            </button>
+            <button
+              type="button"
+              onClick={() => setSheetOpen(true)}
+              className="mt-3 text-sm font-semibold text-white hover:text-zinc-300 transition-colors"
+            >
+              Fotoğrafı değiştir
+            </button>
           </div>
 
-          {/* Form Alanları */}
-          <div className="space-y-5">
-            {/* Görünen Ad */}
-            <div>
-              <label className="block text-xs font-semibold text-zinc-400 mb-2">
-                Görünen Ad
+          <section className="space-y-2">
+            <h2 className="px-1 text-xs font-semibold uppercase tracking-wider text-zinc-500">
+              Profil bilgileri
+            </h2>
+            <div className="bg-zinc-900/60 border border-zinc-900 rounded-2xl overflow-hidden divide-y divide-zinc-900">
+              <button type="button" onClick={() => openSub("name")} className={rowCls}>
+                <span className="flex items-center gap-3 shrink-0">
+                  <UserIcon className="w-5 h-5 text-zinc-400" />
+                  <span>Ad</span>
+                </span>
+                <span className="flex items-center gap-2 min-w-0">
+                  <span className="truncate text-zinc-400 font-normal">
+                    {profile?.displayName || "Ekle"}
+                  </span>
+                  <ChevronRight className="w-4 h-4 text-zinc-500 shrink-0" />
+                </span>
+              </button>
+
+              <div className="w-full flex items-center justify-between gap-3 px-4 py-3.5 text-sm font-medium text-zinc-100">
+                <span className="flex items-center gap-3 shrink-0">
+                  <AtSign className="w-5 h-5 text-zinc-400" />
+                  <span>Kullanıcı adı</span>
+                </span>
+                <span className="flex items-center gap-2 min-w-0">
+                  <span className="truncate text-zinc-500 font-normal">
+                    @{profile?.username || ""}
+                  </span>
+                  <Lock className="w-4 h-4 text-zinc-600 shrink-0" aria-label="Değiştirilemez" />
+                </span>
+              </div>
+
+              <button type="button" onClick={() => openSub("bio")} className={rowCls}>
+                <span className="flex items-center gap-3 shrink-0">
+                  <FileText className="w-5 h-5 text-zinc-400" />
+                  <span>Biyografi</span>
+                </span>
+                <span className="flex items-center gap-2 min-w-0">
+                  <span className="truncate text-zinc-400 font-normal">
+                    {profile?.bio || "Ekle"}
+                  </span>
+                  <ChevronRight className="w-4 h-4 text-zinc-500 shrink-0" />
+                </span>
+              </button>
+            </div>
+          </section>
+        </main>
+      ) : (
+        <main className="flex-1 max-w-md w-full mx-auto p-4 space-y-2">
+          {view === "name" ? (
+            <>
+              <label htmlFor="edit-name" className="block px-1 text-xs font-semibold text-zinc-400">
+                Görünen ad
               </label>
               <input
+                id="edit-name"
                 type="text"
-                required
-                value={displayName}
-                onChange={(e) => setDisplayName(e.target.value)}
+                autoFocus
+                value={draft}
+                onChange={(e) => setDraft(e.target.value)}
+                onKeyDown={(e) => e.key === "Enter" && !draftInvalid && saveSub()}
                 placeholder="Adın Soyadın"
                 maxLength={50}
                 className="w-full bg-zinc-900/70 border border-zinc-800 rounded-2xl px-4 py-3.5 text-sm text-zinc-100 placeholder:text-zinc-600 focus:outline-none focus:border-zinc-600 transition-colors"
               />
-            </div>
-
-            {/* Kullanıcı Adı (Salt Okunur Bilgi) */}
-            <div>
-              <label className="block text-xs font-semibold text-zinc-400 mb-2">
-                Kullanıcı Adı
+              <p className="px-1 text-[11px] text-zinc-500 text-right">{draft.length}/50</p>
+            </>
+          ) : (
+            <>
+              <label htmlFor="edit-bio" className="block px-1 text-xs font-semibold text-zinc-400">
+                Biyografi
               </label>
-              <input
-                type="text"
-                disabled
-                value={`@${profile?.username || ""}`}
-                className="w-full bg-zinc-900/40 border border-zinc-900 rounded-2xl px-4 py-3.5 text-sm text-zinc-500 cursor-not-allowed select-none"
-              />
-            </div>
-
-            {/* Biyografi */}
-            <div>
-              <div className="flex items-center justify-between mb-2">
-                <label className="text-xs font-semibold text-zinc-400">
-                  Biyografi
-                </label>
-                <span className="text-[11px] text-zinc-500">
-                  {bio.length}/150
-                </span>
-              </div>
               <textarea
-                value={bio}
-                onChange={(e) => setBio(e.target.value)}
+                id="edit-bio"
+                autoFocus
+                value={draft}
+                onChange={(e) => setDraft(e.target.value)}
                 placeholder="Kendinden bahset..."
                 maxLength={150}
-                rows={4}
+                rows={5}
                 className="w-full bg-zinc-900/70 border border-zinc-800 rounded-2xl px-4 py-3.5 text-sm text-zinc-100 placeholder:text-zinc-600 focus:outline-none focus:border-zinc-600 transition-colors resize-none"
               />
-            </div>
-          </div>
+              <p className="px-1 text-[11px] text-zinc-500 text-right">{draft.length}/150</p>
+            </>
+          )}
+        </main>
+      )}
 
-          {/* Kaydet Butonu */}
-          <div className="pt-4">
+      {/* Fotoğraf eylem sayfası */}
+      {sheetOpen && (
+        <div
+          className="fixed inset-0 z-50 bg-black/60 flex items-end justify-center animate-in fade-in duration-150"
+          onClick={() => setSheetOpen(false)}
+        >
+          <div
+            role="dialog"
+            aria-label="Profil fotoğrafı"
+            className="w-full max-w-md bg-zinc-900 rounded-t-3xl p-4 pb-[calc(1rem+env(safe-area-inset-bottom,0px))] space-y-1"
+            onClick={(e) => e.stopPropagation()}
+          >
             <button
-              type="submit"
-              disabled={isSaving || !displayName.trim()}
-              className="w-full py-3.5 bg-white hover:bg-zinc-200 text-zinc-950 rounded-2xl text-sm font-bold transition-all flex items-center justify-center gap-2 disabled:opacity-40 btn-press-subtle shadow-xl"
+              type="button"
+              onClick={() => {
+                setSheetOpen(false);
+                fileInputRef.current?.click();
+              }}
+              className="w-full flex items-center gap-3 px-3 py-3.5 rounded-xl hover:bg-zinc-800 text-sm font-medium text-zinc-100"
             >
-              {isSaving ? (
-                <>
-                  <Loader2 className="w-4 h-4 animate-spin" />
-                  <span>Kaydediliyor...</span>
-                </>
-              ) : (
-                <span>Değişiklikleri Kaydet</span>
-              )}
+              <Camera className="w-5 h-5 text-zinc-400" />
+              Fotoğrafı değiştir
+            </button>
+            {avatarPreview && (
+              <>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setSheetOpen(false);
+                    setIsViewingAvatar(true);
+                  }}
+                  className="w-full flex items-center gap-3 px-3 py-3.5 rounded-xl hover:bg-zinc-800 text-sm font-medium text-zinc-100"
+                >
+                  <Maximize2 className="w-5 h-5 text-zinc-400" />
+                  Fotoğrafı büyüt
+                </button>
+                <button
+                  type="button"
+                  onClick={handleRemovePhoto}
+                  className="w-full flex items-center gap-3 px-3 py-3.5 rounded-xl hover:bg-zinc-800 text-sm font-medium text-red-400"
+                >
+                  <Trash2 className="w-5 h-5" />
+                  Fotoğrafı kaldır
+                </button>
+              </>
+            )}
+            <button
+              type="button"
+              onClick={() => setSheetOpen(false)}
+              className="w-full px-3 py-3.5 rounded-xl hover:bg-zinc-800 text-sm font-semibold text-zinc-400"
+            >
+              Vazgeç
             </button>
           </div>
-        </form>
-      </main>
+        </div>
+      )}
+
       {/* BÜYÜK FOTOĞRAF ÖNİZLEME MODALI */}
       {isViewingAvatar && avatarPreview && (
         <div
@@ -340,6 +449,7 @@ export default function EditProfilePage() {
             <button
               type="button"
               onClick={() => setIsViewingAvatar(false)}
+              aria-label="Kapat"
               className="p-2 text-zinc-400 hover:text-white hover:bg-zinc-900 rounded-full transition-colors"
             >
               <X className="w-6 h-6" />

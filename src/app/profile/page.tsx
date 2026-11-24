@@ -310,18 +310,11 @@ export default function ProfilePage() {
           actions={
             themed ? (
               <>
-                <Link href="/profile/edit" className="pf-pr">Profili Düzenle</Link>
                 <button type="button" onClick={handleShareProfile} className="pf-ghost">Profili Paylaş</button>
-                <button type="button" onClick={() => setSheetOpen(true)} className="pf-ghost pf-wide">Profili Özelleştir</button>
+                <button type="button" onClick={() => setSheetOpen(true)} className="pf-pr">Profili Özelleştir</button>
               </>
             ) : (
               <div className="grid grid-cols-2 gap-2">
-                <Link
-                  href="/profile/edit"
-                  className="w-full py-2 px-3 text-sm font-semibold text-white bg-zinc-900 hover:bg-zinc-800 border border-zinc-800 rounded-xl transition-all btn-press-subtle text-center flex items-center justify-center"
-                >
-                  Profili Düzenle
-                </Link>
                 <button
                   type="button"
                   onClick={handleShareProfile}
@@ -332,7 +325,7 @@ export default function ProfilePage() {
                 <button
                   type="button"
                   onClick={() => setSheetOpen(true)}
-                  className="col-span-2 w-full py-2 px-3 text-sm font-semibold text-white bg-zinc-900 hover:bg-zinc-800 border border-zinc-800 rounded-xl transition-all btn-press-subtle text-center"
+                  className="w-full py-2 px-3 text-sm font-semibold text-white bg-zinc-900 hover:bg-zinc-800 border border-zinc-800 rounded-xl transition-all btn-press-subtle text-center"
                 >
                   Profili Özelleştir
                 </button>
