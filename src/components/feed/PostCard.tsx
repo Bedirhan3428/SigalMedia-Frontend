@@ -12,7 +12,7 @@ import { useFeedActions } from "./FeedContext";
 import { PhotoCarousel } from "./PhotoCarousel";
 
 export const PostCard = memo(function PostCard({ post, child = false }: { post: Post; child?: boolean }) {
-  const { like, likeOnly, save, openMenu, openReply, openChain, toast } = useFeedActions();
+  const { like, likeOnly, save, openMenu, openShare, openReply, openChain, toast } = useFeedActions();
   const author = useFeedUser(post.authorId);
   const [pop, setPop] = useState(false);
   const prevLiked = useRef(post.likedByMe);
@@ -118,6 +118,9 @@ export const PostCard = memo(function PostCard({ post, child = false }: { post: 
             <span>{post.replyCount}</span>
           </button>
         )}
+        <button type="button" className="fd-ab fd-shr" aria-label="Paylaş" aria-haspopup="dialog" onClick={(e) => openShare(post, e.currentTarget)}>
+          <Icon id="i-send" />
+        </button>
         <span className="fd-sp" />
         <button
           type="button"

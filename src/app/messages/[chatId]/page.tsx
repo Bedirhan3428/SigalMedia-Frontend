@@ -15,6 +15,9 @@ import {
   writeSharedChatSettings,
 } from "@/lib/chat/chatSharedStore";
 import { useBackLayer } from "@/lib/chat/useBackLayer";
+import { PostPreviewCard } from "@/components/messages/PostPreviewCard";
+import { parsePostLink } from "@/lib/chat/postLink";
+import { bumpSendCount } from "@/lib/chat/chatActivity";
 import { useKeyboardViewport } from "@/lib/chat/useKeyboardViewport";
 import {
   DEFAULT_CHAT_SETTINGS,
@@ -551,11 +554,14 @@ export default function ChatRoomPage() {
   }, [chatId, authedPeerUid, peerProfile?.showOnlineStatus]);
 
   const displayedMessages = useMemo(() => {
-    if (pendingMessages.length === 0) return messages;
-    const confirmedIds = new Set(messages.map((m) => m.id));
+    // Test kancası (yalnızca tarayıcı testlerinde tanımlanır): gerçek mesaj göndermeden önizleme kartını gösterir.
+    const injected = typeof window !== "undefined" ? (window as unknown as { __SIGAL_TEST_CHAT_MESSAGES__?: ChatMessage[] }).__SIGAL_TEST_CHAT_MESSAGES__ : undefined;
+    const base = injected?.length ? [...messages, ...injected] : messages;
+    if (pendingMessages.length === 0) return base;
+    const confirmedIds = new Set(base.map((m) => m.id));
     const stillPending = pendingMessages.filter((pm) => {
       if (confirmedIds.has(pm.id)) return false;
-      const matchedRtdbMsg = messages.find(
+      const matchedRtdbMsg = base.find(
         (m) =>
           m.senderUid === pm.senderUid &&
           m.text === pm.text &&
@@ -567,7 +573,7 @@ export default function ChatRoomPage() {
       }
       return true;
     });
-    return [...messages, ...stillPending];
+    return [...base, ...stillPending];
   }, [messages, pendingMessages]);
 
   // Yeni mesaj eklendiğinde liste boyamadan ÖNCE (layout effect) en alta sabitlenir (ilk karede bile kayma
@@ -769,6 +775,7 @@ export default function ChatRoomPage() {
 
     void sendEncryptedMessage(peerUid, clean)
       .then((result) => {
+        bumpSendCount(profile.uid, chatId);
         stableKeyMapRef.current.set(result.messageId, tempId);
         setPendingMessages((prev) =>
           prev.map((m) =>
@@ -792,9 +799,11 @@ export default function ChatRoomPage() {
       pressRef.current = null;
     }
   };
+  const menuOpenedAtRef = useRef(0);
   const openMenuFor = (el: HTMLElement, msg: ChatMessage, mid: string, mine: boolean, radiusClass: string) => {
     if (menu) return;
     cancelPress();
+    menuOpenedAtRef.current = new Date().getTime();
     const r = el.getBoundingClientRect();
     setMenu({
       mid,
@@ -1124,7 +1133,20 @@ export default function ChatRoomPage() {
                       }`}
                       style={emojiOnly ? undefined : { padding: "var(--pad)" }}
                     >
-                      <span className="whitespace-pre-wrap">{msg.text}</span>
+                      {(() => {
+                        const pl = parsePostLink(msg.text);
+                        return pl ? (
+                          <PostPreviewCard
+                            link={pl}
+                            onOpen={() => {
+                              if (menu || Date.now() - menuOpenedAtRef.current < 700) return;
+                              router.push(`/p/${pl.postId}`);
+                            }}
+                          />
+                        ) : (
+                          <span className="whitespace-pre-wrap">{msg.text}</span>
+                        );
+                      })()}
                       {chips.length > 0 && (
                         <div
                           data-testid="msg-reactions"
@@ -1258,7 +1280,10 @@ export default function ChatRoomPage() {
                 }`}
                 style={isEmojiOnly(m.text) ? undefined : { padding: "var(--pad)" }}
               >
-                <span className="whitespace-pre-wrap">{m.text}</span>
+                {(() => {
+                  const pl = parsePostLink(m.text);
+                  return pl ? <PostPreviewCard link={pl} interactive={false} /> : <span className="whitespace-pre-wrap">{m.text}</span>;
+                })()}
               </div>
             }
             onReact={handleReact}
