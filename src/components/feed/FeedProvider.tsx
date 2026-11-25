@@ -54,7 +54,7 @@ function Root({ children, testId = "fd-prov", onPollPublished, postMenu }: Props
 
   const [stack, setStack] = useState<SheetState[]>([]);
   const [baseActive, setBaseActive] = useState(false);
-  const [toastState, setToastState] = useState<{ id: number; msg: string; icon?: ReactNode } | null>(null);
+  const [toastState, setToastState] = useState<{ id: number; msg: string; icon?: ReactNode; action?: { label: string; onClick: () => void } } | null>(null);
   const [opt, setOpt] = useState<Record<string, Post>>({});
   const toastTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
   const baseRef = useRef<(() => void) | null>(null);
@@ -64,10 +64,10 @@ function Root({ children, testId = "fd-prov", onPollPublished, postMenu }: Props
     feedService.setCurrentUser({ id: uid, username, avatarUrl: photo });
   }, [uid, username, photo]);
 
-  const toast = useCallback((msg: string, icon?: ReactNode) => {
+  const toast = useCallback((msg: string, icon?: ReactNode, action?: { label: string; onClick: () => void }) => {
     clearTimeout(toastTimer.current);
-    setToastState({ id: Date.now(), msg, icon });
-    toastTimer.current = setTimeout(() => setToastState(null), 2600);
+    setToastState({ id: Date.now(), msg, icon, action });
+    toastTimer.current = setTimeout(() => setToastState(null), action ? 7000 : 2600);
   }, []);
   useEffect(() => () => clearTimeout(toastTimer.current), []);
 
@@ -195,7 +195,12 @@ function Root({ children, testId = "fd-prov", onPollPublished, postMenu }: Props
       <div className="fd-root" data-testid={testId}>
         <GlyphSprite />
         {children}
-        {toastState ? <div className="fd-toast" role="status" aria-live="polite" key={toastState.id}>{toastState.icon}<p>{toastState.msg}</p></div> : null}
+        {toastState ? (
+          <div className={`fd-toast${toastState.action ? " fd-tact" : ""}`} role="status" aria-live="polite" key={toastState.id}>
+            {toastState.icon}<p>{toastState.msg}</p>
+            {toastState.action ? <button type="button" onClick={() => { const a = toastState.action; setToastState(null); a?.onClick(); }}>{toastState.action.label}</button> : null}
+          </div>
+        ) : null}
         {sheet}
       </div>
     </FeedActionsContext.Provider>

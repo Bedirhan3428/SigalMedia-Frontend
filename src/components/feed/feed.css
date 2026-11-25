@@ -188,8 +188,9 @@
 .fd-root .fd-eyebrow{font-size:12px;letter-spacing:.12em;text-transform:uppercase;color:var(--tx3);font-weight:600}
 .fd-root .fd-card{background:var(--bg)}
 .fd-root .fd-media img,.fd-root .fd-media video{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;display:block}
-.fd-root .fd-mute{position:absolute;left:10px;bottom:12px;width:44px;height:44px;border-radius:50%;display:grid;place-items:center;background:rgba(9,9,11,.62);border:1px solid rgba(255,255,255,.3);z-index:2}
-.fd-root .fd-mute svg.fd-i{width:20px;height:20px}
+.fd-root .fd-pmute{position:absolute;left:50%;top:calc(50% + 30px + 14px);transform:translateX(-50%);width:44px;height:44px;border-radius:50%;display:grid;place-items:center;background:rgba(9,9,11,.62);border:1px solid rgba(255,255,255,.35);backdrop-filter:blur(4px);color:#fff;z-index:2;transition:opacity .2s,visibility .2s}
+.fd-root .fd-pmute svg.fd-i{width:20px;height:20px}
+.fd-root .fd-playing .fd-pmute{opacity:0;visibility:hidden;pointer-events:none}
 .fd-root .fd-prog i{animation:none}
 .fd-root .fd-prog.fd-sim i{animation:fd-vp var(--dur,14s) linear infinite;animation-play-state:paused}
 .fd-root .fd-playing .fd-prog.fd-sim i{animation-play-state:running}
@@ -214,6 +215,8 @@
 .fd-root .fd-sheet{padding-bottom:env(safe-area-inset-bottom,0px)}
 .fd-root .fd-toast{position:fixed;left:12px;right:12px;bottom:calc(76px + env(safe-area-inset-bottom,0px));z-index:80;max-width:26rem;margin:0 auto;display:flex;align-items:center;gap:10px;padding:10px 12px;border-radius:14px;background:var(--s3);border:1px solid var(--line2);box-shadow:0 8px 24px rgba(0,0,0,.5);animation:fd-up .3s;pointer-events:none}
 .fd-root .fd-toast p{font-size:13.5px}
+.fd-root .fd-toast.fd-tact{pointer-events:auto}
+.fd-root .fd-toast.fd-tact button{margin-left:auto;min-height:44px;padding:0 10px;background:none;border:0;color:var(--ac);font-weight:700;font-size:13.5px}
 .fd-brand{font-weight:700;font-size:22px;letter-spacing:-.02em;background:linear-gradient(90deg,#fff,#a99bff);-webkit-background-clip:text;background-clip:text;color:transparent}
 
 @media (prefers-reduced-motion:reduce){
@@ -289,7 +292,7 @@
 .fd-root .fd-rvid .fd-prog{bottom:var(--rnav);height:2px;z-index:2}
 .fd-root .fd-rvid .fd-vplay{z-index:1}
 .fd-root .fd-rvid .fd-vplay span{background:rgba(9,9,11,.4)}
-.fd-root .fd-rmute{left:auto;right:10px;bottom:auto;top:calc(56px + env(safe-area-inset-top,0px))}
+.fd-root .fd-rvid .fd-pmute{background:rgba(9,9,11,.4)}
 .fd-root .fd-rscrim{position:absolute;left:0;right:0;bottom:0;height:46%;background:linear-gradient(to top,rgba(0,0,0,.72),rgba(0,0,0,0));pointer-events:none;z-index:1}
 .fd-root .fd-rinfo{position:absolute;left:12px;right:84px;bottom:calc(var(--rnav) + 14px);z-index:3;display:flex;flex-direction:column;align-items:flex-start;gap:8px;text-shadow:0 1px 3px rgba(0,0,0,.7)}
 .fd-root .fd-rwho{display:flex;align-items:center;gap:10px;color:#fff;text-decoration:none;min-height:44px;max-width:100%}

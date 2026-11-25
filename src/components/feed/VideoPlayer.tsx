@@ -130,60 +130,55 @@ interface Props {
   post: VideoPost;
   variant?: "feed" | "reel";
   autoplay?: boolean;
-  /** Reels: ekrandan uzak öğede video öğesi kurulmaz (bellek). */
+  /** Reels: ekrandan uzak öğede video kaynağı yüklenmez/bırakılır (bellek); `<video>` öğesi yerinde kalır, yeniden kurulmaz. */
   parked?: boolean;
   preload?: "none" | "metadata" | "auto";
+  /** Video oynatılabilir hale gelince (`true`) ya da kaynağı bırakılınca (`false`) bildirilir. */
+  onReady?: (id: string, ready: boolean) => void;
   children?: ReactNode;
 }
 
-export const VideoPlayer = memo(function VideoPlayer({ post, variant = "feed", autoplay = false, parked = false, preload = "metadata", children }: Props) {
+export const VideoPlayer = memo(function VideoPlayer({ post, variant = "feed", autoplay = false, parked = false, preload = "metadata", onReady, children }: Props) {
   const reel = variant === "reel";
   const [failed, setFailed] = useState(false);
   const [fit, setFit] = useState<"cover" | "contain">("cover");
   const real = !!post.mediaUrl && !failed;
-  const { wrap, vid, playing, playingRef, muted, prog, waiting, play, pause, toggle, videoEvents } = useVideoPlayback({ id: post.id, real, autoplay, parked });
+  const { wrap, vid, playing, muted, prog, waiting, toggle, videoEvents } = useVideoPlayback({ id: post.id, real, autoplay, parked });
 
-  // Tek dokunma oynat/duraklat; çift dokunmada ilk dokunuşun etkisi geri alınır (beğeni oynatmayı değiştirmez).
-  const preTap = useRef<{ playing: boolean; at: number } | null>(null);
-  const suppress = useRef(false);
-  const dt = useDoubleTapLike(post, {
-    allowButton: ".fd-vplay",
-    onDouble: () => {
-      suppress.current = true;
-      setTimeout(() => { suppress.current = false; }, 600);
-      const p = preTap.current;
-      if (p && Date.now() - p.at < 500 && playingRef.current !== p.playing) (p.playing ? play() : pause());
-    },
-  });
-  const onTap = () => {
-    if (suppress.current) { suppress.current = false; return; }
-    preTap.current = { playing: playingRef.current, at: Date.now() };
-    toggle();
-  };
+  // Tek dokunma: ikinci dokunuş DOUBLE_TAP penceresinde gelmezse oynat/duraklat. Çift dokunma yalnızca beğenir, oynatmayı değiştirmez.
+  const dt = useDoubleTapLike(post, { allowButton: ".fd-vplay", onSingle: toggle });
+
+  // Park edilince kaynak bırakılır (öğe kalır): tarayıcı arabelleği ve kod çözücüyü serbest bırakır.
+  useEffect(() => {
+    if (!parked) return;
+    const v = vid.current;
+    if (v && (v.currentSrc || v.readyState > 0)) v.load();
+    onReady?.(post.id, false);
+  }, [parked, vid, onReady, post.id]);
 
   const dur = post.durationSec;
   const cls = reel ? "fd-rvid" : `fd-media fd-dt${playing ? " fd-playing" : ""}`;
-  const showVideo = real && !parked;
 
   return (
     <div ref={wrap} className={`${cls}${reel && playing ? " fd-playing" : ""}`} data-vid={post.id} data-fit={reel ? fit : undefined} {...dt.bind}>
       {reel && post.posterUrl ? <img className="fd-rbg" src={post.posterUrl} alt="" aria-hidden="true" decoding="async" referrerPolicy="no-referrer" /> : null}
-      {showVideo ? (
+      {real ? (
         <video
           ref={vid}
-          src={post.mediaUrl}
+          src={parked ? undefined : post.mediaUrl}
           poster={post.posterUrl}
           muted={muted}
           loop
           playsInline
-          preload={preload}
+          preload={parked ? "none" : preload}
           aria-hidden="true"
           {...videoEvents}
+          onCanPlay={() => { videoEvents.onCanPlay(); onReady?.(post.id, true); }}
           onLoadedMetadata={(e) => {
             const v = e.currentTarget;
             if (reel && v.videoWidth && v.videoHeight) setFit(v.videoWidth / v.videoHeight > 0.8 ? "contain" : "cover");
           }}
-          onError={() => setFailed(true)}
+          onError={() => { if (!parked) setFailed(true); }}
         />
       ) : reel ? (
         post.posterUrl ? null : <Art k={post.art} />
@@ -192,16 +187,19 @@ export const VideoPlayer = memo(function VideoPlayer({ post, variant = "feed", a
       )}
       {!reel ? <div className="fd-pills">{post.postBadges.map((b) => <PostPill key={b} id={b} />)}</div> : null}
       {parked ? null : (
-        <button type="button" className="fd-vplay" aria-pressed={playing} aria-label={playing ? "Videoyu duraklat" : "Videoyu oynat"} onClick={onTap}>
-          <span><Icon id={playing ? "i-pause" : "i-play"} /></span>
-        </button>
+        <>
+          {/* Klavye (detail 0) için doğrudan; işaretçi dokunuşları likeTap'ta ayrıştırılır. */}
+          <button type="button" className="fd-vplay" aria-pressed={playing} aria-label={playing ? "Videoyu duraklat" : "Videoyu oynat"} onClick={(e) => { if (e.detail === 0) toggle(); }}>
+            <span><Icon id={playing ? "i-pause" : "i-play"} /></span>
+          </button>
+          {real ? (
+            <button type="button" className="fd-pmute" aria-pressed={muted} aria-label={muted ? "Sesi aç" : "Sesi kapat"} onClick={() => setMuted(!muted)}>
+              <Icon id={muted ? "i-mute" : "i-vol"} />
+            </button>
+          ) : null}
+        </>
       )}
       {waiting && !parked ? <span className="fd-vspin" data-testid="fd-vspin" role="status" aria-label="Video yükleniyor" /> : null}
-      {real && !parked ? (
-        <button type="button" className={`fd-mute${reel ? " fd-rmute" : ""}`} aria-pressed={muted} aria-label={muted ? "Sesi aç" : "Sesi kapat"} onClick={() => setMuted(!muted)}>
-          <Icon id={muted ? "i-mute" : "i-vol"} />
-        </button>
-      ) : null}
       {!reel && dur > 0 ? <span className="fd-vdur">{fmtDur(dur)}</span> : null}
       {parked ? null : (
         <div className={`fd-prog ${real ? "fd-real" : "fd-sim"}`} aria-hidden="true" style={real ? ({ "--p": `${prog}%` } as CSSProperties) : ({ "--dur": `${Math.max(3, dur)}s` } as CSSProperties)}>

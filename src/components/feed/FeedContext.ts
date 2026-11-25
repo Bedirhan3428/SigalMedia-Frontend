@@ -25,7 +25,8 @@ export interface FeedActions {
   openReply: (parent: Post, opener?: HTMLElement | null) => void;
   openProfile: (userId: string, opener?: HTMLElement | null) => void;
   openPoll: (parent: Post | null, opener?: HTMLElement | null) => void;
-  toast: (msg: string, icon?: ReactNode) => void;
+  /** Kısa bildirim; `action` verilirse düğme gösterilir ve bildirim daha uzun kalır (ör. "Tekrar dene"). */
+  toast: (msg: string, icon?: ReactNode, action?: { label: string; onClick: () => void }) => void;
   /** Güncel gönderi: iyimser beğeni > servis önbelleği > verilen nesne. */
   resolve: (post: Post) => Post;
   /** Sayfa içi bir tam ekran katmanın (gönderi detayı) kapatma işlevini yığının tabanına kaydeder; Geri/Escape önce sayfaları, sonra bunu kapatır. */

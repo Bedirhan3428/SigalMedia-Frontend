@@ -2,11 +2,12 @@
 import { useEffect, useMemo, useState } from "react";
 import type { Post } from "@/lib/feed/types";
 import { useAuth } from "@/context/AuthContext";
+import { preloadServerPublicKey } from "@/lib/crypto";
 import { listenUserChats, buildChatId, sendEncryptedMessage, type UserChatSummary } from "@/services/messageService";
 import { peekList, peekLastUid } from "@/lib/chat/chatCache";
 import { bumpSendCount, getSendCounts, sortByActivity } from "@/lib/chat/chatActivity";
 import { buildPostShareText } from "@/lib/chat/postLink";
-import { useFeedActions } from "./FeedContext";
+import { useFeedActions, type FeedActions } from "./FeedContext";
 import { Icon } from "./glyphs";
 import { Sheet } from "./Sheet";
 import { copyText } from "./PostMenuSheet";
@@ -17,6 +18,22 @@ type TestWin = {
   /** Test kancası: sohbet listesi yerine bu liste kullanılır. */
   __SIGAL_TEST_SHARE_CHATS__?: UserChatSummary[];
 };
+
+/** Mesajı alıcılara paralel yollar; başarısız olanlar için "Tekrar dene" bildirimi çıkarır (yalnızca başarısızlar yeniden denenir). */
+async function dispatchShare(uid: string, targets: UserChatSummary[], text: string, toast: FeedActions["toast"]): Promise<void> {
+  const hook = (window as unknown as TestWin).__SIGAL_TEST_SHARE__;
+  const res = await Promise.allSettled(
+    targets.map(async (c) => {
+      const peerUid = c.peerUid || "";
+      const chatId = c.chatId || buildChatId(uid, peerUid);
+      if (hook) hook({ chatId, peerUid, text });
+      else await sendEncryptedMessage(peerUid, text);
+      bumpSendCount(uid, chatId);
+    })
+  );
+  const failed = targets.filter((_, i) => res[i].status === "rejected");
+  if (failed.length) toast(failed.length === targets.length ? "Gönderilemedi" : `${failed.length} kişiye gönderilemedi`, undefined, { label: "Tekrar dene", onClick: () => { void dispatchShare(uid, failed, text, toast); } });
+}
 
 /** "Paylaş": gönderi bağlantısını en sık konuşulan sohbetlere (çoklu seçim + not) yollar; bağlantıyı kopyala / sistem paylaşımı. */
 export function ShareSheet({ post, opener, onClose }: { post: Post; opener?: HTMLElement | null; onClose: () => void }) {
@@ -30,8 +47,10 @@ export function ShareSheet({ post, opener, onClose }: { post: Post; opener?: HTM
   const [q, setQ] = useState("");
   const [note, setNote] = useState("");
   const [sel, setSel] = useState<string[]>([]);
-  const [busy, setBusy] = useState(false);
   const [counts] = useState(() => getSendCounts(uid));
+
+  // Sunucu genel anahtarı önceden alınır: ilk gönderim ekstra bir istek beklemez.
+  useEffect(() => { void preloadServerPublicKey(); }, []);
 
   useEffect(() => {
     if (!uid || (window as unknown as TestWin).__SIGAL_TEST_SHARE_CHATS__) return;
@@ -49,32 +68,14 @@ export function ShareSheet({ post, opener, onClose }: { post: Post; opener?: HTM
   const canNative = typeof navigator !== "undefined" && typeof navigator.share === "function";
   const toggle = (id: string) => setSel((s) => (s.includes(id) ? s.filter((x) => x !== id) : [...s, id]));
 
-  const send = async () => {
-    if (!uid || !sel.length || busy) return;
-    setBusy(true);
+  /** İyimser gönderim: sayfa hemen kapanır ve "Gönderildi" gösterilir; alıcılar arka planda paralel gönderilir, yalnızca hata olursa "Tekrar dene" çıkar. */
+  const send = () => {
+    if (!uid || !sel.length) return;
     const text = buildPostShareText(window.location.origin, post.id, note);
-    const hook = (window as unknown as TestWin).__SIGAL_TEST_SHARE__;
     const targets = sorted.filter((c) => sel.includes(c.chatId));
-    const res = await Promise.allSettled(
-      targets.map(async (c) => {
-        const peerUid = c.peerUid || "";
-        const chatId = c.chatId || buildChatId(uid, peerUid);
-        if (hook) hook({ chatId, peerUid, text });
-        else await sendEncryptedMessage(peerUid, text);
-        bumpSendCount(uid, chatId);
-      })
-    );
-    setBusy(false);
-    const failed = res.filter((r) => r.status === "rejected").length;
-    if (failed) {
-      const first = res.find((r): r is PromiseRejectedResult => r.status === "rejected");
-      toast(first?.reason instanceof Error && first.reason.message ? first.reason.message : "Gönderilemedi");
-      // Başarılı olanlar listeden çıkarılır, tekrar denemede çift gönderilmez.
-      setSel(targets.filter((_, i) => res[i].status === "rejected").map((c) => c.chatId));
-      return;
-    }
     onClose();
     toast("Gönderildi", <Icon id="i-check" />);
+    void dispatchShare(uid, targets, text, toast);
   };
 
   const copy = () => {
@@ -134,8 +135,8 @@ export function ShareSheet({ post, opener, onClose }: { post: Post; opener?: HTM
             <input type="text" className="fd-field" placeholder="Mesaj ekle…" aria-label="Mesaj ekle" value={note} onChange={(e) => setNote(e.target.value)} maxLength={500} />
           ) : null}
           {sel.length ? (
-            <button type="button" className="fd-cta" data-testid="fd-share-send" disabled={busy} onClick={() => void send()}>
-              {busy ? "Gönderiliyor…" : sel.length > 1 ? `Gönder (${sel.length})` : "Gönder"}
+            <button type="button" className="fd-cta" data-testid="fd-share-send" onClick={send}>
+              {sel.length > 1 ? `Gönder (${sel.length})` : "Gönder"}
             </button>
           ) : null}
           <div className="fd-shs">
