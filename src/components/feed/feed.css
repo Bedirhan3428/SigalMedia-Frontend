@@ -69,7 +69,9 @@
 .fd-root .fd-vplay span{width:60px;height:60px;border-radius:50%;background:rgba(9,9,11,.62);border:1px solid rgba(255,255,255,.35);display:grid;place-items:center;backdrop-filter:blur(4px)}
 .fd-root .fd-vplay svg{width:26px;height:26px;fill:#fff;stroke:#fff;stroke-width:1}
 .fd-root .fd-playing .fd-vplay span{opacity:0;transition:opacity .2s}
-.fd-root .fd-playing .fd-vplay:hover span,.fd-root .fd-playing .fd-vplay:focus-visible span{opacity:1}
+@media (hover:hover) and (pointer:fine){.fd-root .fd-playing .fd-vplay:hover span{opacity:1}}
+.fd-root .fd-playing .fd-vplay:focus-visible span{opacity:1}
+.fd-root .fd-playing .fd-vplay span{pointer-events:none}
 .fd-root .fd-vdur{position:absolute;right:10px;bottom:12px;font-size:12px;font-weight:600;padding:2px 8px;border-radius:999px;background:rgba(9,9,11,.7)}
 .fd-root .fd-prog{position:absolute;left:0;right:0;bottom:0;height:3px;background:rgba(255,255,255,.2)}
 .fd-root .fd-prog i{display:block;height:100%;width:34%;background:var(--ac);animation:fd-vp 14s linear infinite paused}
