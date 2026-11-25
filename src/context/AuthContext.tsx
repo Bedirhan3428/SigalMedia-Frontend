@@ -43,6 +43,9 @@ function AuthNavigationGuard({
   useEffect(() => {
     if (loading) return;
 
+    // Yasal sayfalar (Kullanım Şartları, Gizlilik...) oturumsuz da açılır
+    if (pathname.startsWith("/legal")) return;
+
     const isAuthRoute = pathname === "/login" || pathname.startsWith("/auth");
     const isOnboardingRoute = pathname === "/onboarding";
 

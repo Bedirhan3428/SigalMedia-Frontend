@@ -2,6 +2,7 @@
 import type { Metadata } from "next";
 import { Suspense } from "react";
 import { connection } from "next/server";
+import { FALLBACK_ORIGIN } from "@/lib/config/site";
 
 interface PublicProfilePreview {
   uid: string;
@@ -81,22 +82,22 @@ export async function generateMetadata({
   const { id } = await params;
   const profile = await fetchProfileViaRest(id);
   const appUrl = (
-    process.env.NEXT_PUBLIC_APP_URL || "https://sigalmedia.com.tr"
+    process.env.NEXT_PUBLIC_APP_URL || FALLBACK_ORIGIN
   ).trim();
   const metadataBase = new URL(appUrl);
 
   if (!profile) {
     return {
       metadataBase,
-      title: "Kullanıcı Profili | SigalMedia",
-      description: "SigalMedia kullanıcı profili.",
+      title: "Kullanıcı Profili",
+      description: "Shovrum kullanıcı profili.",
     };
   }
 
   const title = `${profile.displayName} (@${profile.username})`;
   const description = profile.bio
     ? `${profile.bio}`
-    : `${profile.displayName} (@${profile.username}) • SigalMedia`;
+    : `${profile.displayName} (@${profile.username}) • Shovrum`;
   const profileUrl = `${appUrl}/profile/${profile.uid}`;
   const hasHttpPhoto =
     Boolean(profile.photoURL) && /^https?:\/\//i.test(profile.photoURL);
@@ -106,7 +107,7 @@ export async function generateMetadata({
 
   return {
     metadataBase,
-    title: `${title} | SigalMedia`,
+    title,
     description,
     alternates: {
       canonical: profileUrl,
@@ -115,7 +116,7 @@ export async function generateMetadata({
       title,
       description,
       url: profileUrl,
-      siteName: "SigalMedia",
+      siteName: "Shovrum",
       type: "website",
       images: [
         {

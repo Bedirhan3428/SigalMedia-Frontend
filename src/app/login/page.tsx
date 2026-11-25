@@ -10,6 +10,7 @@ import {
 import { doc, getDoc } from "firebase/firestore";
 import { auth, db, googleProvider } from "@/lib/firebase";
 import { ArrowLeft, Eye, EyeOff, Loader2, Check, X } from "lucide-react";
+import ConsentLine from "@/components/legal/ConsentLine";
 
 type AuthView =
   | "welcome"
@@ -316,6 +317,7 @@ export default function LoginPage() {
                 setPassword("");
                 setView("welcome");
               }}
+              aria-label="Geri"
               className="w-10 h-10 rounded-full bg-zinc-900/90 border border-zinc-800 flex items-center justify-center text-zinc-300 hover:text-white hover:bg-zinc-800 transition-colors btn-press-subtle"
             >
               <ArrowLeft className="w-5 h-5" />
@@ -327,7 +329,7 @@ export default function LoginPage() {
           {view !== "welcome" && (
             <img
               src="/icons/MainLogo.svg"
-              alt="SigalMedia"
+              alt="Shovrum"
               className="w-7 h-7 object-contain opacity-80"
             />
           )}
@@ -340,12 +342,12 @@ export default function LoginPage() {
               <div className="mb-6">
                 <img
                   src="/icons/MainLogo.svg"
-                  alt="SigalMedia Logo"
+                  alt="Shovrum logosu"
                   className="w-16 h-16 object-contain"
                 />
               </div>
               <h1 className="text-3xl sm:text-4xl font-extrabold tracking-tight text-white mb-3">
-                SigalMedia
+                Shovrum
               </h1>
               <p className="text-zinc-400 text-sm leading-relaxed">
                 Sosyal deneyiminizi keşfedin, arkadaşlarınızla bağlantıda kalın.
@@ -416,6 +418,7 @@ export default function LoginPage() {
                 </svg>
                 Google ile Devam Et
               </button>
+              <ConsentLine className="pt-2" />
             </div>
           </div>
         )}
@@ -434,7 +437,7 @@ export default function LoginPage() {
               </h1>
               <p className="text-zinc-400 text-sm mb-6">
                 {view === "login-email"
-                  ? "SigalMedia hesabınıza bağlı e-posta veya kullanıcı adınızı girin."
+                  ? "Shovrum hesabınıza bağlı e-posta veya kullanıcı adınızı girin."
                   : "Yeni hesap oluşturmak için e-posta adresinizi yazın."}
               </p>
 
@@ -516,6 +519,7 @@ export default function LoginPage() {
                 </svg>
                 Google ile Devam Et
               </button>
+              {view === "register-email" && <ConsentLine className="pt-2" />}
             </div>
           </form>
         )}
@@ -612,6 +616,7 @@ export default function LoginPage() {
                   "Hesap Oluştur"
                 )}
               </button>
+              {view === "register-password" && <ConsentLine className="pt-3" />}
             </div>
           </form>
         )}

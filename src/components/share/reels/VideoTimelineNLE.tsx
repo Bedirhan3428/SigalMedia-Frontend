@@ -395,7 +395,7 @@ function VideoTimelineNLE({
     >
       {/* 1. Üst Oynatma, Zaman Sayacı, Geri Al / İleri Al ve Ölçek (PPS Zoom) Satırı */}
       <div
-        className="flex items-center justify-between px-4 pb-1 shrink-0"
+        className="flex items-center justify-between gap-2 px-4 pb-1 shrink-0"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-center gap-2">
@@ -430,7 +430,7 @@ function VideoTimelineNLE({
               setPps((p) => Math.max(40, p - 10));
             }}
             aria-label="Uzaklaştır"
-            className="max-[359px]:hidden w-11 h-11 min-[1024px]:w-9 min-[1024px]:h-9 rounded-md bg-[var(--ed-bg3,#232932)] hover:bg-[var(--ed-line,#2a303a)] active:scale-90 transition-all flex items-center justify-center text-[var(--ed-tx,#e8ecf1)]"
+            className="max-[399px]:hidden w-11 h-11 min-[1024px]:w-9 min-[1024px]:h-9 rounded-md bg-[var(--ed-bg3,#232932)] hover:bg-[var(--ed-line,#2a303a)] active:scale-90 transition-all flex items-center justify-center text-[var(--ed-tx,#e8ecf1)]"
           >
             <ZoomOut className="w-3.5 h-3.5" />
           </button>
@@ -441,7 +441,7 @@ function VideoTimelineNLE({
               setPps((p) => Math.min(100, p + 10));
             }}
             aria-label="Yakınlaştır"
-            className="max-[359px]:hidden w-11 h-11 min-[1024px]:w-9 min-[1024px]:h-9 rounded-md bg-[var(--ed-bg3,#232932)] hover:bg-[var(--ed-line,#2a303a)] active:scale-90 transition-all flex items-center justify-center text-[var(--ed-tx,#e8ecf1)]"
+            className="max-[399px]:hidden w-11 h-11 min-[1024px]:w-9 min-[1024px]:h-9 rounded-md bg-[var(--ed-bg3,#232932)] hover:bg-[var(--ed-line,#2a303a)] active:scale-90 transition-all flex items-center justify-center text-[var(--ed-tx,#e8ecf1)]"
           >
             <ZoomIn className="w-3.5 h-3.5" />
           </button>

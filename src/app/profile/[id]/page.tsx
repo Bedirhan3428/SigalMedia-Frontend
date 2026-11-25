@@ -1,6 +1,7 @@
 "use client";
 
 // [START] NexusAI
+import Link from "next/link";
 import { useState, useEffect } from "react";
 import { useParams, useRouter } from "next/navigation";
 import {
@@ -309,6 +310,13 @@ export default function VisitedProfilePage() {
           <h1 className="text-base font-bold text-white">
             Bu profile ulaşılamıyor
           </h1>
+          <p className="mt-1 text-sm text-zinc-500">Bu hesap bulunamadı, gizli veya erişime kapalı olabilir.</p>
+          <Link
+            href="/"
+            className="mt-5 h-11 px-5 rounded-2xl bg-white hover:bg-zinc-200 text-black font-semibold text-sm transition-colors flex items-center justify-center btn-press"
+          >
+            Ana sayfaya dön
+          </Link>
         </main>
 
         <BottomNav />

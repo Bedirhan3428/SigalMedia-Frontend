@@ -15,6 +15,10 @@ import {
   Check,
   // [START] CREATED BY Umut
   MessageSquare,
+  FileText,
+  ShieldCheck,
+  Users,
+  LifeBuoy,
   // [END] CREATED BY Umut
 } from "lucide-react";
 import { useAuth } from "@/context/AuthContext";
@@ -23,6 +27,7 @@ import {
   getBlockedUsers,
   getFollowRequests,
 } from "@/services/privacyService";
+import { SUPPORT_MAILTO } from "@/lib/config/site";
 
 export default function SettingsPage() {
   const [mounted, setMounted] = useState(false);
@@ -165,6 +170,7 @@ export default function SettingsPage() {
               <button
                 type="button"
                 role="switch"
+                aria-label="Gizli Hesap"
                 aria-checked={isPrivate}
                 disabled={togglingPrivacy}
                 onClick={handleTogglePrivacy}
@@ -234,7 +240,43 @@ export default function SettingsPage() {
           </div>
         </section>
 
-        {/* Bölüm 3: Oturum */}
+        {/* Bölüm 3: Hakkında */}
+        <section className="space-y-2">
+          <h2 className="px-1 text-xs font-semibold uppercase tracking-wider text-zinc-500">
+            Hakkında
+          </h2>
+          <div className="bg-zinc-900/60 border border-zinc-900 rounded-2xl overflow-hidden divide-y divide-zinc-900">
+            {[
+              { href: "/legal/kullanim-sartlari", label: "Kullanım Şartları", Icon: FileText },
+              { href: "/legal/gizlilik", label: "Gizlilik ve KVKK", Icon: ShieldCheck },
+              { href: "/legal/topluluk-kurallari", label: "Topluluk Kuralları", Icon: Users },
+            ].map(({ href, label, Icon }) => (
+              <Link
+                key={href}
+                href={href}
+                className="w-full flex items-center justify-between px-4 py-3.5 hover:bg-zinc-900 transition-colors text-sm font-medium text-zinc-100 btn-press-subtle"
+              >
+                <div className="flex items-center gap-3">
+                  <Icon className="w-5 h-5 text-zinc-400" />
+                  <span>{label}</span>
+                </div>
+                <ChevronRight className="w-4 h-4 text-zinc-500" />
+              </Link>
+            ))}
+            <a
+              href={SUPPORT_MAILTO}
+              className="w-full flex items-center justify-between px-4 py-3.5 hover:bg-zinc-900 transition-colors text-sm font-medium text-zinc-100 btn-press-subtle"
+            >
+              <div className="flex items-center gap-3">
+                <LifeBuoy className="w-5 h-5 text-zinc-400" />
+                <span>Yardım</span>
+              </div>
+              <ChevronRight className="w-4 h-4 text-zinc-500" />
+            </a>
+          </div>
+        </section>
+
+        {/* Bölüm 4: Oturum */}
         <section className="space-y-2">
           <h2 className="px-1 text-xs font-semibold uppercase tracking-wider text-zinc-500">
             Oturum

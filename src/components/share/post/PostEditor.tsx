@@ -86,7 +86,7 @@ const HOLD_MS = 280;
 const GRID_HIDE_MS = 700;
 
 const iconBtn =
-  "min-w-11 h-11 rounded-full flex items-center justify-center text-white bg-white/10 active:scale-90 transition-transform disabled:opacity-30";
+  "min-w-10 h-10 min-[400px]:min-w-11 min-[400px]:h-11 rounded-full flex items-center justify-center text-white bg-white/10 active:scale-90 transition-transform disabled:opacity-30";
 
 export default function PostEditor({ engine, canvas, isPublishing, onPublish, onLayout }: PostEditorProps) {
   const [step, setStepState] = useState<Step>(() => stepByEngine.get(engine) ?? "crop");
@@ -422,10 +422,10 @@ export default function PostEditor({ engine, canvas, isPublishing, onPublish, on
                 <ChevronLeft className="w-5 h-5" />
               </button>
             )}
-            <span className="text-sm font-bold text-white truncate">{step === "crop" ? "Kırp" : "Düzenle"}</span>
+            <span className="text-sm font-bold text-white whitespace-nowrap">{step === "crop" ? "Kırp" : "Düzenle"}</span>
           </div>
 
-          <div className="flex items-center gap-1.5 shrink-0">
+          <div className="flex items-center gap-1 min-[400px]:gap-1.5 shrink-0">
             {step === "edit" && (
               <>
                 <button

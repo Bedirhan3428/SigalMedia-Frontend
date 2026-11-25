@@ -12,7 +12,7 @@ const COOLDOWN_SECONDS = 60; // 60 saniye tekrar gönderim kilidi
 
 function VerifyEmailContent() {
   const router = useRouter();
-  const { user, profile, refreshProfile } = useAuth();
+  const { user, profile, loading: authLoading, refreshProfile } = useAuth();
 
   const [digits, setDigits] = useState<string[]>(["", "", "", ""]);
   const inputRefs = useRef<(HTMLInputElement | null)[]>([]);
@@ -29,6 +29,7 @@ function VerifyEmailContent() {
   // 1. Sayfa Açılışı: SessionStorage okuma ve Durum Tespiti (Asla otomatik istek atmaz)
   useEffect(() => {
     if (typeof window === "undefined") return;
+    if (authLoading) return;
 
     const savedEmail =
       sessionStorage.getItem("verify_email") ||
@@ -36,6 +37,12 @@ function VerifyEmailContent() {
       auth.currentUser?.email ||
       user?.email ||
       "";
+
+    // A-06: bekleyen e-posta ve oturum yoksa doğrulanacak bir şey yok -> giriş sayfası
+    if (!savedEmail) {
+      router.replace("/login");
+      return;
+    }
 
     const expiresAtStr = sessionStorage.getItem("code_expires_at");
     const lastSentStr = sessionStorage.getItem("last_code_sent");
@@ -79,7 +86,7 @@ function VerifyEmailContent() {
       setPendingEmail(savedEmail);
     }
     setStatus("expired");
-  }, [user]);
+  }, [user, authLoading, router]);
 
   // 2. Canlı Zamanlayıcı (F5 ve Otomatik Durum B Geçişi)
   useEffect(() => {
