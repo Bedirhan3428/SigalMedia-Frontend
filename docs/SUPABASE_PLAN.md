@@ -8,6 +8,13 @@ Owner decisions baked in:
 - Feed algorithm stays simple: no ranking, no personalization.
 - Frontend-only rule stays: all calls hide behind the existing service layers (thin adapters).
 
+## 0. Cost policy and portability (owner decision 2026-11-25, overrides later sections)
+
+- **No paid Supabase plan.** The beta runs on the Supabase Free tier. Wherever this document says "Pro before launch", read "Free for the beta". If the beta goes well we move to **our own servers on Oracle** (own Postgres etc.), not to Supabase Pro.
+- Free tier facts to respect: ~500 MB database (media is on R2, so rows only), ~200 concurrent Realtime connections, project pauses only after ~7 days without requests (an active beta keeps it awake), no PITR — take a `pg_dump` before each cutover phase and weekly during the beta.
+- **Portability first:** keep business logic in plain Postgres (tables, RLS, SQL RPCs, triggers) and in **Next.js API routes on Vercel**, not in Supabase-only features. Concretely: `send-push` and `r2-reaper` become Next route handlers (`/api/push/send` called by a Postgres trigger via `pg_net` or a Database Webhook with a shared secret; `/api/media/reap` on a daily Vercel Cron), not Edge Functions. Supabase Auth (GoTrue) and Realtime are open source, so the Oracle exit path is either self-hosting Supabase on an Oracle VM (no app changes) or Postgres + GoTrue + a small websocket service behind the same service-layer seams.
+- Avoid: Supabase Storage, Edge Functions, Vault-only secrets, and dashboard-only configuration that isn't captured in `supabase/` files.
+
 ## 1. Inventory: Firebase feature to Supabase equivalent
 
 | Today (Firebase / local) | Supabase / R2 equivalent |
