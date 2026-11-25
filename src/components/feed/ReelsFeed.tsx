@@ -1,6 +1,7 @@
 "use client";
 import "./feed.css";
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useRouter } from "next/navigation";
 import { useAuth } from "@/context/AuthContext";
 import { feedService } from "@/lib/feed/feedService";
 import type { Post } from "@/lib/feed/types";
@@ -13,6 +14,7 @@ const isReel = (p: Post | undefined): p is Post => !!p && p.type === "video" && 
 export function ReelsFeed() {
   const { user } = useAuth();
   const uid = user?.uid ?? "guest";
+  const router = useRouter();
   const [items, setItems] = useState<Post[]>([]);
   const [cursor, setCursor] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -33,6 +35,8 @@ export function ReelsFeed() {
       // Derin bağlantı: /reels?id=<gönderi> bu reelden başlar.
       const id = first ? new URLSearchParams(window.location.search).get("id") : null;
       const target = id ? await feedService.getPost(id).catch(() => undefined) : undefined;
+      // Reels olmayan bir bağlantı (fotoğraf/anket/yanıt) ana akışta açılır; bulunamazsa ana akış uyarır.
+      if (id && !isReel(target)) { router.replace(`/?p=${encodeURIComponent(id)}`); return; }
       setItems((prev) => {
         const base = first ? (isReel(target) ? [target] : []) : prev;
         const seen = new Set(base.map((p) => p.id));
@@ -47,7 +51,7 @@ export function ReelsFeed() {
       loadingRef.current = false;
       setLoading(false);
     }
-  }, []);
+  }, [router]);
 
   // Rota önbellekte (gizli) tutulup yeniden gösterilince ya da liste baştan yüklenince scroll-snap önceki öğeye yeniden yaslanabilir; her ilk yüklemede en üstten başla.
   useLayoutEffect(() => { if (box.current) box.current.scrollTop = 0; }, [gen]);

@@ -73,6 +73,7 @@ export function buildSeedPosts(): Map<string, SeedMeta> {
   for (const s of SEEDS) {
     const base = {
       id: s.id,
+      kind: "post" as const,
       authorId: s.authorId,
       createdAt: ago(s.min),
       caption: s.caption,

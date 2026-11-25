@@ -328,6 +328,8 @@ export default function VisitedProfilePage() {
 
   // Izgara karosu: eski biçimli Firestore belgesini akış gönderisine çevirerek (firestoreSource eşleyicisi) detay görünümünü açar.
   const openDetail = (post: Post) => {
+    // Reels türü gönderi gönderi bileşeninde çizilmez: Reels akışında o reelden açılır.
+    if (post.type === "reels") { router.push(`/reels?id=${encodeURIComponent(post.id)}`); return; }
     const list = tabPosts.flatMap((p) => {
       const fp = feedService.adoptLegacy(p.id, p as unknown as Record<string, unknown>);
       return fp ? [fp] : [];

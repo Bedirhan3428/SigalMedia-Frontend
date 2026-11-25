@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { Suspense, useState, useEffect } from "react";
 import Link from "next/link";
 import { useAuth } from "@/context/AuthContext";
 import { Plus, User as UserIcon } from "lucide-react";
@@ -128,7 +128,9 @@ export default function HomePage() {
 
       {/* Ana İçerik / Akış Alanı */}
       <main className="flex-1 max-w-md w-full mx-auto min-w-0">
-        <FeedList />
+        <Suspense fallback={null}>
+          <FeedList />
+        </Suspense>
       </main>
 
       {/* Alt Navigasyon Barı */}

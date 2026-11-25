@@ -66,6 +66,15 @@ function Inner({ post: postProp, postId, variant = "feed", showReplies = true, o
   const live = useMemo(() => (base ? resolve(base) : null), [base, resolve, version]);
 
   if (base === undefined && wantId) return <DetailSkeleton />;
+  if (live?.kind === "reels") {
+    // Güvenlik ağı: Reels türü gönderi gönderi bileşeninde çizilmez; Reels akışına bağlantı gösterilir.
+    return (
+      <div className="fd-empty" data-testid="fd-reelsonly">
+        Bu bir Reels.{" "}
+        <a className="fd-ghost" style={{ padding: "0 14px", display: "inline-flex", alignItems: "center" }} href={`/reels?id=${encodeURIComponent(live.id)}`}>Reels&apos;te aç</a>
+      </div>
+    );
+  }
   if (!live) {
     return (
       <div className="fd-empty" data-testid="fd-notfound">

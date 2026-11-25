@@ -1,6 +1,7 @@
 "use client";
 import "./feed.css";
 import { useCallback, useEffect, useRef, useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
 import { useAuth } from "@/context/AuthContext";
 import { feedService } from "@/lib/feed/feedService";
 import type { Post } from "@/lib/feed/types";
@@ -36,6 +37,12 @@ function FeedListBody({ refreshRef }: { refreshRef: React.MutableRefObject<() =>
   const { user } = useAuth();
   const uid = user?.uid ?? "guest";
   const { openChain, openPoll, toast } = useFeedActions();
+  const router = useRouter();
+  const pinId = useSearchParams().get("p");
+  /** /?p=<id>: o gönderi akışın en üstüne sabitlenir, akış altından normal devam eder (kopya yok). */
+  const [pinnedRaw, setPinned] = useState<Post | null>(null);
+  const [pinDone, setPinDone] = useState<string | null>(null);
+  const pinned = pinId ? pinnedRaw : null;
 
   const [items, setItems] = useState<Post[]>([]);
   const [cursor, setCursor] = useState<string | null>(null);
@@ -78,6 +85,27 @@ function FeedListBody({ refreshRef }: { refreshRef: React.MutableRefObject<() =>
     void loadMore(true);
     // yalnızca kullanıcı değişince yeniden yükle
   }, [uid, loadMore]);
+
+  // Bağlantıyla gelen gönderi: Reels türüyse Reels akışına, bulunamazsa uyarıyla normal akışa.
+  useEffect(() => {
+    if (!pinId) return;
+    let off = false;
+    void feedService.getPost(pinId).then(async (p) => {
+      if (off) return;
+      if (!p) { setPinned(null); setPinDone(pinId); toast("Gönderi bulunamadı"); router.replace("/"); return; }
+      if (p.kind === "reels") { router.replace(`/reels?id=${encodeURIComponent(p.id)}`); return; }
+      // Yanıt ise zincirin kökü sabitlenir (yanıtlar akışta tek kart olmaz).
+      const root = p.replyTo ? await feedService.getPost(p.replyTo.rootId) : p;
+      if (off) return;
+      if (!root || root.kind === "reels") { setPinned(null); setPinDone(pinId); toast("Gönderi bulunamadı"); router.replace("/"); return; }
+      setPinned(root);
+      setPinDone(pinId);
+      window.scrollTo(0, 0);
+    });
+    return () => { off = true; };
+    // toast/router kararlıdır; yalnızca bağlantı değişince
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pinId]);
 
   // Sonsuz kaydırma
   useEffect(() => {
@@ -139,7 +167,9 @@ function FeedListBody({ refreshRef }: { refreshRef: React.MutableRefObject<() =>
   return (
     <>
       <div role="feed" aria-label="Gönderi akışı" aria-busy={loading}>
-        {items.map((post) => <FeedPost key={post.id} post={post} />)}
+        {pinId && pinDone !== pinId ? <Skeleton /> : null}
+        {pinned ? <FeedPost key={pinned.id} post={pinned} /> : null}
+        {items.filter((p) => p.id !== pinned?.id).map((post) => <FeedPost key={post.id} post={post} />)}
         {loading ? <><Skeleton /><Skeleton /></> : null}
       </div>
       {error ? (
