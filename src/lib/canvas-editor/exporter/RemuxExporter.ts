@@ -19,8 +19,13 @@ import type { ExportStats, ExportVideoOptions } from './VideoExporter';
 const OUTPUT_FPS = 30;
 const SIZE_1080P = { width: 1080, height: 1920 };
 const SIZE_720P = { width: 720, height: 1280 };
-/** Bundan yüksek bitrate'li kaynak kopyalanmaz (yükleme boyutu); normal yol 7 Mbps'e kodlar */
-const MAX_REMUX_BITRATE = 20_000_000;
+/** WP-37: düzenlemesiz kaynak bu bitrate'e kadar olduğu gibi yayınlanır; üstü normal yolda ~5 Mbps'e kodlanır (yükleme boyutu) */
+const MAX_REMUX_BITRATE = 8_000_000;
+/** Açık boyut/çözünürlük istenirse (indirme vb.) eski katı kurallar: tam boyut, 30 fps, 20 Mbps */
+const MAX_REMUX_BITRATE_STRICT = 20_000_000;
+/** WP-37: düzenlemesiz kaynak: kısa kenar en çok 1080, uzun kenar en çok 2400 (örn. 1080x2400); fazlası kodlanır */
+const MAX_SHORT_SIDE = 1080;
+const MAX_LONG_SIDE = 2400;
 const TOL_US = 1000;
 
 interface ClipPlan {
@@ -31,6 +36,16 @@ interface ClipPlan {
 interface SourceData {
   video: DemuxedVideoTrack;
   audio: DemuxedAudioTrack | null;
+  /** Kapsayıcıda herhangi bir ses izi var mı (AAC olmasa da) */
+  hasAudioTrack: boolean;
+}
+
+/** WP-37: kısa yolun kaynak kısıtlarını belirleyen bağlam */
+interface RunCtx {
+  /** Açık width/height/resolution: eski katı boyut/fps/bitrate kuralları */
+  explicit: boolean;
+  mode: string;
+  logical: { width: number; height: number };
 }
 
 interface MuxOp {
@@ -244,6 +259,10 @@ export class RemuxExporter {
     return null;
   }
 
+  private static isExplicit(options?: ExportVideoOptions): boolean {
+    return Boolean((options?.width && options?.height) || options?.resolution === '720p');
+  }
+
   private static targetSize(options?: ExportVideoOptions): { width: number; height: number } {
     if (options?.width && options?.height) return { width: options.width & ~1, height: options.height & ~1 };
     return options?.resolution === '720p' ? SIZE_720P : SIZE_1080P;
@@ -320,10 +339,33 @@ export class RemuxExporter {
     if (plans.some((p) => (p.clip.muted || p.clip.volume <= 0) !== silent0)) return 'mixed-mute';
     if (total > 60.05) return 'too-long';
 
-    const target = this.targetSize(options);
-    const logical = engine.getLogicalSize();
-    if (Math.abs(logical.width / logical.height - target.width / target.height) > 0.005) return 'canvas-aspect';
+    // WP-37: boyut/en-boy denetimi kaynak çözüldükten sonra run() içinde yapılır (açık boyut yoksa kaynak boyutu korunur)
+    if (this.isExplicit(options)) {
+      const target = this.targetSize(options);
+      const logical = engine.getLogicalSize();
+      if (Math.abs(logical.width / logical.height - target.width / target.height) > 0.005) return 'canvas-aspect';
+    }
     return plans;
+  }
+
+  /**
+   * WP-37: zaman çizelgesi 'düz' (overlay/filtre/ayar/müzik/dönüşüm/kırpma/hız yok) ve tüm klipler aynı en-boy
+   * oranındaysa kaynağın görüntü oranını (w/h) döndürür; değilse null. Normal yol bunu, 9:16 olmayan düzenlemesiz
+   * kaynağı 1080x1920'ye dolgulayıp büyütmeden kendi oranında kodlamak için kullanır.
+   */
+  public static plainSourceAspect(engine: CanvasEngine, options?: ExportVideoOptions): number | null {
+    if (this.isExplicit(options)) return null;
+    let plans: ClipPlan[] | string;
+    try {
+      plans = this.planClips(engine, options);
+    } catch {
+      return null;
+    }
+    if (typeof plans === 'string') return null;
+    const aspect = (m: EditorMedia) => (m.width || 0) / (m.height || 1);
+    const a0 = aspect(plans[0].media);
+    if (!(a0 > 0) || plans.some((p) => Math.abs(aspect(p.media) - a0) > 0.005)) return null;
+    return a0;
   }
 
   private static async readBuffer(media: EditorMedia, signal?: AbortSignal): Promise<ArrayBuffer | null> {
@@ -395,16 +437,17 @@ export class RemuxExporter {
     }
     if (typeof plans === 'string') return this.skip(plans);
     try {
-      return await this.run(plans, options, t0);
+      const ctx: RunCtx = { explicit: this.isExplicit(options), mode: engine.getShareMode(), logical: engine.getLogicalSize() };
+      return await this.run(plans, options, t0, ctx);
     } catch (err) {
       if (err instanceof DOMException && err.name === 'AbortError') throw err;
       return this.skip('error: ' + (err instanceof Error ? err.message : String(err)).slice(0, 120));
     }
   }
 
-  private static async run(plans: ClipPlan[], options: ExportVideoOptions | undefined, t0: number): Promise<Blob | null> {
+  private static async run(plans: ClipPlan[], options: ExportVideoOptions | undefined, t0: number, ctx: RunCtx): Promise<Blob | null> {
     const signal = options?.signal;
-    const audible = !(plans[0].clip.muted || plans[0].clip.volume <= 0);
+    let audible = !(plans[0].clip.muted || plans[0].clip.volume <= 0);
 
     // 1. Kaynakları oku ve sök (medya başına bir kez)
     const cache = new Map<EditorMedia, SourceData | null>();
@@ -414,22 +457,41 @@ export class RemuxExporter {
       if (signal?.aborted) throw abortError();
       const video = buf ? FastDemuxer.demux(buf) : null;
       const audio = buf && audible ? FastDemuxer.demuxAudio(buf) : null;
-      cache.set(p.media, video ? { video, audio } : null);
+      const hasAudioTrack = buf && audible ? FastDemuxer.hasAudioTrack(buf) : false;
+      cache.set(p.media, video ? { video, audio, hasAudioTrack } : null);
     }
     const sources = plans.map((p) => cache.get(p.media) ?? null);
     if (sources.some((s) => !s)) return this.skip('demux');
     const src0 = sources[0] as SourceData;
     const v0 = src0.video;
     if (v0.codecFamily !== 'avc') return this.skip('codec ' + v0.codec);
-    const target = this.targetSize(options);
     const rot = ((v0.rotation % 360) + 360) % 360;
     const swapped = rot === 90 || rot === 270;
     const dispW = swapped ? v0.codedHeight : v0.codedWidth;
     const dispH = swapped ? v0.codedWidth : v0.codedHeight;
-    if (dispW !== target.width || dispH !== target.height) return this.skip(`size ${dispW}x${dispH}`);
+    if (ctx.explicit) {
+      const target = this.targetSize(options);
+      if (dispW !== target.width || dispH !== target.height) return this.skip(`size ${dispW}x${dispH}`);
+    } else {
+      // WP-37: düzenlemesiz kaynak: oynatıcılar 9:16 olmayanı object-cover / bulanık zeminle gösterir; yalnızca çok büyükler kodlanır
+      if (Math.min(dispW, dispH) > MAX_SHORT_SIDE || Math.max(dispW, dispH) > MAX_LONG_SIDE) return this.skip(`size ${dispW}x${dispH}`);
+      // Gönderi: tuval oranı (1:1, 4:5...) bir düzenlemedir; kaynak oranı tuvalle aynı değilse kadraj gerekir
+      if (ctx.mode === 'post' && Math.abs(ctx.logical.width / ctx.logical.height - dispW / dispH) > 0.005) return this.skip('canvas-aspect');
+    }
+    // Ses: kaynakta hiç ses izi yoksa çıktı da sessiz olur; AAC dışı ses izi varsa normal yol (yeniden kodlar)
+    if (audible) {
+      const all = sources as SourceData[];
+      const withAudio = all.filter((s) => s.audio).length;
+      if (withAudio === 0) {
+        if (all.some((s) => s.hasAudioTrack)) return this.skip('audio-not-aac');
+        audible = false;
+      } else if (withAudio !== all.length) {
+        return this.skip(all.some((s) => !s.audio && s.hasAudioTrack) ? 'audio-not-aac' : 'mixed-audio');
+      }
+    }
     const a0 = src0.audio;
-    if (audible && !a0) return this.skip('audio-not-aac');
 
+    let srcFrameUs = 1e6 / OUTPUT_FPS;
     for (const s of sources as SourceData[]) {
       const v = s.video;
       if (v.codec !== v0.codec || !sameBytes(v.description, v0.description) || v.codedWidth !== v0.codedWidth || v.codedHeight !== v0.codedHeight || v.rotation !== v0.rotation) {
@@ -438,9 +500,13 @@ export class RemuxExporter {
       const n = v.samples.length;
       if (n < 2) return this.skip('few-samples');
       const avg = (v.samples[n - 1].dtsUs - v.samples[0].dtsUs) / (n - 1);
-      if (Math.abs(1e6 / avg - OUTPUT_FPS) > 0.1) return this.skip(`fps ${(1e6 / avg).toFixed(2)}`);
+      if (avg <= 0) return this.skip('timestamps');
+      const fps = 1e6 / avg;
+      // WP-37: sabit ya da değişken kare hızı (kaynak zaman damgaları korunur); katı modda eski 30 fps kuralı
+      if (ctx.explicit ? Math.abs(fps - OUTPUT_FPS) > 0.1 : fps < 5 || fps > 61) return this.skip(`fps ${fps.toFixed(2)}`);
+      if (s === sources[0]) srcFrameUs = avg;
       const bytes = v.samples.reduce((acc, x) => acc + x.size, 0);
-      if ((bytes * 8) / Math.max(0.1, v.durationSec) > MAX_REMUX_BITRATE) return this.skip('bitrate');
+      if ((bytes * 8) / Math.max(0.1, v.durationSec) > (ctx.explicit ? MAX_REMUX_BITRATE_STRICT : MAX_REMUX_BITRATE)) return this.skip('bitrate');
       if (audible) {
         const a = s.audio;
         if (!a || a.codec !== a0!.codec || a.sampleRate !== a0!.sampleRate || a.numberOfChannels !== a0!.numberOfChannels || !sameBytes(a.description, a0!.description)) {
@@ -459,7 +525,7 @@ export class RemuxExporter {
     let audioSkipUs = 0;
     let audioEnd = 0;
     let firstKey: DemuxedSample | null = null;
-    const frameDur = 1e6 / OUTPUT_FPS;
+    const frameDur = srcFrameUs;
 
     for (let ci = 0; ci < plans.length; ci++) {
       const { clip } = plans[ci];

@@ -638,6 +638,24 @@ export class FastDemuxer {
     return { oti, asc: esds.subarray(dsi.start, dsi.start + dsi.size) };
   }
 
+  /** WP-37: kapsayıcıda (codec fark etmeksizin) ses izi var mı? Remux, ses izi hiç yoksa çıktıyı sessiz bırakır. */
+  public static hasAudioTrack(buffer: ArrayBuffer): boolean {
+    try {
+      const moov = this.readMoov(buffer);
+      if (!moov) return false;
+      const { view, traks } = moov;
+      for (const trak of traks) {
+        const mdia = this.findBox(view, trak.contentOffset, trak.offset + trak.size, 'mdia');
+        if (!mdia) continue;
+        const hdlr = this.findBox(view, mdia.contentOffset, mdia.offset + mdia.size, 'hdlr');
+        if (hdlr && hdlr.contentSize >= 12 && this.readFourCC(view, hdlr.contentOffset + 8) === 'soun') return true;
+      }
+      return false;
+    } catch {
+      return false;
+    }
+  }
+
   /**
    * İlk AAC (mp4a) ses izini söker. Remux kısa yolu, sesi yeniden kodlamadan kopyalamak için kullanır.
    * AAC dışı ses (mp3, opus, pcm) veya okunamayan esds -> null.

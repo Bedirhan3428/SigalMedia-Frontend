@@ -5,6 +5,7 @@ import { Suspense } from "react";
 import localFont from "next/font/local";
 import { AuthProvider } from "@/context/AuthContext";
 import BackgroundAudioGuard from "@/components/common/BackgroundAudioGuard";
+import PublishProgressPill from "@/components/share/PublishProgressPill";
 import "./globals.css";
 
 const googleSans = localFont({
@@ -75,7 +76,11 @@ export default function RootLayout({
         <BackgroundAudioGuard />
         {/* [START] CyberCore */}
         <Suspense fallback={null}>
-          <AuthProvider>{children}</AuthProvider>
+          <AuthProvider>
+            {children}
+            {/* WP-37: yayın kuyruğu ilerleme hapı (her sayfada) */}
+            <PublishProgressPill />
+          </AuthProvider>
         </Suspense>
         {/* [END] CyberCore */}
       </body>
