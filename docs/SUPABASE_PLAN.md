@@ -69,6 +69,13 @@ Flat chains: `reply_root_id` (top post) and `reply_parent_id` (post answered); `
 
 ## 4. Media on Cloudflare R2
 
+> **Owner decision 2026-11-25 (overrides the public-bucket/CDN delivery below):** all media (posts, Reels, stories, avatars, chat) is read **directly from R2 with presigned GET URLs** — no public bucket, no proxying bytes through our servers. Our server only signs.
+> - One private bucket (`shovrum-media`) with prefixes `posts/`, `avatars/`, `stories/`, `chat/`. No public access, no `r2.dev`.
+> - Signing happens in batch where data is read: feed/reels/profile/chat API responses (Next route handlers calling the RPC with the user's JWT) return rows plus presigned GET URLs for every key the user is allowed to see (RLS decides visibility; private accounts and chat get access control for free).
+> - **Cache-friendly signing:** expiry rounded to fixed windows (e.g. URLs valid until the end of the current 6-hour window + 6 h, signed with the window start as the signing date) so the same key yields the same URL within a window → browser/HTTP cache hits and the `<video>` element doesn't refetch. Client keeps a small key→URL cache and re-requests signatures only when a URL is near expiry or a 403 occurs (refresh + retry once).
+> - Trade-off, accepted for the beta: presigned S3-endpoint URLs are not served from Cloudflare's CDN cache, so every first fetch is an R2 Class B operation (generous free tier) and latency is R2-origin rather than edge. Mitigations: fast-start MP4s, posters as small JPEGs, range requests (R2 supports them), preloading the next reel. If latency hurts later: a Worker on a custom domain that validates our own HMAC token and serves from cache — still no bytes through our app servers.
+> - Uploads stay as below (presigned PUT / multipart), into the same private bucket.
+
 **Buckets / prefixes.** `shovrum-public` (custom domain `media.<domain>` behind Cloudflare CDN, public read): `posts/{uid}/{uuid}.{ext}` (incl. posters, stories) and `avatars/{uid}/{uuid}.{ext}`. `shovrum-private` (no public access): `chat/{conversationId}/{uid}/{uuid}.{ext}`, and optionally private-account media later. Public URL = `NEXT_PUBLIC_MEDIA_BASE_URL + '/' + key` (helper `mediaUrl()`).
 
 **Upload (presign endpoint = Next route handler on Vercel, `POST /api/media/presign`).** Chosen over an Edge Function because it reuses the existing `src/app/api` structure, the AWS SDK v3 S3 presigner runs natively in Node, and it needs no extra deploy target; the cost is that Vercel function time is spent only on tiny signing calls. Flow:
