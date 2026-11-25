@@ -3985,7 +3985,7 @@ export class CanvasEngine {
     );
   }
 
-  public async downloadImage(filename = 'sigalmedia_tasarim.jpg', options?: ExportImageOptions) {
+  public async downloadImage(filename = 'shovrum_tasarim.jpg', options?: ExportImageOptions) {
     const blob = await this.exportImage(options);
     ImageExporter.downloadBlob(blob, filename);
   }

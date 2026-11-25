@@ -38,7 +38,7 @@ export class ImageExporter {
     });
   }
 
-  public static downloadBlob(blob: Blob, filename = 'sigalmedia_tasarim.jpg') {
+  public static downloadBlob(blob: Blob, filename = 'shovrum_tasarim.jpg') {
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;

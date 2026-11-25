@@ -1,6 +1,6 @@
-/* SigalMedia service worker: web push for chat messages. No caching/fetch handling. */
+/* Shovrum service worker: web push for chat messages. No caching/fetch handling. */
 // Bump on every change so a new worker is byte-different and installs. Served with Cache-Control: no-cache (next.config.ts).
-var SW_VERSION = "2026-11-25-wp40";
+var SW_VERSION = "2026-11-25-shovrum";
 self.addEventListener("install", () => self.skipWaiting());
 self.addEventListener("activate", (event) => event.waitUntil(self.clients.claim()));
 
@@ -138,7 +138,7 @@ self.addEventListener("push", function (event) {
       var lines = (Array.isArray(prev.lines) ? prev.lines : []).concat([data.body || ""]).slice(-MAX_LINES);
       await showStack(self.registration, {
         tag: tag,
-        name: data.title || "SigalMedia",
+        name: data.title || "Shovrum",
         lines: lines,
         count: (prev.count || 0) + 1,
         url: url,
@@ -186,7 +186,7 @@ async function sendReply(n, text) {
     .slice(-MAX_LINES);
   await showStack(self.registration, {
     tag: n.tag,
-    name: d.name || n.title || "SigalMedia",
+    name: d.name || n.title || "Shovrum",
     lines: lines,
     count: d.count || lines.length,
     url: d.url || "/messages",
