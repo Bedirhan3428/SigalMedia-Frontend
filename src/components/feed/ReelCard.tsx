@@ -27,7 +27,6 @@ export const ReelCard = memo(function ReelCard({ post, index, parked = false, ne
   if (live.type !== "video") return null;
 
   const counts = [
-    { id: "like", n: live.likeCount, hint: `${live.likeCount} beğeni` },
     { id: "cmt", n: live.commentCount, hint: `${live.commentCount} yorum` },
     { id: "rep", n: live.replyCount, hint: `${live.replyCount} yanıt` },
   ];
@@ -56,8 +55,8 @@ export const ReelCard = memo(function ReelCard({ post, index, parked = false, ne
       </div>
 
       <div className="fd-rcol" role="group" aria-label="Reels eylemleri">
-        <button type="button" className={`fd-rab fd-like${live.likedByMe ? " fd-on" : ""}`} aria-pressed={live.likedByMe} aria-label="Beğen" aria-describedby={`${uid}-like`} onClick={() => like(live)}>
-          <Icon id="i-heart" />{count("like")}
+        <button type="button" className={`fd-rab fd-like${live.likedByMe ? " fd-on" : ""}`} aria-pressed={live.likedByMe} aria-label={`Beğen, ${live.likeCount} beğeni`} onClick={() => like(live)}>
+          <Icon id="i-heart" />
         </button>
         <button type="button" className="fd-rab" aria-label="Yorum" aria-describedby={`${uid}-cmt`} onClick={() => toast("Yorumlar yakında.")}>
           <Icon id="i-chat" />{count("cmt")}

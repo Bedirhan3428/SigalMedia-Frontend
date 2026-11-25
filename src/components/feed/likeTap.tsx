@@ -46,7 +46,7 @@ export function useDoubleTapLike(post: Post, opts: { allowButton?: string; onDou
 
   const heartNode: ReactNode = heart ? (
     <svg key={heart.n} className="fd-bigheart" data-testid="fd-bigheart" viewBox="0 0 24 24" aria-hidden="true" style={{ left: heart.x, top: heart.y, ["--r" as string]: `${heart.r}deg` }}>
-      <defs><linearGradient id={`fd-hg-${post.id}`} x1="0" y1="0" x2="1" y2="1"><stop offset="0" stopColor="#ff7eb3" /><stop offset=".5" stopColor="#ff3d6e" /><stop offset="1" stopColor="#ff9a3d" /></linearGradient></defs>
+      <defs><linearGradient id={`fd-hg-${post.id}`} x1="0" y1="0" x2="1" y2="1"><stop offset="0" stopColor="#ff4d5e" /><stop offset=".5" stopColor="#ff3040" /><stop offset="1" stopColor="#e0102e" /></linearGradient></defs>
       <path d="M12 20.6l-1.3-1.2C6.1 15.2 3.2 12.6 3.2 9.4 3.2 6.8 5.2 4.8 7.8 4.8c1.6 0 3.2.8 4.2 2 1-1.2 2.6-2 4.2-2 2.6 0 4.6 2 4.6 4.6 0 3.2-2.9 5.8-7.5 10z" fill={`url(#fd-hg-${post.id})`} />
     </svg>
   ) : null;

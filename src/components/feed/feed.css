@@ -24,13 +24,13 @@
 .fd-root .fd-ab{display:inline-flex;align-items:center;justify-content:center;gap:5px;min-height:50px;min-width:46px;padding:0 7px;border:0;background:none;border-radius:12px;color:var(--tx2);font-size:15px}
 .fd-root .fd-ab svg.fd-i{width:28px;height:28px;stroke-width:1.5}
 .fd-root .fd-ab span{font-size:15.5px;font-weight:500}
-.fd-root .fd-save.fd-on{color:var(--tx)}
-.fd-root .fd-save.fd-on svg{fill:var(--tx)}
+.fd-root .fd-ab.fd-save.fd-on{color:var(--tx)}
+.fd-root .fd-ab.fd-save.fd-on svg{fill:var(--tx)}
 .fd-root .fd-pm{flex:none;width:44px;height:44px;margin:-8px -8px -8px 0;display:grid;place-items:center;background:none;border:0;border-radius:12px;color:var(--tx2)}
 .fd-root .fd-pm:hover{background:var(--s3);color:var(--tx)}
 .fd-root .fd-pm svg.fd-i{fill:currentColor;stroke:none;width:24px;height:24px}
 .fd-root .fd-dt{touch-action:manipulation;user-select:none;-webkit-user-select:none}
-.fd-root .fd-bigheart{position:absolute;width:104px;height:104px;margin:-52px 0 0 -52px;stroke:none;pointer-events:none;z-index:3;filter:drop-shadow(0 4px 14px rgba(255,61,110,.45));animation:fd-bh 1.45s cubic-bezier(.25,.8,.35,1) forwards}
+.fd-root .fd-bigheart{position:absolute;width:104px;height:104px;margin:-52px 0 0 -52px;stroke:none;pointer-events:none;z-index:3;filter:drop-shadow(0 4px 14px rgba(255,48,64,.45));animation:fd-bh 1.45s cubic-bezier(.25,.8,.35,1) forwards}
 @keyframes fd-bh{0%{transform:rotate(var(--r,0deg)) scale(.2);opacity:0}14%{transform:rotate(var(--r,0deg)) scale(1.08);opacity:1}22%{transform:rotate(var(--r,0deg)) scale(.96)}30%{transform:rotate(var(--r,0deg)) scale(1);opacity:1}45%{transform:rotate(var(--r,0deg)) translateY(-8px) scale(1);opacity:1}100%{transform:rotate(var(--r,0deg)) translateY(-150px) scale(.75);opacity:0}}
 @media (prefers-reduced-motion:reduce){.fd-root .fd-bigheart{animation:fd-bhr .7s linear forwards}@keyframes fd-bhr{0%{opacity:0}15%{opacity:1}70%{opacity:1}100%{opacity:0}}}
 .fd-root .fd-ml{list-style:none;margin:0;padding:6px 8px 12px}
@@ -43,8 +43,8 @@
 .fd-root .fd-mb{flex:1;min-height:48px;border-radius:12px;border:1px solid var(--line2);background:var(--s2);color:var(--tx);font-size:15px;font-weight:600}
 .fd-root .fd-mb.fd-dng{background:var(--hot);border-color:var(--hot);color:#fff}
 .fd-root .fd-ab:hover{background:var(--s3);color:var(--tx)}
-.fd-root .fd-ab.fd-on{color:var(--hot)}
-.fd-root .fd-ab.fd-on svg{fill:var(--hot)}
+.fd-root .fd-ab.fd-on{color:var(--like)}
+.fd-root .fd-ab.fd-on svg{fill:var(--like)}
 .fd-root .fd-ab.fd-pop svg{animation:fd-pop .35s ease}
 .fd-root .fd-ab.fd-rep{color:var(--ac)}
 .fd-root .fd-sp{flex:1}
@@ -174,7 +174,7 @@
   --bg:#09090b; --s1:#111114; --s2:#18181b; --s3:#27272a; --line:#2f2f34; --line2:#3f3f46;
   --tx:#fafafa; --tx2:#b4b4bd; --tx3:#8e8e99;
   --ac:#a99bff; --ac-d:#6f5cff; --ac-soft:rgba(169,155,255,.15); --on-ac:#12101f;
-  --hot:#ff6b81; --ok:#4ade80;
+  --hot:#ff6b81; --like:#ff3040; --ok:#4ade80;
   --bronz:#c9824a; --bronz2:#7a4520; --gumus:#cfd6e2; --gumus2:#6b7587; --altin:#ffd24a; --altin2:#b07a10;
   font-size:15px; line-height:1.45; color:var(--tx); overflow-x:clip;
 }
@@ -302,9 +302,9 @@
 .fd-root .fd-rcol{position:absolute;right:4px;bottom:calc(var(--rnav) + 10px);z-index:3;display:flex;flex-direction:column;align-items:center;gap:6px}
 .fd-root .fd-rab{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;min-width:52px;min-height:52px;padding:4px 2px;background:none;border:0;border-radius:14px;color:#fff;filter:drop-shadow(0 1px 3px rgba(0,0,0,.6))}
 .fd-root .fd-rab svg.fd-i{width:30px;height:30px;stroke-width:1.6}
-.fd-root .fd-rab.fd-on svg{fill:var(--hot);stroke:var(--hot)}
+.fd-root .fd-rab.fd-on svg{fill:var(--like);stroke:var(--like)}
 .fd-root .fd-rab.fd-save.fd-on svg{fill:#fff;stroke:#fff}
-.fd-root .fd-rab.fd-on{color:var(--hot)}
+.fd-root .fd-rab.fd-on{color:var(--like)}
 .fd-root .fd-rab.fd-save.fd-on{color:#fff}
 .fd-root .fd-rc{font-size:12px;font-weight:600;line-height:1;text-shadow:0 1px 3px rgba(0,0,0,.8);font-variant-numeric:tabular-nums}
 .fd-root .fd-rmore svg.fd-i{transform:rotate(90deg);fill:currentColor;stroke:none}
