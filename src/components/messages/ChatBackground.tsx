@@ -51,12 +51,19 @@ export const CHAT_CSS = `
 .chat-sent{background:linear-gradient(135deg,var(--sent-a),var(--sent-b));color:var(--sent-t)}
 .chat-recv{background:var(--recv-bg);color:var(--recv-t)}
 .chat-typing-dot{animation:chatTypingBounce 1.1s infinite ease-in-out}
+/* Staggered wave. Explicit per-dot rules: the old Tailwind [animation-delay] utilities lose to this unlayered shorthand. */
+.chat-typing-dot:nth-child(1){animation-delay:0s}
+.chat-typing-dot:nth-child(2){animation-delay:.18s}
+.chat-typing-dot:nth-child(3){animation-delay:.36s}
+.chat-seen-in{animation:chatSeenIn 200ms ease-out both}
+@keyframes chatSeenIn{from{opacity:0;transform:translateY(-3px)}to{opacity:1;transform:none}}
+@keyframes chatSeenFade{from{opacity:0}to{opacity:1}}
 @keyframes chatTypingBounce{0%,60%,100%{transform:translateY(0);opacity:.55}30%{transform:translateY(-4px);opacity:1}}
 .chat-typing-in{animation:chatTypingIn 220ms cubic-bezier(.22,1,.36,1) both;transform-origin:left bottom}
 .chat-typing-out{animation:chatTypingOut 200ms ease-in both;transform-origin:left bottom;overflow:hidden;pointer-events:none}
 @keyframes chatTypingIn{from{opacity:0;transform:translateY(8px) scale(.85)}to{opacity:1;transform:none}}
 @keyframes chatTypingOut{from{opacity:1;transform:none;max-height:80px}to{opacity:0;transform:scale(.85);max-height:0;margin-top:0}}
-@media (prefers-reduced-motion: reduce){.chat-typing-in{animation:none!important}.chat-typing-out{display:none}.chat-typing-dot{animation:none}.chat-root *{transition:none!important}.msg-bubble-slide-up{animation:none!important}}
+@media (prefers-reduced-motion: reduce){.chat-seen-in{animation-name:chatSeenFade}.chat-typing-in{animation:none!important}.chat-typing-out{display:none}.chat-typing-dot{animation:none}.chat-root *{transition:none!important}.msg-bubble-slide-up{animation:none!important}}
 `;
 
 export const CHAT_MENU_CSS = `

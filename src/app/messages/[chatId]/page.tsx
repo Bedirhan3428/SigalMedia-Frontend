@@ -41,6 +41,7 @@ import {
   type ChatFeed,
   listenPeerPresence,
   listenPeerTyping,
+  listenPeerChatViewing,
   markChatAsRead,
   sendEncryptedMessage,
   setMessageReaction,
@@ -49,6 +50,8 @@ import {
 } from "@/services/messageService";
 
 import { formatSeenLabel } from "@/lib/chat/seenLabel";
+import { createViewingTracker } from "@/lib/chat/peerViewing";
+import { useChatViewing } from "@/lib/chat/useChatViewing";
 
 const TYPING_HEARTBEAT_MS = 20000; // yazıyor durumu bu aralıkla yenilenir (alıcı 45 sn sonra bayat sayar)
 const TYPING_EXIT_MS = 200;
@@ -56,6 +59,8 @@ const TYPING_EXIT_MS = 200;
 type TestWin = Window & {
   __SIGAL_TEST_TYPING__?: (typing: boolean) => void;
   __SIGAL_TEST_PEER_TYPING__?: { set?: (typing: boolean) => void };
+  // feed(number|null) = sahte chatPresence değeri (gerçek bayatlama mantığı çalışır); staleMs bayatlama süresini kısaltır.
+  __SIGAL_TEST_PEER_VIEWING__?: { feed?: (v: unknown) => void; staleMs?: number };
 };
 
 // Test kancaları yalnızca tarayıcı testlerinde tanımlanır; normal kullanımda etkisizdir.
@@ -301,6 +306,8 @@ export default function ChatRoomPage() {
   const [peerTyping, setPeerTyping] = useState(false);
   // Yazıyor balonu: kapanırken 200 ms çıkış animasyonu için peerTyping'den ayrı tutulur.
   const [typingShown, setTypingShown] = useState(false);
+  // Karşı taraf şu an bu sohbetin içinde mi? null = henüz bilinmiyor (ilk sinyali ya da 2.5 sn zaman aşımını bekler).
+  const [peerViewing, setPeerViewing] = useState<{ chatId: string; value: boolean } | null>(null);
   const [seenNow, setSeenNow] = useState(() => Date.now());
 
   const myUid = profile?.uid ?? bootUid ?? undefined;
@@ -581,6 +588,31 @@ export default function ChatRoomPage() {
     };
   }, [chatId, authedPeerUid, peerProfile?.showOnlineStatus]);
 
+  // Karşı tarafın "bu sohbetin içindeyim" sinyali. Canlı kurallar okumayı reddederse ya da eski istemcide sinyal yoksa
+  // 2.5 sn sonra "içinde değil" sayılır (etiket eskisi gibi görünür).
+  useEffect(() => {
+    if (!chatId || !authedPeerUid) return;
+    const peerUid = authedPeerUid;
+    const hook = (window as TestWin).__SIGAL_TEST_PEER_VIEWING__;
+    const set = (value: boolean) => setPeerViewing({ chatId, value });
+    const fallback = setTimeout(
+      () => setPeerViewing((cur) => (cur && cur.chatId === chatId ? cur : { chatId, value: false })),
+      2500
+    );
+    let off = () => {};
+    if (hook) {
+      const tr = createViewingTracker(set, hook.staleMs);
+      hook.feed = tr.feed;
+      off = tr.dispose;
+    } else off = listenPeerChatViewing(chatId, peerUid, set);
+    return () => {
+      clearTimeout(fallback);
+      off();
+    };
+  }, [chatId, authedPeerUid]);
+  // Ben bu sohbetteyim (açık + görünür): kalp atışı hem RTDB'ye hem service worker'a gider.
+  useChatViewing(chatId, profile?.uid);
+
   // Test kancası: karşı tarafın yazıyor durumunu elle çevirir (yalnızca kanca nesnesi tanımlıysa).
   useEffect(() => {
     const hook = (window as TestWin).__SIGAL_TEST_PEER_TYPING__;
@@ -681,11 +713,14 @@ export default function ChatRoomPage() {
       lastMsg.status === "read" &&
       peerProfile?.readReceipts !== false
   );
+  // Karşı taraf hâlâ sohbetteyken (ya da henüz bilinmiyorken) etiket gösterilmez; çıkınca yumuşakça belirir.
+  const peerInChat = peerViewing && peerViewing.chatId === chatId ? peerViewing.value : null;
+  const seenVisible = showSeen && peerInChat === false;
   useEffect(() => {
-    if (!showSeen) return;
+    if (!seenVisible) return;
     const t = setInterval(() => setSeenNow(Date.now()), 60000);
     return () => clearInterval(t);
-  }, [showSeen, lastMsg?.id]);
+  }, [seenVisible, lastMsg?.id]);
 
   // Tepki çipleri görününce/değişince liste en alttaysa yeniden sabitle (animasyon yok, FLIP'e dokunmaz).
   const reactionSig = displayedMessages
@@ -1263,10 +1298,10 @@ export default function ChatRoomPage() {
                       )}
                     </div>
                   </div>
-                  {showSeen && idx === displayedMessages.length - 1 && (
+                  {seenVisible && idx === displayedMessages.length - 1 && (
                     <div
                       data-testid="seen-label"
-                      className="mt-0.5 pr-1 text-right text-[11px] leading-[14px] text-zinc-500 select-none"
+                      className="chat-seen-in mt-0.5 pr-1 text-right text-[11px] leading-[14px] text-zinc-500 select-none"
                     >
                       {formatSeenLabel(msg.readAt, seenNow)}
                     </div>
@@ -1299,8 +1334,8 @@ export default function ChatRoomPage() {
             >
               <span className="flex items-center gap-[5px] h-[1.35em]">
                 <span className="chat-typing-dot w-[7px] h-[7px] rounded-full bg-[var(--acc)]" />
-                <span className="chat-typing-dot w-[7px] h-[7px] rounded-full bg-[var(--acc)] [animation-delay:150ms]" />
-                <span className="chat-typing-dot w-[7px] h-[7px] rounded-full bg-[var(--acc)] [animation-delay:300ms]" />
+                <span className="chat-typing-dot w-[7px] h-[7px] rounded-full bg-[var(--acc)]" />
+                <span className="chat-typing-dot w-[7px] h-[7px] rounded-full bg-[var(--acc)]" />
               </span>
             </div>
           </div>

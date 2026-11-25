@@ -33,7 +33,9 @@ async function authedPost(path: string, body: unknown): Promise<boolean> {
 }
 
 async function getRegistration(): Promise<ServiceWorkerRegistration> {
-  await navigator.serviceWorker.register("/sw.js", { scope: "/" });
+  // updateViaCache:"none": never take sw.js from the HTTP cache, so a new deploy activates promptly (sw.js also skipWaiting()s + claims).
+  const reg = await navigator.serviceWorker.register("/sw.js", { scope: "/", updateViaCache: "none" });
+  void reg.update().catch(() => {});
   return navigator.serviceWorker.ready;
 }
 

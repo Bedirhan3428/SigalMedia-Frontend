@@ -29,6 +29,7 @@ import {
   encryptMessagePayload,
   clearCachedServerPublicKey,
 } from "@/lib/crypto";
+import { createViewingTracker } from "@/lib/chat/peerViewing";
 import { mergeWindow } from "@/lib/chat/chatCacheLogic";
 import { getBlockedUserIds } from "@/services/privacyService";
 import type { UserProfile } from "@/types/user";
@@ -699,6 +700,45 @@ export function listenPeerTyping(
   );
   return () => {
     clear();
+    unsubscribe();
+  };
+}
+
+// "Bu sohbetin içinde" sinyali: chatPresence/{chatId}/{uid} = kalp atışı zaman damgası (ms). Sohbet açık VE görünürken yazılır;
+// kapanınca/gizlenince/bağlantı kopunca silinir. Canlı kurallar yazmayı reddederse sessizce vazgeçilir: karşı taraf
+// "sohbette değil" sayılır ve "Görüldü" eskisi gibi görünür.
+// TODO(Supabase): Realtime presence/broadcast kanalına taşınacak, bkz. docs/SUPABASE_PLAN.md §5.
+let chatViewingRejected = false;
+
+export async function setChatViewing(chatId: string, uid: string, viewing: boolean): Promise<void> {
+  if (!chatId || !uid || chatViewingRejected) return;
+  const r = ref(rtdb, `chatPresence/${chatId}/${uid}`);
+  try {
+    if (!viewing) {
+      await set(r, null);
+      return;
+    }
+    await set(r, Date.now());
+    onDisconnect(r).remove().catch(() => {});
+  } catch {
+    chatViewingRejected = true;
+  }
+}
+
+export function listenPeerChatViewing(
+  chatId: string,
+  peerUid: string,
+  callback: (viewing: boolean) => void
+): () => void {
+  if (!chatId || !peerUid) return () => {};
+  const tracker = createViewingTracker(callback);
+  const unsubscribe = onValue(
+    ref(rtdb, `chatPresence/${chatId}/${peerUid}`),
+    (snap) => tracker.feed(snap.val()),
+    () => tracker.feed(null)
+  );
+  return () => {
+    tracker.dispose();
     unsubscribe();
   };
 }
