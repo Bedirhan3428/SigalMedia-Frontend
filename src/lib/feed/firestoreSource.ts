@@ -34,6 +34,7 @@ export function docToPost(id: string, d: DocumentData): RemotePost | null {
   const replyTo: ReplyRef | undefined = rt?.parentId && rootId ? { parentId: rootId, rootId, depth: 1 } : undefined;
   const base = {
     id,
+    kind: d.type === "reels" ? ("reels" as const) : ("post" as const),
     authorId: String(d.authorId ?? ""),
     createdAt: toIso(d.createdAt),
     caption: d.caption || undefined,
@@ -83,7 +84,7 @@ export async function fetchOriginals(beforeMs: number | undefined, want = 10): P
   let lastMs: number | null = null;
   for (const s of snap.docs) {
     const r = docToPost(s.id, s.data());
-    if (!r || r.post.replyTo) continue;
+    if (!r || r.post.replyTo || r.post.kind === "reels") continue; // Reels türü ana akışa girmez
     if (items.length >= want) break;
     items.push(r);
     lastMs = new Date(r.post.createdAt).getTime();

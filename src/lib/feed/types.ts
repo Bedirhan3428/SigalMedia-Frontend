@@ -1,5 +1,7 @@
 // Shovrum akış: ön yüz veri tipleri. Yalnızca ön yüz; arka uç bağlandığında feedService yerine geçecek.
 export type PostType = "photo" | "video" | "poll";
+/** Gönderinin kökeni: "reels" olanlar yalnızca Reels akışında gösterilir, "post" olanlar ana akışta (videolar Reels akışında da) görünür. */
+export type PostKind = "post" | "reels";
 export type BadgeKind = "achievement" | "post" | "poll";
 export type Tier = "bronz" | "gumus" | "altin";
 export type ArtKey = "sunset" | "wave" | "hills" | "city" | "pink";
@@ -37,6 +39,8 @@ export interface FeedUser {
 interface PostBase {
   id: string;
   type: PostType;
+  /** Firestore `type` alanından; örnek içerik "post". Reels türü gönderi bileşenlerinde (PostCard) asla çizilmez. */
+  kind: PostKind;
   authorId: string;
   createdAt: string; // ISO
   caption?: string;

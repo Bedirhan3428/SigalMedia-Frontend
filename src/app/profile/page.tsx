@@ -3,6 +3,7 @@
 import { useState, useEffect, useMemo, useCallback } from "react";
 import { useAuth } from "@/context/AuthContext";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import {
   collection,
   query,
@@ -42,6 +43,7 @@ export default function ProfilePage() {
   const [mounted, setMounted] = useState(false);
   const [activeTab, setActiveTab] = useState<ProfileTab>("posts");
   const { profile, loading, refreshProfile } = useAuth();
+  const router = useRouter();
 
   // Gönderiler Durumu
   const [posts, setPosts] = useState<Post[]>([]);
@@ -220,6 +222,8 @@ export default function ProfilePage() {
 
   // Izgara karosu: eski biçimli Firestore belgesini akış gönderisine çevirerek (firestoreSource eşleyicisi) detay görünümünü açar.
   const openDetail = (post: Post) => {
+    // Reels türü gönderi gönderi bileşeninde çizilmez: Reels akışında o reelden açılır.
+    if (post.type === "reels") { router.push(`/reels?id=${encodeURIComponent(post.id)}`); return; }
     const list = tabPosts.flatMap((p) => {
       const fp = feedService.adoptLegacy(p.id, p as unknown as Record<string, unknown>);
       return fp ? [fp] : [];

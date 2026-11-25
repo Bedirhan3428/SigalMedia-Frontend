@@ -142,7 +142,8 @@ class MockFeedService implements FeedService {
 
   /** Zincirler düzdür: bir kökün tüm yanıtları (eski, derin veriler dahil) rootId ile bulunur. */
   private descendants(id: string, all: Post[]): Post[] {
-    return all.filter((p) => p.replyTo?.rootId === id && p.id !== id);
+    // Reels türü gönderiler yanıt rayında/zincirinde gösterilmez (gönderi bileşeninde çizilmezler); sayıdan da düşülür.
+    return all.filter((p) => p.replyTo?.rootId === id && p.id !== id && p.kind !== "reels");
   }
 
   /** Beğeni/oy/yanıt sayılarını ve geçici rozetleri uygular. */
@@ -264,6 +265,8 @@ class MockFeedService implements FeedService {
   }
 
   async getPost(id: string): Promise<Post | undefined> {
+    const test = this.testReels();
+    if (test) this.ingest(test);
     const hit = this.find(id);
     if (hit) return hit;
     try {
@@ -281,10 +284,19 @@ class MockFeedService implements FeedService {
   async listFeed(cursor?: string, limit = 5): Promise<Page<Post>> {
     await delay();
     const items: Post[] = [];
+    const test = this.testReels();
+    if (test) {
+      // Test kancası: ana akış da aynı örnek gönderilerden beslenir (Reels türü hariç), ağa gitmez.
+      this.ingest(test);
+      const feed = test.filter((r) => r.post.kind !== "reels");
+      const at = cursor?.startsWith("t:") ? parseInt(cursor.slice(2), 10) || 0 : 0;
+      const page = feed.slice(at, at + limit).map((r) => this.find(r.post.id)).filter((p): p is Post => !!p);
+      return { items: page, nextCursor: at + limit < feed.length ? `t:${at + limit}` : null };
+    }
     // Üst düzey akışta yalnızca orijinal gönderiler olur; yanıtlar kartın altındaki ReplyRail'de görünür.
     const addOriginal = (id: string, all: Post[]) => {
       const p = all.find((x) => x.id === id);
-      if (p && !p.replyTo) items.push(this.materialize(p, all));
+      if (p && !p.replyTo && p.kind !== "reels") items.push(this.materialize(p, all));
     };
     // 1) gerçek gönderiler (en yeni önce, 10'luk sayfalar), 2) örnek içerik
     if (!cursor || cursor.startsWith("r:")) {
@@ -316,7 +328,7 @@ class MockFeedService implements FeedService {
     return { items, nextCursor: next < order.length ? `m:${next}` : null };
   }
 
-  /** Test kancası (yalnızca tarayıcı testlerinde tanımlanır; yoksa etkisizdir): Reels için örnek video gönderileri. */
+  /** Test kancası (yalnızca tarayıcı testlerinde tanımlanır; yoksa etkisizdir): Reels ve ana akış için örnek video gönderileri (`kind: "reels"` olanlar yalnızca Reels'te). */
   private testReels(): RemotePost[] | null {
     if (typeof window === "undefined") return null;
     const raw = (window as unknown as { __SIGAL_TEST_REELS__?: unknown }).__SIGAL_TEST_REELS__;
@@ -326,7 +338,7 @@ class MockFeedService implements FeedService {
       const authorId = String(r.authorId ?? `tu${i}`);
       return {
         post: {
-          id, type: "video", authorId, createdAt: new Date(Date.now() - i * 60000).toISOString(),
+          id, type: "video", kind: r.kind === "reels" ? "reels" : "post", authorId, createdAt: new Date(Date.now() - i * 60000).toISOString(),
           caption: r.caption ? String(r.caption) : undefined,
           likeCount: Number(r.likeCount) || 0, commentCount: Number(r.commentCount) || 0, replyCount: 0, likedByMe: false, postBadges: [],
           art: ART_KEYS[i % ART_KEYS.length], mediaUrl: String(r.mediaUrl ?? ""), posterUrl: r.posterUrl ? String(r.posterUrl) : undefined,
@@ -433,6 +445,7 @@ class MockFeedService implements FeedService {
     const parent = reply?.parent;
     const base = {
       id,
+      kind: "post" as const,
       authorId: this.me.id,
       createdAt: new Date().toISOString(),
       likeCount: 0,
