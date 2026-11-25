@@ -86,6 +86,17 @@ export function useVideoPlayback({ id, real, autoplay, parked }: PlaybackOpts) {
     return () => { io.disconnect(); inView.current = false; };
   }, [autoplay, parked, play, pause]);
 
+  // Sayfa önbellekte gizlenince (Next rota önbelleği effect'leri temizler) ya da bileşen kaldırılınca video çalmaya devam etmesin.
+  useEffect(() => {
+    const v = vid.current;
+    return () => {
+      v?.pause();
+      set(false);
+      inView.current = false;
+      releaseActive(id);
+    };
+  }, [id, real, parked, set]);
+
   // Sekme gizlenince duraklat; geri gelince (hâlâ görünür ve otomatik oynatma açıksa) devam et.
   useEffect(() => {
     const onVis = () => {
