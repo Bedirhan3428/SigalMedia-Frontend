@@ -3,9 +3,9 @@
 import { Suspense, useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useAuth } from "@/context/AuthContext";
-import { ref, uploadBytes, getDownloadURL } from "firebase/storage";
 import { collection, addDoc, doc, updateDoc, increment, serverTimestamp } from "firebase/firestore";
-import { storage, db } from "@/lib/firebase";
+import { db } from "@/lib/firebase";
+import { uploadQueue, type UploadFile } from "@/lib/publish/uploadQueue";
 // [MODIFIED BY Bedirhan]
 import {
   CanvasEngine,
@@ -1566,108 +1566,124 @@ function ShareStoryPageInner() {
         items.push({ blob, filename: `${shareMode}_${profile.uid}_${timestamp}.webp`, contentType: "image/webp", type: "image" });
       }
 
-      // Yükleme: ayrı dosyalar sırayla (ilerleme göstergesiyle)
-      const media: { url: string; type: "image" | "video"; width?: number; height?: number; posterUrl?: string }[] = [];
-      for (let i = 0; i < items.length; i++) {
-        const it = items[i];
-        if (items.length > 1) setPublishProgress({ phase: "upload", done: i, total: items.length });
-        const storageRef = ref(storage, `posts/${profile.uid}/${it.filename}`);
-        await uploadBytes(storageRef, it.blob, { contentType: it.contentType });
-        const url = await getDownloadURL(storageRef);
-        const entry: (typeof media)[number] = { url, type: it.type };
-        if (it.type === "image") {
+      // WP-37: yükleme (resumable, video + poster paralel, gerçek bayt ilerlemesi) ve gönderi yazımı uygulama genelindeki
+      // kuyruğa devredilir; kullanıcı beklemeden akışa döner, ilerleme/sonuç üst çubuktaki hapta görünür.
+      const uid = profile.uid;
+      const modeNow = shareMode;
+      const isVideoPost = videoState.isVideo;
+      const music = selectedMusic;
+      const caption = opts?.caption ?? "";
+      const coverMs = opts?.cover.ms;
+      const prof = profile;
+      const files: UploadFile[] = [];
+      const dims: ({ width: number; height: number } | null)[] = await Promise.all(
+        items.map(async (it) => {
+          if (it.type !== "image") return null;
           try {
             const bm = await createImageBitmap(it.blob);
-            entry.width = bm.width;
-            entry.height = bm.height;
+            const d = { width: bm.width, height: bm.height };
             bm.close();
+            return d;
           } catch {
-            /* boyut bilgisi isteğe bağlı */
+            return null; /* boyut bilgisi isteğe bağlı */
           }
-        }
+        })
+      );
+      items.forEach((it, i) => {
+        files.push({ key: `m${i}`, path: `posts/${uid}/${it.filename}`, blob: it.blob, contentType: it.contentType });
         if (it.poster) {
-          const posterRef = ref(storage, `posts/${profile.uid}/${it.filename.replace(/\.[a-z0-9]+$/i, "")}_poster.jpg`);
-          await uploadBytes(posterRef, it.poster, { contentType: "image/jpeg" });
-          entry.posterUrl = await getDownloadURL(posterRef);
+          files.push({ key: `p${i}`, path: `posts/${uid}/${it.filename.replace(/.[a-z0-9]+$/i, "")}_poster.jpg`, blob: it.poster, contentType: "image/jpeg" });
         }
-        media.push(entry);
-        if (items.length > 1) setPublishProgress({ phase: "upload", done: i + 1, total: items.length });
-      }
+      });
+      let usedTestSink = false;
+      const draftMode = shareModeRef.current as DraftMode;
 
-      const postData: Record<string, unknown> = {
-        authorId: profile.uid,
-        authorUsername: profile.username || "kullanici",
-        authorDisplayName: profile.displayName || "Kullanıcı",
-        authorPhotoURL: profile.photoURL || "",
-        // Eski tek-medya alanları ilk öğeyle dolar (profil ızgarası uyumu)
-        mediaUrl: media[0].url,
-        mediaType: media[0].type,
-        media,
-        type: shareMode,
-        caption: opts?.caption ?? "",
-        hashtags: parseHashtags(opts?.caption ?? ""),
-        likesCount: 0,
-        commentsCount: 0,
-        createdAt: serverTimestamp(),
-      };
-      if (videoState.isVideo && opts?.cover.ms != null) postData.coverTimeMs = opts.cover.ms;
-      if (replyTarget) {
-        postData.replyTo = {
-          // Zincirler düz: ebeveyn her zaman kök, derinlik 1
-          parentId: replyTarget.replyTo?.rootId ?? replyTarget.id,
-          rootId: replyTarget.replyTo?.rootId ?? replyTarget.id,
-          depth: 1,
-        };
-      }
+      uploadQueue.enqueue({
+        kind: replyTarget ? "reply" : modeNow === "story" ? "story" : modeNow === "reels" ? "reels" : "post",
+        files,
+        createPost: async (urls) => {
+          const media: { url: string; type: "image" | "video"; width?: number; height?: number; posterUrl?: string }[] = items.map((it, i) => {
+            const entry: { url: string; type: "image" | "video"; width?: number; height?: number; posterUrl?: string } = { url: urls[`m${i}`], type: it.type };
+            const d = dims[i];
+            if (d) {
+              entry.width = d.width;
+              entry.height = d.height;
+            }
+            if (it.poster) entry.posterUrl = urls[`p${i}`];
+            return entry;
+          });
+          const postData: Record<string, unknown> = {
+            authorId: uid,
+            authorUsername: prof.username || "kullanici",
+            authorDisplayName: prof.displayName || "Kullanıcı",
+            authorPhotoURL: prof.photoURL || "",
+            // Eski tek-medya alanları ilk öğeyle dolar (profil ızgarası uyumu)
+            mediaUrl: media[0].url,
+            mediaType: media[0].type,
+            media,
+            type: modeNow,
+            caption,
+            hashtags: parseHashtags(caption),
+            likesCount: 0,
+            commentsCount: 0,
+            createdAt: serverTimestamp(),
+          };
+          if (isVideoPost && coverMs != null) postData.coverTimeMs = coverMs;
+          if (replyTarget) {
+            postData.replyTo = {
+              // Zincirler düz: ebeveyn her zaman kök, derinlik 1
+              parentId: replyTarget.replyTo?.rootId ?? replyTarget.id,
+              rootId: replyTarget.replyTo?.rootId ?? replyTarget.id,
+              depth: 1,
+            };
+          }
 
-      // Müzik seçildiyse metaveriyi gönderiye ekle (streamUrl: iTunes önizleme adresi)
-      if (selectedMusic) {
-        postData.audio = {
-          id: selectedMusic.id,
-          title: selectedMusic.title,
-          artist: selectedMusic.artist,
-          album: selectedMusic.album || "",
-          thumbnail: selectedMusic.thumbnail || "",
-          streamUrl: selectedMusic.streamUrl,
-          startTime: selectedMusic.startTime,
-          duration: selectedMusic.duration,
-          totalDuration: selectedMusic.totalDuration,
-          lyricsSnippet: selectedMusic.lyricsSnippet || "",
-        };
-      }
+          // Müzik seçildiyse metaveriyi gönderiye ekle (streamUrl: iTunes önizleme adresi)
+          if (music) {
+            postData.audio = {
+              id: music.id,
+              title: music.title,
+              artist: music.artist,
+              album: music.album || "",
+              thumbnail: music.thumbnail || "",
+              streamUrl: music.streamUrl,
+              startTime: music.startTime,
+              duration: music.duration,
+              totalDuration: music.totalDuration,
+              lyricsSnippet: music.lyricsSnippet || "",
+            };
+          }
 
-      // Otomatik test kancası (yalnızca tarayıcı testlerinde tanımlanır): gerçek gönderi oluşturmadan yükü inceler
-      const testSink = (window as unknown as { __SIGAL_TEST_PUBLISH__?: (d: Record<string, unknown>) => string | void }).__SIGAL_TEST_PUBLISH__;
-      const stubId = testSink?.({ ...postData, createdAt: "SERVER_TIMESTAMP" });
-      let newId: string;
-      if (stubId) {
-        newId = stubId;
-      } else {
-        const created = await addDoc(collection(db, "posts"), postData);
-        newId = created.id;
-
-        await updateDoc(doc(db, "users", profile.uid), {
-          "stats.postsCount": increment(1),
-          updatedAt: serverTimestamp(),
-        });
-
-        await refreshProfile();
-      }
-
-      // WP-09: yayınlandı -> taslak silinir ve bir daha kaydedilmez
-      const autosaver = autosaverRef.current;
-      autosaver?.stop();
-      await autosaver?.discard(shareModeRef.current as DraftMode);
-
-      if (replyTarget) {
-        // WP-27: rozet kuralları + akışta yeni yanıta dön
-        await feedService.notePublished(true, replyTarget.id);
-        router.replace(`/?highlight=${encodeURIComponent(newId)}`);
-        return;
-      }
-      setTimeout(() => {
-        router.push("/profile");
-      }, 400);
+          // Otomatik test kancası (yalnızca tarayıcı testlerinde tanımlanır): gerçek gönderi oluşturmadan yükü inceler
+          const testSink = (window as unknown as { __SIGAL_TEST_PUBLISH__?: (d: Record<string, unknown>) => string | void }).__SIGAL_TEST_PUBLISH__;
+          const stubId = testSink?.({ ...postData, createdAt: "SERVER_TIMESTAMP" });
+          if (stubId) {
+            usedTestSink = true;
+            return stubId;
+          }
+          const created = await addDoc(collection(db, "posts"), postData);
+          return created.id;
+        },
+        afterCreate: async (newId) => {
+          if (!usedTestSink) {
+            await updateDoc(doc(db, "users", uid), {
+              "stats.postsCount": increment(1),
+              updatedAt: serverTimestamp(),
+            });
+            await refreshProfile();
+          }
+          // WP-27: rozet kuralları (yanıt)
+          if (replyTarget) await feedService.notePublished(true, replyTarget.id);
+          void newId;
+        },
+        // WP-09: yayınlandı -> taslak silinir ve bir daha kaydedilmez (yükleme başarısızsa taslak kalır)
+        onDone: () => {
+          void deleteDraft(draftMode);
+        },
+        href: (id) => (replyTarget ? `/?highlight=${encodeURIComponent(id)}` : "/profile"),
+      });
+      autosaverRef.current?.stop();
+      router.replace("/");
     } catch (err) {
       setIsExportingVideo(false);
       setIsPublishing(false);

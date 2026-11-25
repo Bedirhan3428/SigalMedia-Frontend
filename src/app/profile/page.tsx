@@ -33,6 +33,7 @@ import ProfileSongPlayer from "@/components/profile/ProfileSongPlayer";
 import ProfileCustomizeSheet from "@/components/profile/ProfileCustomizeSheet";
 import { parseProfileStyle, effectiveBanner, saveProfileStyle, type ProfileStyle } from "@/lib/profile/profileStyleStore";
 import { stopProfileAudio } from "@/lib/profile/profileAudio";
+import { uploadQueue } from "@/lib/publish/uploadQueue";
 import { FaPhotoFilm } from "react-icons/fa6";
 import { TbRepeat } from "react-icons/tb";
 
@@ -144,6 +145,15 @@ export default function ProfilePage() {
     if (profile?.uid) {
       fetchUserPosts();
     }
+  }, [profile?.uid]);
+
+  // WP-37: arka planda yüklenen gönderi yayımlanınca ızgara yenilenir
+  useEffect(() => {
+    if (!profile?.uid) return;
+    return uploadQueue.onPublished(() => {
+      void fetchUserPosts();
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [profile?.uid]);
 
   // [START] AeroCode

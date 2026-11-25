@@ -92,14 +92,17 @@ const BT709_LIMITED: VideoColorSpaceInit = {
   matrix: 'bt709',
   fullRange: false,
 };
-// Çözünürlük başına varsayılan bitrate (H.264 High, 30 fps dikey): 1080p ~7 Mbps, 720p ~4 Mbps
-const BITRATE_1080P = 7_000_000;
+// Çözünürlük başına varsayılan bitrate (H.264 High, 30 fps dikey): 1080x1920 ~5 Mbps (WP-37: 7 -> 5; yükleme boyutu), 720p ~4 Mbps
+const BITRATE_1080P = 5_000_000;
 const BITRATE_720P = 4_000_000;
 const SIZE_1080P = { width: 1080, height: 1920 };
 const SIZE_720P = { width: 720, height: 1280 };
 
-function defaultBitrateFor(height: number): number {
-  return height >= 1500 ? BITRATE_1080P : BITRATE_720P;
+function defaultBitrateFor(height: number, width = 0): number {
+  if (height >= 1500) return BITRATE_1080P;
+  if (height >= 1200 || !width) return BITRATE_720P;
+  // WP-37: 9:16'dan geniş (yatay) çıktı: piksel sayısıyla orantılı (karekök), en az 3 Mbps
+  return Math.round(Math.max(3_000_000, BITRATE_1080P * Math.sqrt((width * height) / (SIZE_1080P.width * SIZE_1080P.height))));
 }
 
 /**
@@ -467,7 +470,7 @@ export class VideoExporter {
 
     // Encoder hedef boyutu desteklemezse 720p'ye düşülür (çağıran onWarning ile bilgilendirilir)
     const attempts: Array<{ width: number; height: number; bitrate: number }> = [
-      { width: targetW, height: targetH, bitrate: bitrate || defaultBitrateFor(targetH) },
+      { width: targetW, height: targetH, bitrate: bitrate || (globalThis as { __EXPORT_BITRATE?: number }).__EXPORT_BITRATE || defaultBitrateFor(targetH, targetW) },
     ];
     if (targetH > SIZE_720P.height) {
       attempts.push({
@@ -487,7 +490,7 @@ export class VideoExporter {
             bitrate: attempt.bitrate,
             bitrateMode: 'variable',
             framerate: OUTPUT_FPS,
-            // 'realtime' kare düşürebildiği için 'quality' kullanılır
+            // 'realtime' kare düşürebildiği için 'quality' kullanılır (WP-37 ölçümü: donanım encoder'ında 'realtime' hızlanmıyor)
             latencyMode: 'quality',
             hardwareAcceleration: hw,
             avc: { format: 'avc' },
@@ -692,7 +695,15 @@ export class VideoExporter {
     const tFn = performance.now();
     const signal = options?.signal;
     const clips = this.resolveExportClips(engine);
-    const targetSize = this.resolveTargetSize(options);
+    let targetSize = this.resolveTargetSize(options);
+    // WP-37: düzenlemesiz yatay/kare kaynak 1080x1920'ye dolgulanıp büyütülmez; genişlik 1080 olacak şekilde kendi oranında kodlanır
+    // (piksel sayısı ~3x az: kodlama ~3x hızlı, dosya küçük). Oynatıcılar 9:16 olmayanı object-cover / bulanık zeminle gösterir.
+    if (!options?.width && !options?.resolution && !options?.bitrate && engine.getShareMode() !== 'post') {
+      const aspect = RemuxExporter.plainSourceAspect(engine, options);
+      if (aspect && aspect > SIZE_1080P.width / SIZE_1080P.height + 0.02) {
+        targetSize = { width: SIZE_1080P.width, height: Math.max(2, Math.round(SIZE_1080P.width / aspect / 2) * 2) };
+      }
+    }
 
     const supportedVideo = await this.findSupportedVideoConfig(
       targetSize.width,
@@ -705,7 +716,7 @@ export class VideoExporter {
         width: targetSize.width,
         height: targetSize.height,
         fps: OUTPUT_FPS,
-        bitrate: options?.bitrate || defaultBitrateFor(targetSize.height),
+        bitrate: options?.bitrate || defaultBitrateFor(targetSize.height, targetSize.width),
         music: options?.music,
         musicVolume: options?.musicVolume,
         onProgress: options?.onProgress,

@@ -3,6 +3,7 @@ import "./feed.css";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useAuth } from "@/context/AuthContext";
 import { feedService } from "@/lib/feed/feedService";
+import { uploadQueue } from "@/lib/publish/uploadQueue";
 import type { Post } from "@/lib/feed/types";
 import { useFeedActions } from "./FeedContext";
 import { FeedPost } from "./FeedPost";
@@ -100,6 +101,9 @@ function FeedListBody({ refreshRef }: { refreshRef: React.MutableRefObject<() =>
       doneRef.current = page.nextCursor === null;
     };
   }, [refreshRef]);
+
+  // WP-37: arka planda yüklenen gönderi yayımlanınca akışın ilk sayfası yenilenir
+  useEffect(() => uploadQueue.onPublished(() => void refreshRef.current().catch(() => {})), [refreshRef]);
 
   // Editörden dönüş: yeni yanıtı vurgula ya da anket yanıtı sayfasını aç.
   useEffect(() => {
