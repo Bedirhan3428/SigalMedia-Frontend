@@ -5,9 +5,9 @@ export const SITE_DESCRIPTION =
   "Yeni nesil modern, hızlı ve bağlantıda tutan sosyal medya platformu.";
 export const FILE_PREFIX = "shovrum";
 
-// Yasal/destek yer tutucuları (gerçek değerler sahibi tarafından girilecek).
-export const LEGAL_CONTROLLER_NAME = "[VERİ SORUMLUSU ADI]";
-export const SUPPORT_EMAIL = "[İLETİŞİM E-POSTASI]";
+// Yasal/destek bilgileri. destek@ adresi shovrum.com alınınca Cloudflare Email Routing ile yönlendirilecek.
+export const LEGAL_CONTROLLER_NAME = "Bedirhan İMER";
+export const SUPPORT_EMAIL = "destek@shovrum.com";
 export const SUPPORT_MAILTO = `mailto:${SUPPORT_EMAIL}`;
 export const LEGAL_LAST_UPDATED = "25 Kasım 2026";
 
