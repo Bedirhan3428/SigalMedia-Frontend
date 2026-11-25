@@ -57,6 +57,7 @@ export function PostPreviewCard({ link, onOpen, interactive = true, footer, note
   const kind = post ? (post.type === "poll" ? "Anket" : post.type === "video" ? "Video" : "Fotoğraf") : "";
   // Oran: gönderinin kendi oranı, ama en fazla 3:4 kadar uzun (daha uzunsa kırpılır). Boyut yoksa görsel yüklenince ölçülür.
   const [natural, setNatural] = useState<number | null>(null);
+  const [vidFailed, setVidFailed] = useState(false);
   const p0 = post?.type === "photo" ? post.photos?.[0] : undefined;
   const known = p0?.width && p0.height ? p0.width / p0.height : null;
   const ratio = Math.max(known ?? natural ?? 1, 3 / 4);
@@ -84,6 +85,25 @@ export function PostPreviewCard({ link, onOpen, interactive = true, footer, note
           <span className="absolute inset-0 animate-pulse bg-white/10" data-testid="post-card-skeleton" />
         ) : thumb ? (
           <img src={thumb} alt="" loading="lazy" decoding="async" referrerPolicy="no-referrer" className="absolute inset-0 h-full w-full object-cover" onLoad={(e) => { const i = e.currentTarget; if (i.naturalWidth && i.naturalHeight) setNatural(i.naturalWidth / i.naturalHeight); }} />
+        ) : post?.type === "video" && post.mediaUrl && !vidFailed ? (
+          <>
+            <video
+              src={`${post.mediaUrl}#t=0.1`}
+              muted
+              playsInline
+              preload="metadata"
+              aria-hidden="true"
+              data-testid="post-card-vthumb"
+              className="absolute inset-0 h-full w-full object-cover"
+              onLoadedMetadata={(e) => { const v = e.currentTarget; if (v.videoWidth && v.videoHeight) setNatural(v.videoWidth / v.videoHeight); }}
+              onError={() => setVidFailed(true)}
+            />
+            <span className="absolute inset-0 grid place-items-center" aria-hidden="true" data-testid="post-card-play">
+              <span className="grid h-11 w-11 place-items-center rounded-full bg-black/55 ring-1 ring-white/30">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="#fff" aria-hidden="true"><path d="M8 5.5v13l11-6.5z" /></svg>
+              </span>
+            </span>
+          </>
         ) : (
           <span className="absolute inset-0 grid place-items-center px-4 text-center text-[13px] font-semibold opacity-80">
             {s.status === "missing" ? "Gönderi bulunamadı" : post?.type === "poll" ? (

@@ -13,12 +13,13 @@ interface Props {
   index: number;
   /** Ekrandan uzak öğe: video öğesi kurulmaz (bellek). */
   parked?: boolean;
-  /** Sıradaki video: tarayıcı daha çok önyükler. */
-  next?: boolean;
+  /** Tarayıcı önyükleme düzeyi (geçerli ve hazır olunca sıradaki: auto; sonraki: metadata). */
+  preload?: "none" | "metadata" | "auto";
+  onReady?: (id: string, ready: boolean) => void;
 }
 
 /** Tam ekran 9:16 Reels öğesi: ortak VideoPlayer çekirdeği + sağda dikey eylem sütunu + solda yazar/başlık/müzik. */
-export const ReelCard = memo(function ReelCard({ post, index, parked = false, next = false }: Props) {
+export const ReelCard = memo(function ReelCard({ post, index, parked = false, preload = "metadata", onReady }: Props) {
   const { like, save, openMenu, openShare, openReply, toast, resolve } = useFeedActions();
   const live = resolve(post);
   const author = useFeedUser(live.authorId);
@@ -40,7 +41,7 @@ export const ReelCard = memo(function ReelCard({ post, index, parked = false, ne
 
   return (
     <article className="fd-reel" data-reel={live.id} data-index={index} aria-label={`@${author.username} reels`}>
-      <VideoPlayer post={live} variant="reel" autoplay parked={parked} preload={next ? "auto" : "metadata"} />
+      <VideoPlayer post={live} variant="reel" autoplay parked={parked} preload={preload} onReady={onReady} />
       <div className="fd-rscrim" aria-hidden="true" />
 
       <div className="fd-rinfo">

@@ -10,6 +10,16 @@ import { ReelCard } from "./ReelCard";
 const PAGE = 4;
 const isReel = (p: Post | undefined): p is Post => !!p && p.type === "video" && !!p.mediaUrl && !p.replyTo;
 
+/**
+ * Önyükleme düzeyi (geçerliye göre uzaklık). Ağ önce geçerli reele ayrılır: o oynatılabilir olana kadar diğerleri hiç indirmez (none);
+ * sonra geçerli auto, sıradaki auto, ondan sonrakiler ve bir öncekiler yalnızca metadata (fast-start MP4'te moov başta olduğundan ilk kare için yeter).
+ */
+function reelPreload(d: number, currentReady: boolean): "none" | "metadata" | "auto" {
+  if (d === 0) return "auto";
+  if (!currentReady) return "none";
+  return d === 1 ? "auto" : "metadata";
+}
+
 /** Dikey Reels akışı: CSS scroll-snap (kaydırma başına tek reel), sonsuz yükleme, yalnızca görünen video oynar. */
 export function ReelsFeed() {
   const { user } = useAuth();
@@ -21,6 +31,16 @@ export function ReelsFeed() {
   const [error, setError] = useState(false);
   const [current, setCurrent] = useState(0);
   const [gen, setGen] = useState(0);
+  // Oynatılabilir hale gelmiş videolar: geçerli reel hazır olunca sıradaki tam önyüklenir (ağ önce geçerliye ayrılır).
+  const [ready, setReady] = useState<Set<string>>(() => new Set());
+  const onReady = useCallback((id: string, r: boolean) => {
+    setReady((prev) => {
+      if (prev.has(id) === r) return prev;
+      const n = new Set(prev);
+      if (r) n.add(id); else n.delete(id);
+      return n;
+    });
+  }, []);
   const loadingRef = useRef(false);
   const cursorRef = useRef<string | null>(null);
   const box = useRef<HTMLDivElement>(null);
@@ -83,7 +103,7 @@ export function ReelsFeed() {
   return (
     <div className="fd-reels" ref={box} data-testid="fd-reels" role="feed" aria-label="Reels akışı" aria-busy={loading}>
       {items.map((p, i) => (
-        <ReelCard key={p.id} post={p} index={i} parked={Math.abs(i - current) > 1} next={i === current + 1} />
+        <ReelCard key={p.id} post={p} index={i} parked={i < current - 1 || i > current + 2} preload={reelPreload(i - current, ready.has(items[current]?.id ?? ""))} onReady={onReady} />
       ))}
       {loading && items.length === 0 ? (
         <div className="fd-rempty" data-testid="fd-reels-loading"><span className="fd-vspin fd-vspin-s" role="status" aria-label="Yükleniyor" /></div>

@@ -3,15 +3,24 @@ import { useEffect, useRef, useState, type PointerEvent as RPointerEvent, type R
 import type { Post } from "@/lib/feed/types";
 import { useFeedActions } from "./FeedContext";
 
+/** Tek dokunmanın "çift dokunma olmadı" sayılması için beklenen süre. */
+export const SINGLE_TAP_MS = 250;
+
 /**
- * Çift dokunma ile beğeni: 300 ms içinde, az hareketle iki dokunuş; dokunma noktasında gradyanlı kalp çıkar.
+ * Çift dokunma ile beğeni: kısa aralıkla, az hareketle iki dokunuş; dokunma noktasında gradyanlı kalp çıkar.
  * Kaydırma pointercancel/büyük hareket olduğundan sayılmaz. Düğmeler hariçtir (allowButton ile eşleşenler dahil).
+ *
+ * `onSingle` verilirse tek dokunma ayrıştırılır (video oynat/duraklat): ilk dokunuştan sonra `SINGLE_TAP_MS` içinde
+ * ikinci dokunuş gelmezse `onSingle` çağrılır; gelirse yalnızca beğeni olur ve `onSingle` hiç çağrılmaz (oynatma değişmez).
  */
-export function useDoubleTapLike(post: Post, opts: { allowButton?: string; onDouble?: () => void } = {}) {
+export function useDoubleTapLike(post: Post, opts: { allowButton?: string; onDouble?: () => void; onSingle?: () => void } = {}) {
   const { likeOnly } = useFeedActions();
   const [heart, setHeart] = useState<{ n: number; x: number; y: number; r: number } | null>(null);
   const tapRef = useRef<{ t: number; x: number; y: number; at: number } | null>(null);
   const lastTap = useRef<{ t: number; x: number; y: number } | null>(null);
+  const singleTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  /** Zamanlayıcı ikinci dokunuş başlayınca durdurulur; ikinci dokunuş çift olmazsa tek dokunma yine de uygulanır. */
+  const pendingSingle = useRef(false);
   const postRef = useRef(post);
   const optsRef = useRef(opts);
   useEffect(() => { postRef.current = post; optsRef.current = opts; });
@@ -20,29 +29,55 @@ export function useDoubleTapLike(post: Post, opts: { allowButton?: string; onDou
     const t = setTimeout(() => setHeart(null), 1500);
     return () => clearTimeout(t);
   }, [heart]);
+  useEffect(() => () => { if (singleTimer.current) clearTimeout(singleTimer.current); }, []);
+
+  const clearSingle = () => { if (singleTimer.current) { clearTimeout(singleTimer.current); singleTimer.current = null; } };
+  const flushSingle = () => {
+    if (!pendingSingle.current) return;
+    pendingSingle.current = false;
+    optsRef.current.onSingle?.();
+  };
 
   const onPointerDown = (e: RPointerEvent<HTMLElement>) => {
     const btn = (e.target as HTMLElement).closest("button");
     if (btn && !(optsRef.current.allowButton && btn.matches(optsRef.current.allowButton))) { tapRef.current = null; return; }
     tapRef.current = { t: e.timeStamp, x: e.clientX, y: e.clientY, at: Date.now() };
+    // Bekleyen bir tek dokunma varken ikinci dokunuş başladı: sonucu pointerup belirler.
+    if (singleTimer.current) { clearSingle(); pendingSingle.current = true; }
   };
   const onPointerMove = (e: RPointerEvent<HTMLElement>) => {
     const d = tapRef.current;
-    if (d && (Math.abs(e.clientX - d.x) > 10 || Math.abs(e.clientY - d.y) > 10)) tapRef.current = null;
+    if (d && (Math.abs(e.clientX - d.x) > 10 || Math.abs(e.clientY - d.y) > 10)) { tapRef.current = null; flushSingle(); }
   };
   const onPointerUp = (e: RPointerEvent<HTMLElement>) => {
     const d = tapRef.current;
     tapRef.current = null;
-    if (!d || e.timeStamp - d.t > 350) { lastTap.current = null; return; }
+    if (!d || e.timeStamp - d.t > 350) {
+      lastTap.current = null;
+      flushSingle();
+      // Uzun ama hareketsiz basış da (kaydırma/basılı tutma değilse) tek dokunma sayılır.
+      if (d && e.timeStamp - d.t <= 800) optsRef.current.onSingle?.();
+      return;
+    }
     const prev = lastTap.current;
     if (prev && d.at - prev.t <= 320 && Math.hypot(e.clientX - prev.x, e.clientY - prev.y) < 40) {
       lastTap.current = null;
+      pendingSingle.current = false;
+      clearSingle();
       likeOnly(postRef.current);
       optsRef.current.onDouble?.();
       const box = e.currentTarget.getBoundingClientRect();
       setHeart((h) => ({ n: (h?.n ?? 0) + 1, x: e.clientX - box.left, y: e.clientY - box.top, r: Math.round(Math.random() * 24 - 12) }));
-    } else lastTap.current = { t: d.at, x: e.clientX, y: e.clientY };
+    } else {
+      flushSingle();
+      lastTap.current = { t: d.at, x: e.clientX, y: e.clientY };
+      if (optsRef.current.onSingle) {
+        clearSingle();
+        singleTimer.current = setTimeout(() => { singleTimer.current = null; lastTap.current = null; optsRef.current.onSingle?.(); }, SINGLE_TAP_MS);
+      }
+    }
   };
+  const onPointerCancel = () => { tapRef.current = null; flushSingle(); };
 
   const heartNode: ReactNode = heart ? (
     <svg key={heart.n} className="fd-bigheart" data-testid="fd-bigheart" viewBox="0 0 24 24" aria-hidden="true" style={{ left: heart.x, top: heart.y, ["--r" as string]: `${heart.r}deg` }}>
@@ -51,5 +86,5 @@ export function useDoubleTapLike(post: Post, opts: { allowButton?: string; onDou
     </svg>
   ) : null;
 
-  return { bind: { onPointerDown, onPointerMove, onPointerUp, onPointerCancel: () => { tapRef.current = null; } }, heartNode };
+  return { bind: { onPointerDown, onPointerMove, onPointerUp, onPointerCancel }, heartNode };
 }
