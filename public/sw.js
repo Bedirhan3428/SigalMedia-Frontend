@@ -1,6 +1,29 @@
 /* SigalMedia service worker: web push for chat messages. No caching/fetch handling. */
+// Bump on every change so a new worker is byte-different and installs. Served with Cache-Control: no-cache (next.config.ts).
+var SW_VERSION = "2026-11-25-wp40";
 self.addEventListener("install", () => self.skipWaiting());
 self.addEventListener("activate", (event) => event.waitUntil(self.clients.claim()));
+
+// Chat pages report "I am showing chat X" ({type:"viewing", chatId, visible}) on show/hide and every ~15 s.
+// Kept in memory (clientId -> {chatId, ts}); a worker restart empties it, so clients.matchAll stays the second line.
+var VIEWING_TTL_MS = 40000;
+var viewing = {};
+
+function viewingChatIds(wins, now) {
+  var ids = {};
+  Object.keys(viewing).forEach(function (k) {
+    var v = viewing[k];
+    if (!v || now - v.ts > VIEWING_TTL_MS) {
+      delete viewing[k];
+      return;
+    }
+    // If that client is still listed and says it is hidden, trust the real state over our last message.
+    var w = wins.filter(function (c) { return c.id === k; })[0];
+    if (w && w.visibilityState === "hidden") return;
+    ids[v.chatId] = true;
+  });
+  return ids;
+}
 
 var MAX_LINES = 5;
 var APP_ICON = "/icons/icon-192.png";
@@ -28,12 +51,22 @@ function chatPathOf(data, url) {
   }
 }
 
-// True when a visible window is showing exactly this chat (query strings like ?reply=1 are ignored).
+function safeDecode(p) {
+  try {
+    return decodeURIComponent(p);
+  } catch {
+    return p;
+  }
+}
+
+// True when a visible window is showing exactly this chat (query strings like ?reply=1 are ignored, %-encoding is normalised).
+// `focused` is deliberately NOT required: installed Android PWAs / some Chrome builds report focused=false for the foreground page.
 function isViewingChat(wins, chatPath) {
+  var want = safeDecode(chatPath);
   return wins.some(function (c) {
-    if (c.visibilityState !== "visible" || c.focused === false) return false;
+    if (c.visibilityState !== "visible") return false;
     try {
-      return normPath(new URL(c.url).pathname) === chatPath;
+      return safeDecode(normPath(new URL(c.url).pathname)) === want;
     } catch {
       return false;
     }
@@ -88,10 +121,12 @@ self.addEventListener("push", function (event) {
       // The user is already looking at this chat: no notification.
       // (Chrome may show a generic "site updated in the background" notification when a push shows nothing too often.)
       var chatPath = chatPathOf(data, url);
-      if (isViewingChat(wins, chatPath)) {
+      var reported = viewingChatIds(wins, Date.now());
+      var chatKey = data.chatId || safeDecode(chatPath).replace(/^[/]messages[/]/, "");
+      if (reported[chatKey] || isViewingChat(wins, chatPath)) {
         wins.forEach(function (c) {
           try {
-            if (c.visibilityState === "visible") c.postMessage({ type: "push-suppressed", chatId: data.chatId || null });
+            if (c.visibilityState === "visible") c.postMessage({ type: "push-suppressed", chatId: data.chatId || null, v: SW_VERSION });
           } catch {
             /* ignore */
           }
@@ -119,6 +154,12 @@ self.addEventListener("push", function (event) {
 // The chat page asks us to drop the stack for a chat that is now open.
 self.addEventListener("message", function (event) {
   var d = event.data || {};
+  if (d.type === "viewing") {
+    var id = (event.source && event.source.id) || "anon";
+    if (d.visible && d.chatId) viewing[id] = { chatId: String(d.chatId), ts: Date.now() };
+    else delete viewing[id];
+    return;
+  }
   if (d.type !== "clear-chat" || !d.tag) return;
   event.waitUntil(
     self.registration.getNotifications({ tag: d.tag }).then(function (list) {
