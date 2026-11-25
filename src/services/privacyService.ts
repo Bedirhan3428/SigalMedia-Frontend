@@ -14,6 +14,8 @@ import {
   serverTimestamp,
 } from "firebase/firestore";
 import { auth, db } from "@/lib/firebase";
+import { getProfileService } from "@/services/profile";
+import { getAuthService } from "@/services/auth";
 import { BlockedUserData, FollowRequestData } from "@/types/privacy";
 import { UserProfile } from "@/types/user";
 
@@ -22,14 +24,10 @@ import { UserProfile } from "@/types/user";
  * Hesap herkese açık yapıldığında bekleyen takip isteklerini otomatik onaylar.
  */
 export async function setAccountPrivacy(isPrivate: boolean): Promise<void> {
-  const currentUser = auth.currentUser;
+  const currentUser = getAuthService().getCurrentUser();
   if (!currentUser) throw new Error("Oturum açılmamış");
 
-  const userRef = doc(db, "users", currentUser.uid);
-  await updateDoc(userRef, {
-    isPrivate,
-    updatedAt: serverTimestamp(),
-  });
+  await getProfileService().update(currentUser.uid, { isPrivate });
 }
 
 /**

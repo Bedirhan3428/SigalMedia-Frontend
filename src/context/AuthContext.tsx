@@ -3,16 +3,15 @@
 // [START] CyberCore
 import React, { createContext, Suspense, useContext, useEffect, useState, ReactNode } from "react";
 // [END] CyberCore
-import { User, onAuthStateChanged, signOut as firebaseSignOut } from "firebase/auth";
-import { doc, getDoc } from "firebase/firestore";
 import { usePathname, useRouter } from "next/navigation";
-import { auth, db } from "@/lib/firebase";
+import { getAuthService, type AppUser } from "@/services/auth";
+import { getProfileService } from "@/services/profile";
 import { disablePush } from "@/lib/push/pushClient";
 import { clearChatCache, rememberUser } from "@/lib/chat/chatCache";
 import { UserProfile } from "@/types/user";
 
 interface AuthContextType {
-  user: User | null;
+  user: AppUser | null;
   profile: UserProfile | null;
   loading: boolean;
   refreshProfile: () => Promise<void>;
@@ -33,7 +32,7 @@ function AuthNavigationGuard({
   profile,
   loading,
 }: {
-  user: User | null;
+  user: AppUser | null;
   profile: UserProfile | null;
   loading: boolean;
 }) {
@@ -45,6 +44,9 @@ function AuthNavigationGuard({
 
     // Yasal sayfalar (Kullanım Şartları, Gizlilik...) oturumsuz da açılır
     if (pathname.startsWith("/legal")) return;
+
+    // Şifre yenileme bağlantısı geçici bir oturum açar; yeni şifre belirlenene kadar yönlendirme yapma
+    if (pathname.startsWith("/auth/reset-password")) return;
 
     const isAuthRoute = pathname === "/login" || pathname.startsWith("/auth");
     const isOnboardingRoute = pathname === "/onboarding";
@@ -89,7 +91,7 @@ function AuthNavigationGuard({
 // [END] CyberCore
 
 export function AuthProvider({ children }: { children: ReactNode }) {
-  const [user, setUser] = useState<User | null>(null);
+  const [user, setUser] = useState<AppUser | null>(null);
   const [profile, setProfile] = useState<UserProfile | null>(null);
   const [loading, setLoading] = useState<boolean>(true);
 
@@ -97,12 +99,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const fetchProfile = async (uid: string): Promise<UserProfile | null> => {
     try {
-      const userDocRef = doc(db, "users", uid);
-      const userSnap = await getDoc(userDocRef);
-      if (userSnap.exists()) {
-        return userSnap.data() as UserProfile;
-      }
-      return null;
+      return await getProfileService().get(uid);
     } catch (error) {
       console.error("Error fetching user profile:", error);
       return null;
@@ -123,7 +120,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         localStorage.clear();
         sessionStorage.clear();
       }
-      await firebaseSignOut(auth);
+      await getAuthService().signOut();
     } catch (error) {
       console.error("Sign out error:", error);
     } finally {
@@ -135,7 +132,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   };
 
   useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
+    const unsubscribe = getAuthService().onAuthStateChanged(async (currentUser) => {
       setUser(currentUser);
       if (currentUser) {
         void rememberUser(currentUser.uid);

@@ -1,5 +1,5 @@
-// Hand-written, generated-style types for supabase/migrations (WP-39). Replace with `supabase gen types typescript` output once a project exists.
-// NOT imported anywhere yet.
+// Hand-written, generated-style types for supabase/migrations (WP-39, matched to the schema in WP-44).
+// Replace with `supabase gen types typescript` output once the schema is applied to a project.
 export type Json = string | number | boolean | null | { [key: string]: Json | undefined } | Json[];
 
 export type WhoCanMessage = "everyone" | "following" | "followers" | "mutuals" | "none";
@@ -11,37 +11,53 @@ export type ReportTarget = "user" | "post" | "comment" | "message" | "story";
 export type ReportReason = "spam" | "harassment" | "hate" | "nudity" | "self_harm" | "violence" | "impersonation" | "underage" | "other";
 export type ReportStatus = "open" | "reviewing" | "actioned" | "dismissed";
 
-export interface ProfileRow {
+export type ProfileRow = {
   id: string; username: string | null; display_name: string; bio: string; avatar_key: string | null;
   is_verified: boolean; is_private: boolean; who_can_message: WhoCanMessage; read_receipts: boolean; show_online_status: boolean;
   profile_style: Json; role: "user" | "moderator" | "admin"; onboarding_completed: boolean;
   followers_count: number; following_count: number; posts_count: number; last_seen_at: string | null; created_at: string; updated_at: string;
 }
-export interface PostRow {
+export type PostRow = {
   id: string; author_id: string; kind: PostKind; post_type: PostType; caption: string; hashtags: string[];
   reply_root_id: string | null; reply_parent_id: string | null; cover_time_ms: number | null; music: Json | null; has_video: boolean;
   like_count: number; reply_count: number; comment_count: number; is_hidden: boolean; expires_at: string | null; created_at: string;
 }
-export interface PostMediaRow {
+export type PostMediaRow = {
   id: string; post_id: string; position: number; type: MediaType; key: string; width: number | null; height: number | null;
   poster_key: string | null; duration_ms: number | null; size_bytes: number | null;
 }
-export interface MediaItem { type: MediaType; key: string; width: number | null; height: number | null; poster_key: string | null; duration_ms: number | null }
-export interface PollView { question: string; ends_at: string; my_vote: string | null; options: { id: string; text: string; votes: number; art: string | null }[] }
+export type MediaItem = { type: MediaType; key: string; width: number | null; height: number | null; poster_key: string | null; duration_ms: number | null }
+export type PollView = { question: string; ends_at: string; my_vote: string | null; options: { id: string; text: string; votes: number; art: string | null }[] }
 /** Row of view `post_cards` and of home_feed / reels_feed / post_replies / profile_posts / hashtag_posts. */
-export interface PostCardRow extends Omit<PostRow, "is_hidden"> {
+export type PostCardRow = Omit<PostRow, "is_hidden"> & {
   username: string | null; display_name: string; avatar_key: string | null; is_verified: boolean;
   liked_by_me: boolean; saved_by_me: boolean; media: MediaItem[]; poll: PollView | null;
 }
-export interface MessageRow {
+export type MessageRow = {
   id: string; seq: number; conversation_id: string; sender_id: string; kind: "text" | "image" | "video" | "voice" | "file";
   body: string | null; media_key: string | null; media_meta: Json | null; reply_to_id: string | null; created_at: string; deleted_at: string | null;
 }
-export interface ConversationRow { id: string; direct_key: string; created_at: string; last_message_id: string | null; last_message_at: string | null; last_preview: string | null; last_sender_id: string | null }
-export interface ReadStateRow { conversation_id: string; user_id: string; last_read_at: string; last_read_seq: number; unread_count: number }
-export interface NotificationRow { id: string; user_id: string; actor_id: string | null; type: NotificationType; post_id: string | null; comment_id: string | null; data: Json | null; read_at: string | null; created_at: string }
-export interface CommentRow { id: string; post_id: string; author_id: string; body: string; created_at: string }
-export interface ReportRow { id: string; reporter_id: string; target_type: ReportTarget; target_id: string; reported_user_id: string | null; reason: ReportReason; details: string | null; context: Json | null; status: ReportStatus; created_at: string }
+export type ConversationRow = { id: string; direct_key: string; created_at: string; last_message_id: string | null; last_message_at: string | null; last_preview: string | null; last_sender_id: string | null }
+export type ReadStateRow = { conversation_id: string; user_id: string; last_read_at: string; last_read_seq: number; unread_count: number }
+export type NotificationRow = { id: string; user_id: string; actor_id: string | null; type: NotificationType; post_id: string | null; comment_id: string | null; data: Json | null; read_at: string | null; created_at: string }
+export type CommentRow = { id: string; post_id: string; author_id: string; body: string; created_at: string }
+export type ReportRow = { id: string; reporter_id: string; target_type: ReportTarget; target_id: string; reported_user_id: string | null; reason: ReportReason; details: string | null; context: Json | null; status: ReportStatus; created_at: string }
+
+export type ProfilePrivateRow = { user_id: string; birth_date: string | null; created_at: string };
+export type FollowRow = { follower_id: string; following_id: string; created_at: string };
+export type FollowRequestRow = { requester_id: string; target_id: string; created_at: string };
+export type BlockRow = { blocker_id: string; blocked_id: string; created_at: string };
+export type LikeRow = { post_id: string; user_id: string; created_at: string };
+export type PollRow = { post_id: string; question: string; ends_at: string };
+export type PollOptionRow = { id: string; poll_id: string; position: number; text: string; art: string | null; vote_count: number };
+export type PollVoteRow = { poll_id: string; user_id: string; option_id: string; created_at: string };
+export type BadgeRow = { id: string; kind: "achievement" | "post" | "poll"; tier: "bronz" | "gumus" | "altin" | null; name: string; description: string; glyph: string };
+export type UserBadgeRow = { user_id: string; badge_id: string; earned_at: string };
+export type StoryViewRow = { post_id: string; viewer_id: string; viewed_at: string };
+export type NoteRow = { user_id: string; body: string; created_at: string; expires_at: string };
+export type ConversationMemberRow = { conversation_id: string; user_id: string; muted: boolean; hidden_at: string | null; joined_at: string };
+export type MessageReactionRow = { message_id: string; user_id: string; emoji: string; created_at: string };
+export type PushSubscriptionRow = { id: string; user_id: string; endpoint: string; p256dh: string; auth: string; user_agent: string | null; created_at: string; last_used_at: string | null };
 
 type Tbl<R> = { Row: R; Insert: Partial<R>; Update: Partial<R>; Relationships: [] };
 type Fn<A, R> = { Args: A; Returns: R };
@@ -52,6 +68,10 @@ export interface Database {
       profiles: Tbl<ProfileRow>; posts: Tbl<PostRow>; post_media: Tbl<PostMediaRow>; comments: Tbl<CommentRow>;
       messages: Tbl<MessageRow>; conversations: Tbl<ConversationRow>; conversation_read_state: Tbl<ReadStateRow>;
       notifications: Tbl<NotificationRow>; reports: Tbl<ReportRow>;
+      profile_private: Tbl<ProfilePrivateRow>; follows: Tbl<FollowRow>; follow_requests: Tbl<FollowRequestRow>; blocks: Tbl<BlockRow>;
+      likes: Tbl<LikeRow>; saves: Tbl<LikeRow>; polls: Tbl<PollRow>; poll_options: Tbl<PollOptionRow>; poll_votes: Tbl<PollVoteRow>;
+      badges: Tbl<BadgeRow>; user_badges: Tbl<UserBadgeRow>; story_views: Tbl<StoryViewRow>; notes: Tbl<NoteRow>;
+      conversation_members: Tbl<ConversationMemberRow>; message_reactions: Tbl<MessageReactionRow>; push_subscriptions: Tbl<PushSubscriptionRow>;
     };
     Views: { post_cards: { Row: PostCardRow; Relationships: [] } };
     Functions: {
@@ -81,6 +101,10 @@ export interface Database {
       touch_presence: Fn<Record<string, never>, undefined>;
       peer_presence: Fn<{ p_peer: string }, string | null>;
       mark_notifications_read: Fn<Record<string, never>, undefined>;
+      remove_follower: Fn<{ p_follower: string }, undefined>;
+      view_story: Fn<{ p_post: string }, undefined>;
+      trending_hashtags: Fn<{ p_hours?: number; p_limit?: number }, { tag: string; uses: number }[]>;
+      story_tray: Fn<Record<string, never>, { author_id: string; username: string | null; avatar_key: string | null; latest_at: string; story_count: number; has_unseen: boolean }[]>;
       delete_my_account: Fn<Record<string, never>, undefined>;
       export_my_data: Fn<Record<string, never>, Json>;
     };

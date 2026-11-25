@@ -3,10 +3,8 @@
 import { useState, useEffect, useRef } from "react";
 import { useRouter } from "next/navigation";
 import { useAuth } from "@/context/AuthContext";
-import { updateProfile } from "firebase/auth";
-import { doc, updateDoc, serverTimestamp } from "firebase/firestore";
-import { ref, uploadBytes, getDownloadURL } from "firebase/storage";
-import { auth, db, storage } from "@/lib/firebase";
+import { getProfileService } from "@/services/profile";
+import { isSupabaseAuth } from "@/lib/backend";
 import {
   ChevronLeft,
   ChevronRight,
@@ -134,41 +132,13 @@ export default function EditProfilePage() {
 
     try {
       setIsSaving(true);
-      let photoURL = profile.photoURL || "";
-
-      if (removed) {
-        photoURL = "";
-      } else if (file) {
-        const fileExt = file.name.split(".").pop() || "jpg";
-        const avatarRef = ref(
-          storage,
-          `avatars/${profile.uid}/avatar_${Date.now()}.${fileExt}`
-        );
-        await uploadBytes(avatarRef, file, {
-          contentType: file.type || "image/jpeg",
-        });
-        photoURL = await getDownloadURL(avatarRef);
-      }
-
-      // Firestore Kullanıcı Belgesini Güncelle
-      await updateDoc(doc(db, "users", profile.uid), {
+      // profileService: Firestore (+ Firebase Auth profili) veya Supabase profiles satırı
+      await getProfileService().update(profile.uid, {
         displayName: name,
         bio: bioValue,
-        photoURL,
-        updatedAt: serverTimestamp(),
+        avatarFile: isSupabaseAuth ? null : file,
+        photoRemoved: isSupabaseAuth ? false : removed,
       });
-
-      // Firebase Auth Profilini Güncelle
-      if (auth.currentUser) {
-        try {
-          await updateProfile(auth.currentUser, {
-            displayName: name,
-            photoURL: photoURL || undefined,
-          });
-        } catch {
-          // Opsiyonel hata durumunu sessizce karşıla
-        }
-      }
 
       await refreshProfile();
       setToastMessage("Profil güncellendi");
@@ -286,13 +256,15 @@ export default function EditProfilePage() {
                 <UserIcon className="w-12 h-12 text-zinc-600" />
               )}
             </button>
-            <button
-              type="button"
-              onClick={() => setSheetOpen(true)}
-              className="mt-3 text-sm font-semibold text-white hover:text-zinc-300 transition-colors"
-            >
-              Fotoğrafı değiştir
-            </button>
+            {!isSupabaseAuth && (
+              <button
+                type="button"
+                onClick={() => setSheetOpen(true)}
+                className="mt-3 text-sm font-semibold text-white hover:text-zinc-300 transition-colors"
+              >
+                Fotoğrafı değiştir
+              </button>
+            )}
           </div>
 
           <section className="space-y-2">

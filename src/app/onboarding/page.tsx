@@ -2,9 +2,8 @@
 
 import { useState, useEffect, useRef } from "react";
 import { useRouter } from "next/navigation";
-import { doc, getDoc, writeBatch, serverTimestamp } from "firebase/firestore";
-import { ref, uploadBytes, getDownloadURL } from "firebase/storage";
-import { db, storage } from "@/lib/firebase";
+import { isSupabaseAuth } from "@/lib/backend";
+import { getProfileService, ProfileServiceError } from "@/services/profile";
 import { useAuth } from "@/context/AuthContext";
 import {
   Check,
@@ -91,10 +90,9 @@ export default function OnboardingPage() {
 
     const timer = setTimeout(async () => {
       try {
-        const usernameRef = doc(db, "usernames", username.toLowerCase());
-        const snap = await getDoc(usernameRef);
+        const available = await getProfileService().checkUsernameAvailable(username);
 
-        if (snap.exists()) {
+        if (!available) {
           setUsernameStatus("taken");
           setUsernameError("Bu kullanıcı adı zaten alınmış.");
         } else {
@@ -123,59 +121,36 @@ export default function OnboardingPage() {
     setSubmitting(true);
 
     try {
-      let finalPhotoURL = user.photoURL || `https://api.dicebear.com/7.x/avataaars/svg?seed=${username}`;
-
-      if (!skipPhoto && avatarFile) {
-        const fileExt = avatarFile.name.split(".").pop() || "jpg";
-        const storageRef = ref(storage, `avatars/${user.uid}_${Date.now()}.${fileExt}`);
-        const snapshot = await uploadBytes(storageRef, avatarFile);
-        finalPhotoURL = await getDownloadURL(snapshot.ref);
-      }
-
       const finalDisplayName = displayName.trim() || user.displayName || username;
 
-      // Firestore Atomik writeBatch (İki tabloya tek işlemde kayıt)
-      const batch = writeBatch(db);
-      const userRef = doc(db, "users", user.uid);
-      const usernameRef = doc(db, "usernames", username.toLowerCase());
-
-      batch.set(userRef, {
+      await getProfileService().completeOnboarding({
         uid: user.uid,
         email: user.email,
-        username: username,
-        username_lowercase: username.toLowerCase(),
+        username,
         displayName: finalDisplayName,
-        photoURL: finalPhotoURL,
-        bio: "",
-        birthDate: birthDate,
+        birthDate,
         age: calculatedAge,
-        isVerified: false,
-        // [START] NexusAI
-        isPrivate: false,
-        // [END] NexusAI
-        emailVerified: true,
-        role: "user",
-        onboardingCompleted: true,
-        stats: {
-          postsCount: 0,
-          followersCount: 0,
-          followingCount: 0,
-        },
-        createdAt: serverTimestamp(),
-        updatedAt: serverTimestamp(),
+        // Avatar yükleme yalnızca firebase modunda (supabase için R2 presign sonraki iş paketi)
+        avatarFile: !isSupabaseAuth && !skipPhoto ? avatarFile : null,
+        photoURL: user.photoURL,
       });
-
-      batch.set(usernameRef, {
-        uid: user.uid,
-        email: user.email,
-        createdAt: serverTimestamp(),
-      });
-
-      await batch.commit();
       await refreshProfile();
       router.replace("/");
     } catch (err) {
       console.error("Onboarding kaydetme hatası:", err);
+      if (err instanceof ProfileServiceError) {
+        if (err.code === "username-unavailable") {
+          setUsernameStatus("taken");
+          setUsernameError("Bu kullanıcı adı zaten alınmış.");
+          setStep(2);
+        } else if (err.code === "too-young") {
+          setAgeError("Shovrum'u kullanabilmek için en az 13 yaşında olmalısınız.");
+          setStep(1);
+        } else if (err.code === "rate-limited") {
+          setUsernameError("Çok fazla deneme yapıldı. Lütfen biraz sonra tekrar deneyin.");
+          setStep(2);
+        }
+      }
       setSubmitting(false);
     }
   };
@@ -360,7 +335,8 @@ export default function OnboardingPage() {
                 Adınızı ve profil fotoğrafınızı belirleyin.
               </p>
 
-              {/* Fotoğraf Seçimi */}
+              {/* Fotoğraf Seçimi (supabase modunda R2 yüklemesi gelene kadar gizli) */}
+              {!isSupabaseAuth && (
               <div className="flex flex-col items-center justify-center mb-6">
                 <div
                   onClick={() => fileInputRef.current?.click()}
@@ -397,6 +373,7 @@ export default function OnboardingPage() {
                   {avatarPreview ? "Fotoğrafı Değiştir" : "Fotoğraf Seç"}
                 </button>
               </div>
+              )}
 
               {/* Görünen Ad Girişi */}
               <div className="space-y-1.5 text-left">

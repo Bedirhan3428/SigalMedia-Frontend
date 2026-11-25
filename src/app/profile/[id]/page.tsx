@@ -14,6 +14,7 @@ import {
 } from "firebase/firestore";
 import { db } from "@/lib/firebase";
 import { useAuth } from "@/context/AuthContext";
+import { getProfileService } from "@/services/profile";
 import { UserProfile } from "@/types/user";
 import { Post } from "@/types/post";
 import { PostDetailView } from "@/components/feed";
@@ -91,23 +92,13 @@ export default function VisitedProfilePage() {
       setIsUnavailable(false);
 
       try {
-        let resolvedUid = decodeURIComponent(rawId);
-
-        // Eğer @username ile gelindiyse veya doğrudan users/{id} bulunamazsa usernames koleksiyonuna bak
-        let userSnap = await getDoc(doc(db, "users", resolvedUid));
-        if (!userSnap.exists()) {
-          const cleanUsername = resolvedUid.replace(/^@/, "").toLowerCase();
-          const usernameSnap = await getDoc(doc(db, "usernames", cleanUsername));
-          if (usernameSnap.exists()) {
-            resolvedUid = usernameSnap.data().uid;
-            userSnap = await getDoc(doc(db, "users", resolvedUid));
-          }
-        }
-
-        if (!userSnap.exists()) {
+        // uid veya @username ile gelen profil (profileService, backend'e göre Firestore / Supabase)
+        const profileData = await getProfileService().getByIdOrUsername(rawId);
+        if (!profileData) {
           if (active) setIsUnavailable(true);
           return;
         }
+        const resolvedUid = profileData.uid;
 
         // Kendi profiliyse /profile sayfasına yönlendir
         if (user?.uid && resolvedUid === user.uid) {
@@ -139,7 +130,6 @@ export default function VisitedProfilePage() {
           }
         }
 
-        const profileData = userSnap.data() as UserProfile;
         if (active) {
           setTargetProfile(profileData);
         }

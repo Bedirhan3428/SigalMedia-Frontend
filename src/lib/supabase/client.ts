@@ -1,22 +1,19 @@
-// @ts-nocheck -- WP-39 stub: `@supabase/supabase-js` is not installed yet and this file is NOT imported anywhere.
-// When wiring (see docs/SUPABASE_PLAN.md): `npm i @supabase/supabase-js @supabase/ssr`, then remove the line above.
 import { createBrowserClient } from "@supabase/ssr";
+import type { SupabaseClient } from "@supabase/supabase-js";
 import type { Database } from "./types";
 
-let browser: ReturnType<typeof createBrowserClient<Database>> | null = null;
+export type TypedSupabaseClient = SupabaseClient<Database>;
 
-/** Browser singleton (anon key; RLS protects data). */
-export function supabaseBrowser() {
-  return (browser ??= createBrowserClient<Database>(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
-  ));
+let browser: TypedSupabaseClient | null = null;
+
+/** Browser singleton (publishable key; RLS protects data). Only call when NEXT_PUBLIC_BACKEND_AUTH=supabase. */
+export function supabaseBrowser(): TypedSupabaseClient {
+  if (browser) return browser;
+  const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
+  const key = process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY;
+  if (!url || !key) {
+    throw new Error("NEXT_PUBLIC_SUPABASE_URL and NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY must be set when NEXT_PUBLIC_BACKEND_AUTH=supabase");
+  }
+  browser = createBrowserClient<Database>(url, key);
+  return browser;
 }
-
-/** Public media URL: R2 custom domain on Cloudflare CDN + immutable object key. */
-export function mediaUrl(key: string | null | undefined): string | undefined {
-  const base = process.env.NEXT_PUBLIC_MEDIA_BASE_URL;
-  return key && base ? `${base.replace(/\/$/, "")}/${key}` : undefined;
-}
-
-// Server side (route handlers / server components): use createServerClient from "@supabase/ssr" with next/headers cookies().

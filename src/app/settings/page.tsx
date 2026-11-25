@@ -28,6 +28,8 @@ import {
   getFollowRequests,
 } from "@/services/privacyService";
 import { SUPPORT_MAILTO } from "@/lib/config/site";
+import { isSupabaseAuth } from "@/lib/backend";
+import AccountDataSection from "@/components/settings/AccountDataSection";
 
 export default function SettingsPage() {
   const [mounted, setMounted] = useState(false);
@@ -275,6 +277,9 @@ export default function SettingsPage() {
             </a>
           </div>
         </section>
+
+        {/* KVKK: veri indirme + hesap silme (yalnızca supabase modu) */}
+        {isSupabaseAuth && <AccountDataSection />}
 
         {/* Bölüm 4: Oturum */}
         <section className="space-y-2">
