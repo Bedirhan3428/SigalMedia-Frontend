@@ -2,13 +2,10 @@
 
 import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
-import {
-  signInWithPopup,
-  signInWithEmailAndPassword,
-  createUserWithEmailAndPassword,
-} from "firebase/auth";
-import { doc, getDoc } from "firebase/firestore";
-import { auth, db, googleProvider } from "@/lib/firebase";
+import Link from "next/link";
+import { isSupabaseAuth } from "@/lib/backend";
+import { AuthServiceError, getAuthService } from "@/services/auth";
+import { getProfileService } from "@/services/profile";
 import { ArrowLeft, Eye, EyeOff, Loader2, Check, X } from "lucide-react";
 import ConsentLine from "@/components/legal/ConsentLine";
 
@@ -81,13 +78,13 @@ export default function LoginPage() {
     try {
       setError(null);
       setLoading(true);
-      await signInWithPopup(auth, googleProvider);
+      await getAuthService().signInWithGoogle();
       setIdentifier("");
       setResolvedEmail("");
       setPassword("");
       setView("welcome");
-    } catch (err: any) {
-      if (err.code !== "auth/popup-closed-by-user") {
+    } catch (err) {
+      if (!(err instanceof AuthServiceError && err.code === "popup-closed")) {
         setError("Google ile giriş yapılırken bir sorun oluştu.");
       }
     } finally {
@@ -125,35 +122,26 @@ export default function LoginPage() {
       return;
     }
 
+    if (isSupabaseAuth) {
+      // Supabase modunda e-postalar profillerden okunamaz; kullanıcı adıyla giriş yok.
+      setError("Lütfen e-posta adresinizle giriş yapın.");
+      return;
+    }
+
     setLoading(true);
     try {
-      const usernameDocRef = doc(db, "usernames", cleanUsername);
-      const usernameSnap = await getDoc(usernameDocRef);
+      const targetEmail = await getProfileService().resolveEmailForUsername(cleanUsername);
 
-      if (!usernameSnap.exists()) {
+      if (targetEmail === "not-found") {
         setError("Bu kullanıcı adı ile kayıtlı bir hesap bulunamadı.");
         return;
       }
-
-      let targetEmail = usernameSnap.data()?.email;
-
-      if (!targetEmail) {
-        const uid = usernameSnap.data()?.uid;
-        if (!uid) {
-          setError("Kullanıcı bilgisi doğrulanamadı.");
-          return;
-        }
-        const userDocRef = doc(db, "users", uid);
-        const userSnap = await getDoc(userDocRef);
-        targetEmail = userSnap.data()?.email;
-      }
-
       if (!targetEmail) {
         setError("Kullanıcıya bağlı e-posta adresi bulunamadı.");
         return;
       }
 
-      setResolvedEmail(targetEmail.toLowerCase());
+      setResolvedEmail(targetEmail);
       setView("login-password");
     } catch (err: any) {
       console.error("Kullanıcı adı doğrulama hatası:", err);
@@ -183,13 +171,44 @@ export default function LoginPage() {
     setLoading(true);
 
     try {
+      if (isSupabaseAuth) {
+        // Supabase: doğrulama e-posta bağlantısıyla yapılır (4 haneli kod akışı yalnızca firebase modunda)
+        const cleanEmail = resolvedEmail;
+        if (view === "login-password") {
+          try {
+            await getAuthService().signInWithEmail(cleanEmail, password);
+          } catch (err) {
+            if (err instanceof AuthServiceError && err.code === "email-not-confirmed") {
+              sessionStorage.setItem("verify_email", cleanEmail);
+              router.replace("/auth/verify-email");
+              return;
+            }
+            throw err;
+          }
+          // Yönlendirmeyi AuthContext yapar (profil tamamlandıysa ana sayfa, değilse onboarding)
+          router.replace("/");
+        } else {
+          const { needsEmailConfirmation } = await getAuthService().signUpWithEmail(cleanEmail, password);
+          if (needsEmailConfirmation) {
+            sessionStorage.setItem("verify_email", cleanEmail);
+            router.replace("/auth/verify-email");
+          } else {
+            router.replace("/");
+          }
+        }
+        setIdentifier("");
+        setResolvedEmail("");
+        setPassword("");
+        setView("welcome");
+        return;
+      }
+
       if (view === "login-password") {
-        const cred = await signInWithEmailAndPassword(auth, resolvedEmail, password);
+        const cred = { user: await getAuthService().signInWithEmail(resolvedEmail, password) };
 
         // Profil veya yerel doğrulama durumunu kontrol et
-        const userDocRef = doc(db, "users", cred.user.uid);
-        const userSnap = await getDoc(userDocRef).catch(() => null);
-        const isProfileDone = userSnap?.exists() && userSnap.data()?.onboardingCompleted;
+        const userProfile = await getProfileService().get(cred.user.uid);
+        const isProfileDone = Boolean(userProfile?.onboardingCompleted);
         const isLocallyVerified = localStorage.getItem(`email_verified_${cred.user.uid}`) === "true";
 
         if (!cred.user.emailVerified && !isProfileDone && !isLocallyVerified) {
@@ -236,7 +255,7 @@ export default function LoginPage() {
         }
       } else if (view === "register-password") {
         const cleanEmail = resolvedEmail;
-        const cred = await createUserWithEmailAndPassword(auth, cleanEmail, password);
+        await getAuthService().signUpWithEmail(cleanEmail, password);
 
         const now = Date.now();
         const expires = now + 3 * 60 * 1000; // 3 dakika
@@ -270,21 +289,22 @@ export default function LoginPage() {
         router.replace("/auth/verify-email");
         return;
       }
-    } catch (err: any) {
-      switch (err.code) {
-        case "auth/invalid-email":
+    } catch (err) {
+      switch (err instanceof AuthServiceError ? err.code : "unknown") {
+        case "invalid-email":
           setError("Geçersiz e-posta adresi veya kullanıcı adı.");
           break;
-        case "auth/user-not-found":
-        case "auth/wrong-password":
-        case "auth/invalid-credential":
+        case "invalid-credential":
           setError("E-posta, kullanıcı adı veya şifre hatalı.");
           break;
-        case "auth/email-already-in-use":
+        case "email-already-in-use":
           setError("Bu e-posta adresi zaten kullanımda.");
           break;
-        case "auth/weak-password":
+        case "weak-password":
           setError("Şifre en az 8 karakter olmalıdır.");
+          break;
+        case "rate-limited":
+          setError("Çok fazla deneme yapıldı. Lütfen biraz sonra tekrar deneyin.");
           break;
         default:
           setError("İşlem gerçekleştirilemedi. Lütfen tekrar deneyin.");
@@ -570,6 +590,17 @@ export default function LoginPage() {
                     {showPassword ? <EyeOff className="w-5 h-5" /> : <Eye className="w-5 h-5" />}
                   </button>
                 </div>
+
+                {view === "login-password" && (
+                  <div className="px-1 pt-1">
+                    <Link
+                      href={`/auth/forgot-password?email=${encodeURIComponent(resolvedEmail)}`}
+                      className="text-xs font-medium text-zinc-400 hover:text-white transition-colors"
+                    >
+                      Şifremi unuttum
+                    </Link>
+                  </div>
+                )}
 
                 {view === "register-password" && (
                   <div className="space-y-1.5 pt-1.5 px-1">

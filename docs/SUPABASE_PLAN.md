@@ -1,7 +1,7 @@
 # Shovrum: Firebase to Supabase + Cloudflare R2 migration plan (WP-39)
 
-Status: design and SQL only. No live project exists. Nothing in `src/` imports the new code.
-Files: `supabase/migrations/0001..0007*.sql`, `supabase/seed.sql`, `supabase/config.toml`, `src/lib/supabase/{client,types}.ts` (unwired stub).
+Status: design and SQL, plus **phase 1 (auth + profiles) wired behind a feature flag (WP-44, see section 8.1)**. The schema is not applied to a live project yet.
+Files: `supabase/migrations/0001..0007*.sql`, `supabase/seed.sql`, `supabase/config.toml`, `src/lib/supabase/*`, `src/services/{auth,profile}/*`.
 
 Owner decisions baked in:
 - Supabase = Postgres + RLS, Auth, Realtime, Edge Functions. **Media = Cloudflare R2** (not Supabase Storage); the DB stores R2 object keys only.
@@ -132,6 +132,33 @@ Data migration scripts (Node, run locally with the service role; Firebase Admin 
 
 Rollback: phases are flag-gated; flipping a flag returns to Firebase, which stays read/write live until the phase is declared stable. Dual-write is not planned (data diverges anyway); instead freeze writes briefly per phase for the final delta copy. Keep Firebase project for 30 days after phase 6; take a Supabase `pg_dump` before each phase (and enable PITR on Pro).
 
+### 8.1 Phase 1 as implemented (WP-44): client setup, auth, profiles
+
+Flag: `NEXT_PUBLIC_BACKEND_AUTH=firebase|supabase` (unset = firebase, today's behaviour; read at build time, so restart `next dev` / rebuild after changing it). All Supabase code is reached only when it is `supabase`.
+
+What exists:
+- `src/lib/backend.ts`: the flag. `src/lib/supabase/`: `client.ts` (browser singleton, `createBrowserClient`), `server.ts` (`createServerClient` + Next cookies), `admin.ts` (service role, `import "server-only"`, returns null without `SUPABASE_SECRET_KEY`), `session.ts` + `src/proxy.ts` (Next 16 name for `middleware.ts`; refreshes the session cookie with `getClaims()`, no-op unless flag = supabase, never redirects), `media.ts` (`mediaUrl()` placeholder), `types.ts` (matches the migrations; replace with generated types later).
+- `src/services/auth`: `AuthService` seam (current user, `onAuthStateChanged`, Google, email+password sign in/up, sign out, resend confirmation, password reset, update password) with `firebaseAuth.ts` (today's calls) and `supabaseAuth.ts` (testable factory that takes a client). `AuthContext` uses it; the Firebase `User` is passed through unchanged in firebase mode.
+- Supabase flows: Google = `signInWithOAuth` then `/auth/callback` (`exchangeCodeForSession`, also `token_hash` + `type` via `verifyOtp` so confirmation links work on another device). Email confirmation = link (the 4-digit code UI and `/api/auth/*` code routes stay firebase-only; `/auth/verify-email` shows a "check your email + resend" screen in supabase mode). "Şifremi unuttum" = `/auth/forgot-password` (works in both modes, fixes audit A-05) and `/auth/reset-password` (supabase recovery session, set a new password). Firebase's reset link still lands on `/auth/action`.
+- `src/services/profile`: `ProfileService` (get by id / @username, username availability, `completeOnboarding`, `update`) with the Firestore code moved unchanged into `firebaseProfile.ts` and `supabaseProfile.ts` using `check_username_available`, `complete_onboarding` (under 13 refused client- and server-side; minors get the safe defaults from the RPC) and column updates. RPC errors map to `username-unavailable`, `too-young`, `rate-limited`, `not-authenticated`. Used by AuthContext, login, onboarding, `/profile/[id]`, `/profile/edit` and `setAccountPrivacy`.
+- KVKK: `DELETE /api/account` (body `{confirmUsername}`, same-origin check, `getUser()`, `delete_my_account` RPC with the user's session, clears the cookies) and `GET /api/account/export` (`export_my_data` as a JSON download). Both return 501 in firebase mode. Settings shows "Verilerimi indir" and "Hesabı sil" (type the username to confirm) only in supabase mode.
+
+Known limits in supabase mode (by design for this phase): avatar upload is hidden (R2 presign comes later; avatars render from `avatar_key` via `mediaUrl()` if `NEXT_PUBLIC_MEDIA_BASE_URL` is set); sign-in by username is unavailable (emails are not readable from `profiles`), use the email; feed, follows, blocks, chat, push still read Firebase and need the later phases (they also still use `auth.currentUser`, which is null in supabase mode).
+
+Tests: `npm test` (node:test, no new deps; mocked client; `tests/supabase-integration.test.ts` is skipped unless `SUPABASE_E2E=1` plus a disposable test account in `SUPABASE_E2E_EMAIL/PASSWORD`), and `qa/harness/wp-44-e2e.mjs` (both modes).
+
+Apply the schema and flip the flag:
+1. Review `supabase/migrations/0001..0007`, then apply them to the project (Supabase MCP `apply_migration` per file in order, or `supabase link` + `supabase db push`). Do not run `seed.sql` on the live project.
+2. In the Supabase dashboard set the items below.
+3. `.env.local` / Vercel env: `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY`, optional server-only `SUPABASE_SECRET_KEY`, then `NEXT_PUBLIC_BACKEND_AUTH=supabase`. Restart / redeploy. Rollback = unset the flag and redeploy (Firebase data is untouched).
+4. Sign up with a test account, confirm the email, complete onboarding, then set `profiles.role='admin'` for yourself in SQL.
+
+Dashboard settings the owner/CEO must set (Authentication):
+- URL Configuration, Site URL: the production URL (e.g. `https://shovrum.app`). Redirect URLs (allow list): `http://localhost:3000/**`, `https://*-<vercel-team>.vercel.app/**` (preview deployments), `https://<production-domain>/**`. The app sends `/auth/callback?next=...`, which must match one of these.
+- Providers: Email on, "Confirm email" ON, minimum password length 8 (the UI also requires upper/lower/digit); Google on with the Google Cloud OAuth client (authorized redirect URI `https://<ref>.supabase.co/auth/v1/callback`).
+- Email templates (Turkish). For links that also work when opened on another device use the token-hash form: Confirm signup `{{ .SiteURL }}/auth/callback?token_hash={{ .TokenHash }}&type=signup&next=/onboarding`; Reset password `{{ .SiteURL }}/auth/callback?token_hash={{ .TokenHash }}&type=recovery`; Magic link / email change similarly with their `type`. Suggested subjects: "Shovrum hesabını doğrula", "Shovrum şifreni sıfırla". Body in Turkish, e.g. "Merhaba, hesabını doğrulamak için aşağıdaki bağlantıya tıkla. Bu isteği sen yapmadıysan bu e-postayı yok sayabilirsin."
+- SMTP: free tier built-in email is rate limited (a few per hour), so set custom SMTP (Resend SMTP) before inviting testers; keep Auth rate limits at defaults. Turnstile CAPTCHA is optional (needs a client change before enabling).
+
 ## 9. Limits to watch and cost (verify current pricing before deciding)
 
 Approximate public figures at time of writing; **check current pricing pages** and treat numbers as formulas, not quotes.
@@ -161,7 +188,7 @@ Other costs: Vercel (free hobby is not allowed commercially; Pro 20 USD/seat), R
 
 ## 11. Owner to-do
 
-1. Create a Supabase project in **eu-central-1** (Frankfurt); upgrade to Pro before launch. Copy URL, anon key, service role key into `.env.local` and Vercel env (never in chat or git).
+1. Create a Supabase project in **eu-central-1** (Frankfurt); upgrade to Pro before launch. Copy URL, publishable key (new-style, replaces "anon"), secret key (replaces "service_role") into `.env.local` and Vercel env (never in chat or git).
 2. Link CLI (`supabase link`), `supabase db push` to apply migrations; `supabase db reset` locally uses `seed.sql` (fake data).
 3. Google Cloud OAuth client (Web), redirect `https://<ref>.supabase.co/auth/v1/callback`; put id/secret in the Supabase dashboard (Auth, Providers).
 4. Custom SMTP for auth emails (Resend SMTP) and SPF/DKIM on the sender domain; Auth redirect URLs (prod + preview + localhost); enable Turnstile CAPTCHA.
@@ -172,4 +199,4 @@ Other costs: Vercel (free hobby is not allowed commercially; Pro 20 USD/seat), R
 
 ## 12. Validation status
 
-Migrations 0001-0007 and `seed.sql` were executed on an embedded Postgres (PGlite, not Supabase) with stubs for `auth.users`, `auth.uid()` and roles; smoke tests passed for feeds (follow fill, private hiding, block hiding), toggle_like, vote_poll, create_post (reply normalization, key-prefix check), DM privacy rules, direct-insert denial, notifications and badges, and account deletion queueing R2 deletes. **Not tested:** real Supabase (`supabase db lint`, Realtime publication and `realtime.messages` policies in 0007 are guarded blocks that were skipped on plain Postgres), Edge Functions, presign routes, webhooks. `src/lib/supabase/*` is not wired; `client.ts` has `@ts-nocheck` until `@supabase/supabase-js` and `@supabase/ssr` are installed. Edge Functions and Next routes are specified here but not written.
+Migrations 0001-0007 and `seed.sql` were executed on an embedded Postgres (PGlite, not Supabase) with stubs for `auth.users`, `auth.uid()` and roles; smoke tests passed for feeds (follow fill, private hiding, block hiding), toggle_like, vote_poll, create_post (reply normalization, key-prefix check), DM privacy rules, direct-insert denial, notifications and badges, and account deletion queueing R2 deletes. **Not tested:** real Supabase (`supabase db lint`, Realtime publication and `realtime.messages` policies in 0007 are guarded blocks that were skipped on plain Postgres), Edge Functions, presign routes, webhooks. `src/lib/supabase/*` is wired for auth + profiles only (section 8.1) and unit-tested with a mocked client; nothing has run against a live project with the schema yet. Edge Functions and Next routes are specified here but not written.

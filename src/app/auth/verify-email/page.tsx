@@ -5,6 +5,8 @@ import { useRouter } from "next/navigation";
 import { signOut as firebaseSignOut } from "firebase/auth";
 import { auth } from "@/lib/firebase";
 import { useAuth } from "@/context/AuthContext";
+import { isSupabaseAuth } from "@/lib/backend";
+import SupabaseVerifyEmail from "./SupabaseVerifyEmail";
 import { CheckCircle2, AlertCircle, Loader2, RefreshCw, MailCheck, Edit3 } from "lucide-react";
 
 const CODE_LIFETIME_SECONDS = 3 * 60; // 3 dakika (180 saniye)
@@ -513,6 +515,7 @@ function VerifyEmailContent() {
 }
 
 export default function VerifyEmailPage() {
+  if (isSupabaseAuth) return <SupabaseVerifyEmail />;
   return (
     <Suspense
       fallback={
