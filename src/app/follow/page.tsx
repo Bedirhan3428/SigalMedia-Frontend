@@ -1,6 +1,7 @@
 // [START] AeroCode
 "use client";
 
+import { useDocumentTitle } from "@/lib/ui/useDocumentTitle";
 import { useState, useEffect, Suspense } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { ChevronLeft, Search, User as UserIcon, Loader2 } from "lucide-react";
@@ -233,7 +234,7 @@ function FollowPageContent() {
             placeholder="Kullanıcı ara..."
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
-            className="w-full bg-zinc-900 border border-zinc-800 rounded-xl pl-10 pr-4 py-2 text-sm text-zinc-100 placeholder:text-zinc-500 focus:outline-none focus:border-zinc-700 transition-colors"
+            className="w-full bg-zinc-900 border border-zinc-800 rounded-xl pl-10 pr-4 py-2 text-base text-zinc-100 placeholder:text-zinc-500 focus:outline-none focus:border-zinc-700 transition-colors"
           />
         </div>
       </div>
@@ -311,6 +312,7 @@ function FollowPageContent() {
 
 // [START] AeroCode
 export default function FollowPage() {
+  useDocumentTitle("Takip");
   return (
     <Suspense
       fallback={

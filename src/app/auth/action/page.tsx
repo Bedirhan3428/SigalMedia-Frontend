@@ -153,7 +153,7 @@ function AuthActionContent() {
         <div className="flex justify-center mb-6">
           <img
             src="/icons/MainLogo.svg"
-            alt="SigalMedia"
+            alt="Shovrum"
             className="w-12 h-12 object-contain"
           />
         </div>
@@ -285,7 +285,7 @@ function AuthActionContent() {
           </form>
         )}
 
-        <div className="text-xs text-zinc-600">SigalMedia Güvenli Kimlik Doğrulama</div>
+        <div className="text-xs text-zinc-600">Shovrum Güvenli Kimlik Doğrulama</div>
       </div>
     </main>
   );

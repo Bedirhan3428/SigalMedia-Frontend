@@ -883,6 +883,20 @@ function ShareStoryPageInner() {
     [getOrCreateEngine, hasMedia]
   );
 
+  // A-02: /share?mode=story|reels|post -> mod seçiciyi atlayıp o modda aç (ana sayfadaki "Hikayen +")
+  const modeParam = searchParams.get("mode");
+  const modeParamDoneRef = useRef(false);
+  useEffect(() => {
+    if (modeParamDoneRef.current || !mounted || loading) return;
+    if (modeParam !== "story" && modeParam !== "reels" && modeParam !== "post") return;
+    const raf = requestAnimationFrame(() => {
+      if (modeParamDoneRef.current) return;
+      modeParamDoneRef.current = true;
+      handleSelectMode(modeParam);
+    });
+    return () => cancelAnimationFrame(raf);
+  }, [modeParam, mounted, loading, handleSelectMode]);
+
   // Onaylandı: motor medyası, katmanlar, müzik ve geri alma geçmişi dahil tam sıfırlama + yeni mod
   const confirmModeSwitch = () => {
     const mode = pendingMode;
@@ -1298,7 +1312,7 @@ function ShareStoryPageInner() {
     const engine = getOrCreateEngine();
     if (!engine) return;
 
-    const tagText = customTag || (profile?.username ? `@${profile.username}` : "@sigalmedia");
+    const tagText = customTag || (profile?.username ? `@${profile.username}` : "@shovrum");
     const layer = engine.addText(
       tagText,
       {
@@ -1417,10 +1431,10 @@ function ShareStoryPageInner() {
         });
         setIsExportingVideo(false);
         const ext = blob.type.includes("webm") ? "webm" : "mp4";
-        ImageExporter.downloadBlob(blob, `sigalmedia_${Date.now()}.${ext}`);
+        ImageExporter.downloadBlob(blob, `shovrum_${Date.now()}.${ext}`);
         await engine.playVideo();
       } else {
-        await engine.downloadImage(`sigalmedia_${Date.now()}.webp`, {
+        await engine.downloadImage(`shovrum_${Date.now()}.webp`, {
           mimeType: "image/webp",
           quality: 0.95,
         });

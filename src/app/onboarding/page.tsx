@@ -197,6 +197,7 @@ export default function OnboardingPage() {
             <button
               type="button"
               onClick={() => setStep((prev) => (prev - 1) as 1 | 2)}
+              aria-label="Geri"
               className="w-10 h-10 rounded-full bg-zinc-900/90 border border-zinc-800 flex items-center justify-center text-zinc-300 hover:text-white hover:bg-zinc-800 transition-colors btn-press-subtle"
             >
               <ArrowLeft className="w-5 h-5" />
@@ -242,7 +243,7 @@ export default function OnboardingPage() {
                 Doğum tarihinizi girin
               </h1>
               <p className="text-zinc-400 text-sm mb-6 leading-relaxed">
-                SigalMedia topluluğuna katılmak için en az 13 yaşında olmalısınız.
+                Shovrum topluluğuna katılmak için en az 13 yaşında olmalısınız.
               </p>
 
               <div className="space-y-4">
@@ -252,7 +253,7 @@ export default function OnboardingPage() {
                     setBirthDate(dateStr);
                     setCalculatedAge(age);
                     if (age < 13) {
-                      setAgeError("SigalMedia'yı kullanabilmek için en az 13 yaşında olmalısınız.");
+                      setAgeError("Shovrum'u kullanabilmek için en az 13 yaşında olmalısınız.");
                     } else {
                       setAgeError(null);
                     }
@@ -406,7 +407,7 @@ export default function OnboardingPage() {
                   type="text"
                   value={displayName}
                   onChange={(e) => setDisplayName(e.target.value)}
-                  placeholder="Örn: Sigal Medya"
+                  placeholder="Örn: Shovrum"
                   maxLength={30}
                   autoComplete="off"
                   className="w-full h-14 px-4 bg-zinc-900 border border-zinc-800 rounded-2xl text-base text-white placeholder-zinc-500 focus:outline-none focus:border-zinc-500 transition-colors"

@@ -193,6 +193,7 @@ export default function MessageSettingsPage() {
               <button
                 type="button"
                 role="switch"
+                aria-label="Okundu Bilgisi"
                 aria-checked={settings.readReceipts}
                 disabled={saving}
                 onClick={() => handleToggleSetting("readReceipts")}
@@ -215,6 +216,7 @@ export default function MessageSettingsPage() {
               <button
                 type="button"
                 role="switch"
+                aria-label="Çevrimiçi Durumu"
                 aria-checked={settings.showOnlineStatus}
                 disabled={saving}
                 onClick={() => handleToggleSetting("showOnlineStatus")}

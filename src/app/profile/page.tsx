@@ -1,5 +1,6 @@
 "use client";
 
+import { getShareOrigin } from "@/lib/config/site";
 import { useState, useEffect, useMemo, useCallback } from "react";
 import { useAuth } from "@/context/AuthContext";
 import Link from "next/link";
@@ -162,10 +163,7 @@ export default function ProfilePage() {
   // Profili Paylaş (Önizlemenin çıkması için yalnızca saf profil linki paylaşılır)
   const handleShareProfile = async () => {
     if (!profile?.uid) return;
-    const origin =
-      typeof window !== "undefined"
-        ? window.location.origin
-        : process.env.NEXT_PUBLIC_APP_URL || "https://sigalmedia.com.tr";
+    const origin = getShareOrigin();
     const shareUrl = `${origin}/profile/${profile.uid}?s=1`;
 
     if (typeof navigator !== "undefined" && navigator.share) {

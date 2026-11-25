@@ -6,6 +6,7 @@ import localFont from "next/font/local";
 import { AuthProvider } from "@/context/AuthContext";
 import BackgroundAudioGuard from "@/components/common/BackgroundAudioGuard";
 import PublishProgressPill from "@/components/share/PublishProgressPill";
+import { SITE_NAME, SITE_DESCRIPTION } from "@/lib/config/site";
 import "./globals.css";
 
 const googleSans = localFont({
@@ -25,8 +26,9 @@ const googleSans = localFont({
 });
 
 export const metadata: Metadata = {
-  title: "SigalMedia",
-  description: "Yeni nesil modern, hızlı ve bağlantıda tutan sosyal medya platformu.",
+  title: { default: SITE_NAME, template: `%s · ${SITE_NAME}` },
+  applicationName: SITE_NAME,
+  description: SITE_DESCRIPTION,
   manifest: "/manifest.json",
   icons: {
     icon: "/icons/MainLogo.svg",
@@ -35,7 +37,7 @@ export const metadata: Metadata = {
   appleWebApp: {
     capable: true,
     statusBarStyle: "black-translucent",
-    title: "SigalMedia",
+    title: SITE_NAME,
   },
   other: {
     "darkreader-lock": "",
